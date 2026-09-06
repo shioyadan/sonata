@@ -6,6 +6,8 @@ README は日本語で、機能・操作・開発手順を説明します。プ�
 
 ## コミットと作業記録
 
+検証後のコミットは自動で行って構いません。push はユーザーが明示的に依頼した場合だけ実行します。実装・修正・テスト追加やコミットの依頼から push の許可を推測せず、過去の別の変更に対する push 依頼を、以後の変更への包括的な許可と扱いません。
+
 コミットメッセージはスコープ付き Conventional Commits の `type(scope): description` 形式にします。例: `fix(server): reject malformed request URLs`、`test(render): wait for desktop layout restoration`、`docs(maintenance): record development decisions`。変更対象を表すスコープを必須とし、一つの目的として説明できる変更をまとめます。
 
 日付、依頼、変更理由、検証結果、残作業は `work/WORKLOG.md` に記録します。`work/` はローカルの履歴・引き継ぎ用で、Git 管理対象外です。継続して必要な仕様・判断理由・再現方法は `docs/` の関連文書へ反映し、個人環境のパスや一時的な調査ログはローカルに保持します。

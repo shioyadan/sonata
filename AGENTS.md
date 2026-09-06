@@ -16,6 +16,7 @@
 - README、開発文書、ソースコードの説明コメントは日本語。画面の文言、識別子、エラーメッセージ、ライセンス原文は既存の方針を保つ。
 - README は機能・操作・開発を説明し、プロジェクト成立の経緯は記載しない。ブランド表示は `sonata` の文字を用いる。
 - コミットメッセージは **`type(scope): description`**。スコープを必須にし、変更対象を具体的に示す。例: `fix(server): reject malformed request URLs`、`test(render): wait for desktop layout restoration`、`docs(maintenance): record development decisions`。
+- **検証後のコミットは自動で行ってよい。push はユーザーが明示的に依頼した場合だけ実行する。** 実装・修正・テスト追加やコミットの依頼から push の許可を推測しない。過去の別の変更に対する push 依頼を、以後の変更への包括的な許可と扱わない。
 - 既存のユーザー変更を保持し、依頼と無関係なファイルをまとめてコミットしない。
 
 ## 実装で維持すること
@@ -46,4 +47,4 @@ Node は `.nvmrc`、依存は `package-lock.json` を基準にする。必要な
 - 作業の区切りで `work/WORKLOG.md` に依頼、変更理由、検証結果、残作業を追記する。ローカルの引き継ぎ資料がある場合は現在の状態も揃える。
 - 将来の開発者にも必要な判断・制約・再現方法を `docs/` に反映する。個人環境の絶対パス、一時ログ、認証の状態は `work/` / `artifacts/` に置く。
 - `work/`、`artifacts/`、`inputs/`、`dist/`、`node_modules/` は Git 対象外。公開文書がこれらの存在を必須にしない。
-- push はユーザーの依頼範囲で行う。`main` の push は CI 成功後に Pages を更新するため、実行後はコミット・CI・公開結果を確認する。
+- 明示的に依頼された push の実行後は、コミット・CI・公開結果を確認する。`main` の push は CI 成功後に Pages を更新する。
