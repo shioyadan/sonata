@@ -1,6 +1,14 @@
-# Development
+# 開発ガイド
 
 README は日本語で、機能・操作・開発手順を説明します。プロジェクト成立の経緯は README に記載しません。ソースコードと検証・ビルド用スクリプトの説明コメントは日本語で記述し、識別子・画面の文言・ライセンス原文はそれぞれの用途に合わせて維持します。
+
+作業上の指針は [AGENTS.md](../AGENTS.md)、設計判断と過去の検査から得た確認事項は [継続開発のための判断と確認事項](maintenance.md) を参照してください。
+
+## コミットと作業記録
+
+コミットメッセージはスコープ付き Conventional Commits の `type(scope): description` 形式にします。例: `fix(server): reject malformed request URLs`、`test(render): wait for desktop layout restoration`、`docs(maintenance): record development decisions`。変更対象を表すスコープを必須とし、一つの目的として説明できる変更をまとめます。
+
+日付、依頼、変更理由、検証結果、残作業は `work/WORKLOG.md` に記録します。`work/` はローカルの履歴・引き継ぎ用で、Git 管理対象外です。継続して必要な仕様・判断理由・再現方法は `docs/` の関連文書へ反映し、個人環境のパスや一時的な調査ログはローカルに保持します。
 
 ## 境界
 
@@ -57,6 +65,6 @@ Konata の解析コードを更新する場合は [vendor の手順](../vendor/k
 
 公開先は https://shioyadan.github.io/sonata/ です。初回公開前に GitHub リポジトリの **Settings → Pages → Build and deployment → Source** を **GitHub Actions** に設定してください。
 
-`.github/workflows/ci.yml` は `main` への push または手動実行でモデル・ビルド・描画を検証し、成功した同じコミットから `dist/sonata.html` を生成して、Pages の `index.html` として公開します。pull request は検証だけを行います。依存パッケージやソース、元ログを公開用ディレクトリへコピーしません。
+`.github/workflows/ci.yml` は `main` への push または手動実行でモデル・ビルド・サーバー・描画を検証し、成功した同じコミットから `dist/sonata.html` を生成して、Pages の `index.html` として公開します。pull request は検証だけを行います。依存パッケージやソース、元ログを公開用ディレクトリへコピーしません。
 
-README 冒頭の **ライブデモ** はこの公開先へリンクします。初回の Pages 設定とワークフローが完了するまではリンク先は未公開です。
+README 冒頭の **ライブデモ** はこの公開先へリンクします。push 後は GitHub Actions で対象コミットの `verify` と `pages` が成功したことを確認し、公開 URL の応答と生成 HTML の内容を確認します。`verify` が失敗した場合は `pages` がスキップされ、初回は未公開、既存サイトがある場合は前の公開内容が維持されます。

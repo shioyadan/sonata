@@ -67,7 +67,7 @@ xvfb-run -a -s '-screen 0 1600x1100x24' npm run test:mobile
 
 検証画像は `artifacts/screenshots/` に出力します。描画検査は HTML だけを一時フォルダへコピーし、外部アクセスを禁止して実行します。CI でもモデル・単一 HTML・デスクトップ・モバイルを確認します。詳細は [開発ガイド](docs/development.md) にまとめています。
 
-README とソースコードの説明コメントは日本語で記述します。
+README とソースコードの説明コメントは日本語で記述します。作業上の指針は [AGENTS.md](AGENTS.md)、継続して維持する判断と確認事項は [保守の資料](docs/maintenance.md) を参照してください。
 
 ## 構成
 
