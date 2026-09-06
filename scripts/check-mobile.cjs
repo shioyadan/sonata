@@ -96,6 +96,9 @@ module.exports=async function reviewMobile(window,screenshots){
         await js("document.getElementById('mobile-details').click();document.getElementById('show-highlight').click()");
         assert.ok(await js("!document.getElementById('mobile-panel').open&&sonata.playing"),"Highlight stayed hidden behind the sheet");
         await js("sonata.setPlaying(false);document.querySelector('[data-view=orbit]').click()");
+        // パネルを開いたままデスクトップへ戻す場合も、表示とフォーカスが取り残されない。
+        await js("document.getElementById('mobile-details').click()");
+        assert.ok(await js("document.getElementById('mobile-panel').open"));
         result={layouts,touch:{pinch:true,pan:true,orbit:true,cancel:true,fit:true},demos:keys.length};
     }finally{
         try{
@@ -113,8 +116,9 @@ module.exports=async function reviewMobile(window,screenshots){
     do{
         desktop=await js(`({width:innerWidth,height:innerHeight,compact:sonata.camera.compact,
             sidebarInMain:document.querySelector('main').contains(document.querySelector('.telemetry')),
-            panelOpen:document.getElementById('mobile-panel').open})`);
-        if(desktop.width===1440&&desktop.height===1000&&!desktop.compact&&desktop.sidebarInMain&&!desktop.panelOpen){
+            panelOpen:document.getElementById('mobile-panel').open,
+            focusInClosedPanel:document.getElementById('mobile-panel').contains(document.activeElement)})`);
+        if(desktop.width===1440&&desktop.height===1000&&!desktop.compact&&desktop.sidebarInMain&&!desktop.panelOpen&&!desktop.focusInClosedPanel){
             return {...result,desktopRestore:desktop};
         }
         await delay(60);

@@ -41,6 +41,12 @@ app.whenReady().then(async () => {
         assert.fail(message);
     };
     await window.loadFile(entry);
+    if(process.argv.includes("--browser")){
+        const browser=await require("./check-browser.cjs")(window,entry);
+        assert.deepEqual(errors,[]);assert.deepEqual(unexpectedRequests,[]);
+        console.log(JSON.stringify({browser,errors,externalRequests:unexpectedRequests},null,2));
+        fs.rmSync(isolated,{recursive:true,force:true});app.quit();return;
+    }
     if(process.env.SONATA_MOBILE_ONLY||process.argv.includes("--mobile")){
         const mobile=await require("./check-mobile.cjs")(window,screenshots);
         assert.deepEqual(errors,[]);assert.deepEqual(unexpectedRequests,[]);
@@ -677,10 +683,11 @@ app.whenReady().then(async () => {
     await js("document.getElementById('motion-effects').click()");
     assert.ok(await js("sonata.codeFragments.length>40"),"Motion toggle did not restore the code animation");
     window.webContents.debugger.detach();
+    const browser=await require("./check-browser.cjs")(window,entry);
     assert.deepEqual(errors, [], `Browser errors: ${errors.join("; ")}`);
     assert.deepEqual(unexpectedRequests,[],"The copied HTML tried to fetch another resource");
     console.log(JSON.stringify({samples: results, controls, rewind, unravel,branchReview,matrixReview,registerReview,registerReadReview,recovery:{frames:recoveryFrames.length,rates:recoveryFrames.map(f=>({age:f.age,rate:f.rate}))},notification, rsd, bounds,
-        boundMotion:{frames:boundMotion.samples.length,intermediate:intermediate.length,reducedMotionExact:true},motion,particlePicked:pick.id,playbackAdvance:playbackEnd-playbackStart,mobile,errors,standalone:{isolated:true,externalRequests:unexpectedRequests}}, null, 2));
+        boundMotion:{frames:boundMotion.samples.length,intermediate:intermediate.length,reducedMotionExact:true},motion,particlePicked:pick.id,playbackAdvance:playbackEnd-playbackStart,mobile,browser,errors,standalone:{isolated:true,externalRequests:unexpectedRequests}}, null, 2));
     fs.rmSync(isolated,{recursive:true,force:true});
     app.quit();
 }).catch(error => {console.error(error);fs.rmSync(isolated,{recursive:true,force:true});app.exit(1);});

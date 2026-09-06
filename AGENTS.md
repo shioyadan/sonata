@@ -36,6 +36,7 @@ Node は `.nvmrc`、依存は `package-lock.json` を基準にする。必要な
 | プレビューサーバー | `npm run test:server` |
 | 描画、DOM、CSS、操作、描画検査スクリプト | `npm run test:render` |
 | モバイルだけの調整 | 作業中は `npm run test:mobile`、最終確認はデスクトップへの復帰も含む |
+| キーボード、ダイアログ、描画の障害対応 | 作業中は `npm run test:browser`、最終確認はこれらを含む `npm run test:render` |
 | 文書だけ | 差分とリンク・コマンドの整合性を確認 |
 
 画面のない Linux では `xvfb-run -a -s '-screen 0 1600x1100x24' npm run test:render` を使う。検証範囲と未検証の環境を区別して報告する。非同期の画面変化は、制限時間内で実状態を待ち、assertion を削って通さない。

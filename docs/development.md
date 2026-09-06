@@ -44,11 +44,21 @@ Node の推奨バージョンは `.nvmrc` に固定し、セキュリティ修�
 
 モバイルは DPR 2 とタッチイベントを使い、320 × 568、390 × 844、430 × 932、932 × 430 で検査します。ピンチ、2本指の移動、指を離した後の回転、キャンセル、Fit、設定パネル、横向きからの復帰を含みます。実機 Safari / Chrome の検査を置き換えるものではありません。
 
+ブラウザの回帰検査は `scripts/check-browser.cjs` にまとめ、`npm run test:render` と CI に含めています。個別に実行する場合は `npm run test:browser` を使います。
+
+- Electron の入力イベントで、矢印・Space・Cinema・Escape と、トレースの先頭・末尾の境界を検査します。
+- range / select / button にフォーカスがある場合、全体のショートカットが重複して動かないことを確認します。Licenses のキーボード操作、Tab のフォーカス範囲、Escape 後のフォーカス復帰も検査します。
+- 初期化時に WebGL 2 を利用できない状態を作り、案内と権利表示が利用できることを確認します。
+- 実際の WebGL context loss / restore を発生させ、案内、再生時計の停止、復旧後の再生と描画画素を確認します。単なるフラグの変化だけで復旧成功とは判定しません。
+
+モバイル検査では設定パネルを開いたままデスクトップへ戻すケースも含め、サイドバー・ダイアログ・フォーカスの復帰を確認します。
+
 ヘッドレス Linux の実行例:
 
 ```sh
 xvfb-run -a -s '-screen 0 1600x1100x24' npm run test:render
 xvfb-run -a -s '-screen 0 1600x1100x24' npm run test:mobile
+xvfb-run -a -s '-screen 0 1600x1100x24' npm run test:browser
 ```
 
 画像は `artifacts/screenshots/` に保存します。SwiftShader による CPU 描画で検証するため、記録される fps は実 GPU の速度と異なります。
