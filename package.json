@@ -1,0 +1,30 @@
+{
+  "name": "sonata",
+  "version": "0.1.0",
+  "private": true,
+  "description": "A cinematic WebGL processor trace visualizer, descended from Kanata and Konata",
+  "license": "BSD-3-Clause",
+  "author": "Ryota Shioya",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/shioyadan/sonata.git"
+  },
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "scripts": {
+    "build": "node scripts/build.cjs",
+    "start": "node scripts/serve.cjs",
+    "test": "node scripts/check-model.cjs && node scripts/check-build.cjs",
+    "test:render": "electron --no-sandbox scripts/render.cjs",
+    "test:mobile": "electron --no-sandbox scripts/render.cjs --mobile",
+    "capture:flush": "electron --no-sandbox scripts/capture-flush.cjs",
+    "demos:generate": "node --import tsx scripts/generate-demos.ts",
+    "demos:select": "node --import tsx scripts/select-traces.ts"
+  },
+  "devDependencies": {
+    "@hpcc-js/wasm-zstd": "1.15.0",
+    "electron": "43.2.0",
+    "tsx": "4.23.11"
+  }
+}

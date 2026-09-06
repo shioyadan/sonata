@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+    <meta name="color-scheme" content="dark">
+    <title>Sonata — Processor Trace Visualizer</title>
+    <link rel="stylesheet" href="sonata.css">
+</head>
+<body>
+    <header class="topbar">
+        <a class="brand" href="#" title="Sonata"><span class="brand-mark">σ</span> sonata<span class="brand-divider"></span><span class="brand-section">pipeline visualizer</span></a>
+        <div class="experiment"><span class="live-dot"></span> PROCESSOR TRACES <span>/</span> IN MOTION</div>
+        <button id="mobile-details" class="mobile-details" aria-haspopup="dialog" aria-controls="mobile-panel"><strong id="mobile-demo"></strong><span>Demo &amp; settings <b>⌄</b></span></button>
+        <button id="fullscreen" class="quiet-button" title="Toggle fullscreen">Fullscreen <span>↗</span></button>
+    </header>
+
+    <main>
+        <section class="world" id="world" aria-label="Interactive 3D processor pipeline">
+            <canvas id="scene" tabindex="0" aria-label="3D instruction flow. Drag to orbit; scroll or pinch to zoom; drag with two fingers to move. Space to play or pause, arrow keys to step."></canvas>
+            <div class="mobile-run"><strong id="mobile-simulator"></strong><span id="mobile-workload"></span></div>
+            <div class="mobile-cycle"><span>CYCLE</span><output id="mobile-cycle-value"></output></div>
+            <div class="touch-camera" aria-label="Camera zoom"><button id="zoom-out" aria-label="Zoom out">−</button><button id="zoom-fit" aria-label="Fit the entire pipeline">Fit</button><button id="zoom-in" aria-label="Zoom in">+</button></div>
+            <p class="touch-hint">Pinch to zoom · Two fingers to move</p>
+            <section id="bound-scene" class="bound-scene" aria-label="Top-down analysis in the pipeline">
+                <div class="bound-scene-heading"><span><i></i> TOP-DOWN</span><small id="bound-scene-window"></small></div>
+                <div class="bound-scene-main"><strong id="bound-scene-status"></strong><span id="bound-scene-share"><span id="bound-scene-value"></span><small>%</small></span></div>
+                <p id="bound-scene-context"></p>
+                <div id="bound-scene-bar" class="bound-bar" aria-hidden="true"><i data-bound="retiring"></i><i data-bound="inFlight"></i><i data-bound="badSpeculation"></i><i data-bound="frontend"></i><i data-bound="backend"></i><i data-bound="unresolved"></i></div>
+                <div id="bound-scene-key" class="bound-scene-key" aria-hidden="true"><span data-bound="retiring">RET <b></b></span><span data-bound="inFlight" hidden>FLT <b></b></span><span data-bound="badSpeculation">SPEC <b></b></span><span data-bound="frontend">FE <b></b></span><span data-bound="backend">BE <b></b></span><span data-bound="unresolved" hidden>UNK <b></b></span></div>
+            </section>
+            <div class="world-heading">
+                <div class="motion-notice" id="motion-notice" hidden>
+                    <span>Reduced motion is on. Code rewind and unravel are off.</span>
+                    <button id="enable-animation">Enable animation &amp; play ↗</button>
+                </div>
+            </div>
+            <div class="view-controls" aria-label="Camera view">
+                <button data-view="orbit" aria-pressed="true">Orbit</button>
+                <button data-view="plan" aria-pressed="false">Top view</button>
+                <button data-view="cinema" aria-pressed="false">Cinema</button>
+            </div>
+            <div id="trace-event-notice" class="trace-event-notice" hidden></div>
+            <div id="labels" aria-hidden="true"></div>
+            <div id="register-readouts" aria-hidden="true"></div>
+            <div id="register-writeback" class="register-writeback" hidden></div>
+            <div id="instruction-stream-label" class="instruction-stream-label" aria-hidden="true"><span>INSTRUCTION STREAM</span><small>TRACE SEQUENCE <b>↗</b> FETCH</small></div>
+            <div id="rob-head-label" class="fifo-label" aria-hidden="true"></div>
+            <div id="recovery-branch" class="recovery-branch" hidden><strong></strong><small></small></div>
+            <div id="rob-tail-label" class="fifo-label tail-label" aria-hidden="true"></div>
+            <div id="memory-notice" class="memory-notice" role="status" hidden><strong>MEMORY READY</strong><span id="memory-notice-detail"></span></div>
+            <div class="flush-alert" id="flush-alert" role="status"><span class="alert-icon">↯</span><div><strong>PIPELINE FLUSH</strong><span id="flush-detail"></span></div><span class="alert-tag">WRONG PATH</span></div>
+            <div class="world-bottom">
+                <div class="legend"><span><i class="integer"></i>Integer</span><span><i class="memory"></i>Memory</span><span><i class="branch"></i>Branch</span><span><i class="squash"></i>Squashed</span><span class="link-key" title="Link lines match the displayed module widths: N pipes at both execution ports, fetch / allocation width at the frontend, and commit width at the output. Widths are inferred from the source trace.">LINKS · PARALLEL LANES</span><span id="matrix-source" class="link-key"></span></div>
+                <span class="gesture-hint">DRAG TO ORBIT <b>·</b> SCROLL TO EXPLORE</span>
+            </div>
+
+            <div id="fallback" hidden><strong>WebGL 2 is unavailable.</strong><p>Open this mockup in a browser with graphics acceleration enabled.</p><p>Sonata requires WebGL 2. All demo data is included in this page.</p></div>
+            <div class="cinema-caption">SONATA <span>—</span> AN INSTRUCTION ODYSSEY<small id="cinema-source"></small></div>
+        </section>
+
+        <aside class="telemetry">
+            <div class="panel-heading"><span class="eyebrow">TRACE TELEMETRY</span><span class="recording"><i></i> <span id="play-status">LIVE</span></span></div>
+            <label class="field-label" for="trace-select">DEMO SCENE</label>
+            <div class="select-wrap"><select id="trace-select"></select></div>
+            <div class="trace-meta" id="trace-meta">
+                <dl class="run-origin"><div><dt>SIMULATOR / PROCESSOR</dt><dd id="run-simulator"></dd></div><div><dt>WORKLOAD</dt><dd id="run-workload"></dd></div></dl>
+                <details id="run-details"><summary>Run details</summary><p id="run-processor"></p><p id="run-configuration"></p><p id="run-note"></p><code id="run-file"></code><p id="run-excerpt"></p></details>
+            </div>
+            <div class="demo-reel"><span id="scene-theme"></span><button id="show-highlight" title="Play from just before this scene's highlight">Highlight ↗</button></div>
+
+            <div class="cycle-block"><span class="field-label">CURRENT CYCLE</span><div class="cycle-number" id="cycle-value">3,378<span>.00</span></div><div class="cycle-caption"><span id="architecture">OUT-OF-ORDER</span><span id="width-value">2-WIDE</span></div></div>
+            <div class="metric-pair"><div><span class="field-label">IN FLIGHT</span><strong id="active-count">0</strong></div><div><span class="field-label">COMMITTED / CYCLE</span><strong id="ipc-value">0.00</strong></div></div>
+            <div class="occupancy"><div><span id="queue-label">Scheduler</span><span id="issue-count">0 / 16</span></div><div class="cell-meter" id="issue-meter"></div><div><span id="rob-label">Reorder buffer</span><span id="rob-count">0 / 48</span></div><div class="cell-meter" id="rob-meter"></div></div>
+
+            <div class="stream-heading"><span class="eyebrow">INSTRUCTION SPOTLIGHT</span><span class="small-star">✳</span></div>
+            <div class="spotlight" id="spotlight"><div class="spotlight-top"><span id="op-id">—</span><span id="op-stage">FOLLOWING</span></div><code id="op-code">Waiting for instructions</code><div class="op-progress" id="op-progress"></div><div class="spotlight-bottom"><span id="op-state">Click a particle to follow it</span><button id="unpin" hidden>Unpin ↗</button></div></div>
+
+            <div class="appearance"><div class="appearance-heading"><span class="eyebrow">ATMOSPHERE</span><span class="effect-tag">WEBGL 2</span></div><label class="range-label" for="bloom"><span>Bloom</span><output id="bloom-value">170%</output></label><input id="bloom" type="range" min="0" max="220" value="170"><div class="effect-toggles"><button id="instruction-stream" aria-pressed="true">Instruction stream <span>ON</span></button><button id="motion-effects" aria-pressed="true">Motion effects <span>ON</span></button><button id="trails" aria-pressed="true">Light trails <span>ON</span></button><button id="auto-camera" aria-pressed="true">Auto orbit <span>ON</span></button></div></div>
+            <div class="aside-foot"><span class="live-dot"></span> REAL TRACE. UNREAL LIGHT.</div>
+        </aside>
+    </main>
+
+    <footer class="transport">
+        <div class="transport-top"><div class="playback"><button class="transport-button" id="reset" title="Restart trace" aria-label="Restart trace">↺</button><button class="transport-button" id="previous" title="Previous cycle (←)" aria-label="Previous cycle">Ⅰ‹</button><button class="play-button" id="play" title="Pause (Space)" aria-label="Pause">Ⅱ</button><button class="transport-button" id="next" title="Next cycle (→)" aria-label="Next cycle">›Ⅰ</button><span class="playback-divider"></span><select id="speed" aria-label="Playback speed"><option value="1">0.25×</option><option value="2">0.5×</option><option value="4" selected>1×</option><option value="8">2×</option><option value="16">4×</option></select><span class="speed-unit">4 cycles / sec</span></div><div class="timeline-title"><span class="live-dot"></span> INSTRUCTION ACTIVITY <span id="range-label"></span></div><button class="flush-button" id="next-flush"><span>↯</span> Jump to flush <span>→</span></button></div>
+        <div class="timeline-wrap"><canvas id="activity" aria-hidden="true"></canvas><div id="event-markers"></div><div id="playhead"></div><input id="timeline" type="range" step="0.01" aria-label="Trace cycle"></div>
+        <div class="transport-bottom"><span id="first-cycle"></span><span class="timeline-key"><i></i> Committed <i></i> In flight <i></i> Flush</span><span id="last-cycle"></span></div>
+    </footer>
+    <div class="statusbar"><span><span class="status-dot"></span> <span id="renderer-status">Initializing light field…</span></span><span>SPACE <b>play / pause</b> <span class="status-separator">/</span> ← → <b>step</b> <span class="status-separator">/</span> F <b>next flush</b> <span class="status-separator">/</span> C <b>cinema</b></span><span>SONATA <b>v.0.1.0</b></span></div>
+    <dialog id="mobile-panel" aria-labelledby="mobile-panel-title"><div class="mobile-panel-heading"><strong id="mobile-panel-title">Demo &amp; settings</strong><button id="mobile-close" aria-label="Close demo and settings">Done</button></div></dialog>
+    <script src="../data/traces.js"></script>
+    <script src="replay-model.js"></script>
+    <script src="sonata.js"></script>
+</body>
+</html>

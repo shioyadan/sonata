@@ -1,0 +1,19 @@
+{
+  "project": "Konata",
+  "repository": "https://github.com/shioyadan/Konata",
+  "revision": "9976e3b125e28d9dcf9353f3803d13191869ddd7",
+  "sourceDirectory": "src/core",
+  "localChanges": false,
+  "files": {
+    "cycle_activity_analysis.ts": "07334e17c978720fd08e1e784970a2ffee003735feea58e941e827784604246a",
+    "file_line_reader.ts": "47f875f03217a9c58cf0be593fd8ce62beb325cf1932e8921155e3e1b3cb003c",
+    "gem5_o3_pipe_view_parser.ts": "54f0d53431f51c84c6ba61bcf6674ee1fa23bfbddad475b36a712088774d474a",
+    "model.ts": "b93bb755069a3363a0a8c502a1af3ee5b56bfd08efa1c10c65ab3f0b4aae3b51",
+    "onikiri_parser.ts": "bf880e7862a36336ce9811ed24cf407c695a0381375b60b6c85e9a37285fd87c",
+    "op_store.ts": "8cebe436679a32247d67998d419ba629c90bf35abb6740194849443ebb44bdd5",
+    "stage_structure_detector.ts": "2bd662ae6d88a8a23697010de9646e62e1c28c41c5a412ee1645ba111f0cef99",
+    "trace_navigator_analysis.ts": "7a5264512778a07062bc5d6a1e0bbdb1f440cb077ef3a2b57609f2116f9ccf36",
+    "zstd_stream.ts": "bac0aac079dfeac0d3aabd0103a5baea9949679d6536ee424eafdb4a5eba28dd",
+    "zstd_stream_worker.ts": "87701a96b1464b1238b691a531e0d8cb99558e183ac317202e250f15ff05dd9e"
+  }
+}

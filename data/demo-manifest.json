@@ -1,0 +1,668 @@
+[
+  {
+    "key": "branch-storm",
+    "provenance": {
+      "simulator": "gem5 v25.1.0.1 · O3",
+      "workload": "CoreMark · 2 iterations",
+      "processor": "ARM64 / AArch64 · out-of-order",
+      "configuration": "8-wide fetch / decode / rename / dispatch / issue / commit; 192-entry ROB; 2 GHz; one thread; L1 caches; 512 MiB memory.",
+      "note": "CoreMark performance workload, 2 KB input. Both ARM64 demos are excerpts from the same run. This short run is for trace inspection, not a scored CoreMark result.",
+      "workloadKnown": true,
+      "robEntries": 192,
+      "evidence": [
+        "gem5-traces/full-2iter/README.md",
+        "gem5-traces/full-2iter/arm64/config.ini",
+        "gem5-traces/full-2iter/arm64/coremark.out"
+      ]
+    },
+    "window": [
+      73208,
+      73335
+    ],
+    "ops": 665,
+    "retired": 381,
+    "flushes": [
+      [
+        73228,
+        34
+      ],
+      [
+        73253,
+        32
+      ],
+      [
+        73269,
+        33
+      ],
+      [
+        73287,
+        29
+      ],
+      [
+        73312,
+        51
+      ],
+      [
+        73323,
+        54
+      ]
+    ],
+    "peakActive": 163,
+    "activeRange": [
+      0,
+      163
+    ],
+    "queueRange": [
+      0,
+      27
+    ],
+    "peakMemoryWait": 0,
+    "frontNodes": [
+      {
+        "id": "front-0",
+        "names": [
+          "F"
+        ]
+      },
+      {
+        "id": "front-1",
+        "names": [
+          "Dc"
+        ]
+      },
+      {
+        "id": "front-2",
+        "names": [
+          "Rn"
+        ]
+      }
+    ],
+    "executionNodes": [
+      {
+        "id": "exec-integer",
+        "kind": "integer",
+        "names": [
+          "Is"
+        ],
+        "pipeCount": 7
+      },
+      {
+        "id": "exec-memory",
+        "kind": "memory",
+        "names": [
+          "Is"
+        ],
+        "pipeCount": 6
+      },
+      {
+        "id": "exec-branch",
+        "kind": "branch",
+        "names": [
+          "Is"
+        ],
+        "pipeCount": 4
+      }
+    ],
+    "queueCapacity": 32,
+    "robCapacity": 192,
+    "bookmarks": [
+      {
+        "cycle": 73228,
+        "label": "34 squashed",
+        "type": "flush"
+      },
+      {
+        "cycle": 73253,
+        "label": "32 squashed",
+        "type": "flush"
+      },
+      {
+        "cycle": 73269,
+        "label": "33 squashed",
+        "type": "flush"
+      },
+      {
+        "cycle": 73287,
+        "label": "29 squashed",
+        "type": "flush"
+      },
+      {
+        "cycle": 73312,
+        "label": "51 squashed",
+        "type": "flush"
+      },
+      {
+        "cycle": 73323,
+        "label": "54 squashed",
+        "type": "flush"
+      }
+    ],
+    "events": [],
+    "topDown": {
+      "method": "Konata Top-down-like",
+      "allocationWidth": 8,
+      "firstCycle": 73200,
+      "cycles": 136
+    }
+  },
+  {
+    "key": "wide-open",
+    "provenance": {
+      "simulator": "gem5 v25.1.0.1 · O3",
+      "workload": "CoreMark · 2 iterations",
+      "processor": "ARM64 / AArch64 · out-of-order",
+      "configuration": "8-wide fetch / decode / rename / dispatch / issue / commit; 192-entry ROB; 2 GHz; one thread; L1 caches; 512 MiB memory.",
+      "note": "CoreMark performance workload, 2 KB input. Both ARM64 demos are excerpts from the same run. This short run is for trace inspection, not a scored CoreMark result.",
+      "workloadKnown": true,
+      "robEntries": 192,
+      "evidence": [
+        "gem5-traces/full-2iter/README.md",
+        "gem5-traces/full-2iter/arm64/config.ini",
+        "gem5-traces/full-2iter/arm64/coremark.out"
+      ]
+    },
+    "window": [
+      73388,
+      73515
+    ],
+    "ops": 798,
+    "retired": 602,
+    "flushes": [],
+    "peakActive": 205,
+    "activeRange": [
+      92,
+      205
+    ],
+    "queueRange": [
+      20,
+      49
+    ],
+    "peakMemoryWait": 0,
+    "frontNodes": [
+      {
+        "id": "front-0",
+        "names": [
+          "F"
+        ]
+      },
+      {
+        "id": "front-1",
+        "names": [
+          "Dc"
+        ]
+      },
+      {
+        "id": "front-2",
+        "names": [
+          "Rn"
+        ]
+      }
+    ],
+    "executionNodes": [
+      {
+        "id": "exec-integer",
+        "kind": "integer",
+        "names": [
+          "Is"
+        ],
+        "pipeCount": 7
+      },
+      {
+        "id": "exec-memory",
+        "kind": "memory",
+        "names": [
+          "Is"
+        ],
+        "pipeCount": 6
+      },
+      {
+        "id": "exec-branch",
+        "kind": "branch",
+        "names": [
+          "Is"
+        ],
+        "pipeCount": 4
+      }
+    ],
+    "queueCapacity": 56,
+    "robCapacity": 192,
+    "bookmarks": [
+      {
+        "cycle": 73398,
+        "label": "Commit burst",
+        "type": "highlight"
+      }
+    ],
+    "events": [],
+    "topDown": {
+      "method": "Konata Top-down-like",
+      "allocationWidth": 8,
+      "firstCycle": 73380,
+      "cycles": 136
+    }
+  },
+  {
+    "key": "memory-tide",
+    "provenance": {
+      "simulator": "RSD processor",
+      "workload": "Program not yet identified",
+      "processor": "RSD · RISC-V · out-of-order",
+      "configuration": "Captured from the RSD processor. The simulator backend, version and run configuration are not identified in the retained trace.",
+      "note": "Source: mshr.log. Explicit D$-miss / MSHR allocation and Br-pred-miss-ex annotations confirm data-cache misses and branch mispredictions in this excerpt. The original program name has not been verified.",
+      "workloadKnown": false,
+      "evidence": [
+        "User confirmation: trace acquired from processor RSD",
+        "rsd/mshr.log"
+      ]
+    },
+    "window": [
+      3964,
+      4091
+    ],
+    "ops": 173,
+    "retired": 142,
+    "flushes": [
+      [
+        4068,
+        15
+      ]
+    ],
+    "peakActive": 51,
+    "activeRange": [
+      16,
+      51
+    ],
+    "queueRange": [
+      0,
+      12
+    ],
+    "peakMemoryWait": 12,
+    "frontNodes": [
+      {
+        "id": "front-0",
+        "names": [
+          "Np"
+        ]
+      },
+      {
+        "id": "front-1",
+        "names": [
+          "F"
+        ]
+      },
+      {
+        "id": "front-2",
+        "names": [
+          "Pd"
+        ]
+      },
+      {
+        "id": "front-3",
+        "names": [
+          "Dc"
+        ]
+      },
+      {
+        "id": "front-4",
+        "names": [
+          "Rn"
+        ]
+      },
+      {
+        "id": "front-5",
+        "names": [
+          "Ds"
+        ]
+      }
+    ],
+    "executionNodes": [
+      {
+        "id": "exec-integer",
+        "kind": "integer",
+        "names": [
+          "Is"
+        ],
+        "pipeCount": 2
+      },
+      {
+        "id": "exec-memory",
+        "kind": "memory",
+        "names": [
+          "Is"
+        ],
+        "pipeCount": 2
+      },
+      {
+        "id": "exec-branch",
+        "kind": "branch",
+        "names": [
+          "Is"
+        ],
+        "pipeCount": 2
+      }
+    ],
+    "queueCapacity": 16,
+    "robCapacity": 48,
+    "bookmarks": [
+      {
+        "cycle": 3992,
+        "label": "D-cache miss",
+        "type": "highlight"
+      },
+      {
+        "cycle": 4014,
+        "label": "Memory ready → scheduler",
+        "type": "highlight"
+      },
+      {
+        "cycle": 4066,
+        "label": "Branch misprediction",
+        "type": "highlight"
+      },
+      {
+        "cycle": 4068,
+        "label": "15 squashed",
+        "type": "flush"
+      }
+    ],
+    "events": [
+      {
+        "cycle": 3992,
+        "sourceCycle": 3991,
+        "id": 4355,
+        "kind": "dcache-miss",
+        "message": "= load([#0x1e30]) D$-miss. MSHR alloc: 1",
+        "line": 198703,
+        "endCycle": 4014,
+        "instruction": "00001a00: lbu a2, 0x0(a5)"
+      },
+      {
+        "cycle": 4024,
+        "sourceCycle": 4023,
+        "id": 4395,
+        "kind": "dcache-miss",
+        "message": "= load([#0x1e38]) D$-miss. MSHR alloc: 1",
+        "line": 200549,
+        "endCycle": 4045,
+        "instruction": "00001a00: lbu a2, 0x0(a5)"
+      },
+      {
+        "cycle": 4058,
+        "sourceCycle": 4057,
+        "id": 4435,
+        "kind": "dcache-miss",
+        "message": "= load([#0x1e40]) D$-miss. MSHR alloc: 1",
+        "line": 202502,
+        "endCycle": 4082,
+        "instruction": "00001a00: lbu a2, 0x0(a5)"
+      },
+      {
+        "cycle": 4066,
+        "sourceCycle": 4065,
+        "id": 4454,
+        "kind": "branch-mispredict",
+        "message": "d:0x1a14 = fu(a:0x1e44, b:0x1e44), alu:0b0000, op:0b010 Br-pred-miss-ex",
+        "line": 203107,
+        "endCycle": 4069,
+        "instruction": "00001a10: bne a5, a1, 0xfffffff0"
+      },
+      {
+        "cycle": 4071,
+        "sourceCycle": 4070,
+        "id": 4473,
+        "kind": "icache-miss",
+        "message": "i-cache-miss",
+        "line": 203318,
+        "endCycle": 4074,
+        "instruction": "00001a20: sw zero, a4, 0x0"
+      },
+      {
+        "cycle": 4081,
+        "sourceCycle": 4080,
+        "id": 4470,
+        "kind": "branch-mispredict",
+        "message": "d:0x1a18 = fu(a:0x0, b:0x0), alu:0b0000, op:0b010 Br-pred-miss-ex",
+        "line": 203425,
+        "endCycle": 4084,
+        "instruction": "00001a14: beq a0, zero, 0x18"
+      },
+      {
+        "cycle": 4090,
+        "sourceCycle": 4089,
+        "id": 4475,
+        "kind": "icache-miss",
+        "message": "i-cache-miss",
+        "line": 203629,
+        "endCycle": 4093,
+        "instruction": "(g:21448)"
+      }
+    ],
+    "topDown": {
+      "method": "Konata Top-down-like",
+      "allocationWidth": 2,
+      "firstCycle": 3956,
+      "cycles": 136
+    }
+  },
+  {
+    "key": "rename-rush",
+    "provenance": {
+      "simulator": "gem5 v25.1.0.1 · O3",
+      "workload": "CoreMark · 1 iteration",
+      "processor": "ARM64 / AArch64 · out-of-order",
+      "configuration": "8-wide pipeline; 192-entry ROB; 256 integer physical registers; 2 GHz; one thread.",
+      "note": "Detailed O3PipeView + O3CPUAll trace of CoreMark's iterate region. Actual integer rename mappings, register reads and values are recorded. The rename map shows x0–x30 and SP_EL0; unobserved mappings stay blank. This short run is for trace inspection, not a scored CoreMark result.",
+      "workloadKnown": true,
+      "robEntries": 192,
+      "evidence": [
+        "gem5-parser-study/report.md",
+        "gem5-traces/detailed/arm64/config.ini",
+        "gem5-traces/detailed/arm64/trace.log"
+      ]
+    },
+    "window": [
+      404,
+      531
+    ],
+    "ops": 649,
+    "retired": 457,
+    "flushes": [
+      [
+        528,
+        184
+      ]
+    ],
+    "peakActive": 204,
+    "activeRange": [
+      0,
+      204
+    ],
+    "queueRange": [
+      0,
+      51
+    ],
+    "peakMemoryWait": 1,
+    "frontNodes": [
+      {
+        "id": "front-0",
+        "names": [
+          "F"
+        ]
+      },
+      {
+        "id": "front-1",
+        "names": [
+          "Dc"
+        ]
+      },
+      {
+        "id": "front-2",
+        "names": [
+          "Rn"
+        ]
+      }
+    ],
+    "executionNodes": [
+      {
+        "id": "exec-integer",
+        "kind": "integer",
+        "names": [
+          "Is"
+        ],
+        "pipeCount": 5
+      },
+      {
+        "id": "exec-memory",
+        "kind": "memory",
+        "names": [
+          "Is"
+        ],
+        "pipeCount": 4
+      },
+      {
+        "id": "exec-branch",
+        "kind": "branch",
+        "names": [
+          "Is"
+        ],
+        "pipeCount": 3
+      }
+    ],
+    "queueCapacity": 56,
+    "robCapacity": 192,
+    "bookmarks": [
+      {
+        "cycle": 420,
+        "label": "Register write burst",
+        "type": "highlight"
+      },
+      {
+        "cycle": 528,
+        "label": "184 squashed · mapping recovery",
+        "type": "flush"
+      }
+    ],
+    "events": [],
+    "topDown": {
+      "method": "Konata Top-down-like",
+      "allocationWidth": 8,
+      "firstCycle": 396,
+      "cycles": 136
+    }
+  },
+  {
+    "key": "x86-recovery",
+    "provenance": {
+      "simulator": "gem5 v25.1.0.1 · O3",
+      "workload": "CoreMark · 1 iteration",
+      "processor": "x86-64 · out-of-order · micro-ops",
+      "configuration": "8-wide pipeline; 192-entry ROB; 256 integer physical registers; 2 GHz; one thread.",
+      "note": "Detailed O3PipeView + O3CPUAll trace of CoreMark's iterate region. x86 macro-instructions expand into micro-ops. Actual integer rename mappings, register reads and values are recorded; The rename map shows all 16 architectural integer registers and 16 micro-op temporaries; unobserved mappings stay blank.",
+      "workloadKnown": true,
+      "robEntries": 192,
+      "evidence": [
+        "gem5-parser-study/report.md",
+        "gem5-traces/detailed/x86/config.ini",
+        "gem5-traces/detailed/x86/trace.log"
+      ]
+    },
+    "window": [
+      1596,
+      1723
+    ],
+    "ops": 572,
+    "retired": 424,
+    "flushes": [
+      [
+        1600,
+        54
+      ],
+      [
+        1688,
+        45
+      ]
+    ],
+    "peakActive": 100,
+    "activeRange": [
+      10,
+      100
+    ],
+    "queueRange": [
+      0,
+      19
+    ],
+    "peakMemoryWait": 0,
+    "frontNodes": [
+      {
+        "id": "front-0",
+        "names": [
+          "F"
+        ]
+      },
+      {
+        "id": "front-1",
+        "names": [
+          "Dc"
+        ]
+      },
+      {
+        "id": "front-2",
+        "names": [
+          "Rn"
+        ]
+      }
+    ],
+    "executionNodes": [
+      {
+        "id": "exec-integer",
+        "kind": "integer",
+        "names": [
+          "Is"
+        ],
+        "pipeCount": 6
+      },
+      {
+        "id": "exec-memory",
+        "kind": "memory",
+        "names": [
+          "Is"
+        ],
+        "pipeCount": 4
+      },
+      {
+        "id": "exec-branch",
+        "kind": "branch",
+        "names": [
+          "Is"
+        ],
+        "pipeCount": 2
+      }
+    ],
+    "queueCapacity": 24,
+    "robCapacity": 192,
+    "bookmarks": [
+      {
+        "cycle": 1600,
+        "label": "54 squashed · mapping recovery",
+        "type": "flush"
+      },
+      {
+        "cycle": 1634,
+        "label": "Register write burst",
+        "type": "highlight"
+      },
+      {
+        "cycle": 1688,
+        "label": "45 squashed · mapping recovery",
+        "type": "flush"
+      }
+    ],
+    "events": [],
+    "topDown": {
+      "method": "Konata Top-down-like",
+      "allocationWidth": 8,
+      "firstCycle": 1588,
+      "cycles": 136
+    }
+  }
+]
