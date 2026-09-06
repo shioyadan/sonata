@@ -1,10 +1,12 @@
 "use strict";
 const assert=require("node:assert/strict");
+const fs=require("node:fs");
+const path=require("node:path");
 const delay=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 
 // 実ブラウザへの入力、故障の注入、状態を待ってからの検査を組み合わせる。
 // 別リポジトリや元ログに依存せず、コピー済みの配布 HTML を使う。
-module.exports=async function reviewBrowser(window,entry){
+module.exports=async function reviewBrowser(window,entry,screenshots){
     const js=source=>window.webContents.executeJavaScript(source);
     const settle=()=>js("new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))");
     const waitFor=async(source,message)=>{
@@ -64,6 +66,42 @@ module.exports=async function reviewBrowser(window,entry){
     await press("Escape");
     assert.equal(await js("!document.getElementById('license-panel').open&&document.activeElement.id==='license-open'"),true,"Escape did not close Licenses and restore focus");
 
+    // 実際の右ボタン入力で、回転や選択に干渉せずズームできることを確認する。
+    await js("sonata.captureAt(sonata.trace.demo.screenshotCycle);if(document.getElementById('auto-camera').getAttribute('aria-pressed')==='true')document.getElementById('auto-camera').click();document.getElementById('zoom-fit').click()");
+    await waitFor("Math.abs(sonata.camera.radius-32.5)<.01&&Math.abs(sonata.camera.azimuth-.2)<.001","Fit did not settle before zoom input");
+    const cameraBefore=await js("sonata.camera");
+    const area=await js("(()=>{const r=document.getElementById('scene').getBoundingClientRect();return {x:Math.round(r.left+r.width*.5),top:Math.round(r.top+r.height*.15),bottom:Math.round(r.top+r.height*.85)};})()");
+    const drag=async(from,to,button="right")=>{
+        await js("globalThis.reviewPointerReleased=false;document.getElementById('scene').addEventListener('pointerup',()=>globalThis.reviewPointerReleased=true,{once:true})");
+        window.webContents.sendInputEvent({type:"mouseDown",x:area.x,y:from,button,clickCount:1});
+        for(let i=1;i<=6;i++)window.webContents.sendInputEvent({type:"mouseMove",x:area.x,y:Math.round(from+(to-from)*i/6),button});
+        window.webContents.sendInputEvent({type:"mouseUp",x:area.x,y:to,button,clickCount:1});
+        await waitFor("globalThis.reviewPointerReleased","Zoom drag did not release its pointer");await settle();
+        return js("sonata.camera");
+    };
+    const close=await drag(area.bottom,area.top);
+    assert.equal(close.targetRadius,3,"Right drag did not reach the detailed zoom limit");
+    assert.ok(Math.abs(close.azimuth-cameraBefore.azimuth)<.002&&Math.abs(close.elevation-cameraBefore.elevation)<.002,"Right drag also orbited the camera");
+    assert.equal(close.pointers,0,"Right drag left a captured pointer");
+    await waitFor("sonata.camera.radius<3.01","Detailed zoom did not settle");
+    if(screenshots)fs.writeFileSync(path.join(screenshots,"sonata-detail-zoom.png"),(await window.webContents.capturePage()).toPNG());
+    const far=await drag(area.top,area.bottom);
+    assert.equal(far.targetRadius,62,"Downward right drag did not zoom back out");
+    await js("document.getElementById('zoom-fit').click()");
+    const left=await drag(area.bottom,area.bottom-60,"left");
+    assert.equal(left.targetRadius,32.5,"Left drag also zoomed the camera");
+    assert.ok(Math.abs(left.elevation-close.elevation)>.02,"Left drag no longer orbits");
+    await js("document.getElementById('zoom-fit').click();for(let i=0;i<20;i++)document.getElementById('zoom-in').click()");
+    assert.equal(await js("sonata.camera.targetRadius"),3,"Zoom button kept the old limit");
+    await js("for(let i=0;i<30;i++)document.getElementById('zoom-out').click()");
+    assert.equal(await js("sonata.camera.targetRadius"),62,"Zoom-out button escaped the far limit");
+    await js("document.getElementById('zoom-fit').click();globalThis.reviewWheelReceived=false;document.getElementById('scene').addEventListener('wheel',()=>globalThis.reviewWheelReceived=true,{once:true})");
+    window.webContents.sendInputEvent({type:"mouseWheel",x:area.x,y:Math.round((area.top+area.bottom)/2),deltaY:5000});
+    await waitFor("globalThis.reviewWheelReceived","Wheel zoom was not delivered");
+    assert.equal(await js("sonata.camera.targetRadius"),3,"Wheel zoom kept the old limit");
+    await js("document.getElementById('zoom-fit').click()");
+    assert.equal(await js("sonata.camera.targetRadius"),32.5,"Fit did not leave detailed zoom");
+
     // 初期化失敗時にもユーザー向けの案内と権利表示を開けることを確認する。
     const debuggerAPI=window.webContents.debugger;debuggerAPI.attach("1.3");
     let injected;
@@ -114,5 +152,6 @@ module.exports=async function reviewBrowser(window,entry){
     assert.equal(frame.error,0,"Restored graphics returned a WebGL error");
     assert.ok(frame.colored>1000&&frame.particles>0,`Restored graphics left an empty frame: ${JSON.stringify(frame)}`);
     return {keyboard:{stepping:true,bounds:true,playback:true,cinema:true,focusedControls:true,modalFocus:true},
+        camera:{rightDrag:true,leftOrbit:true,buttons:true,wheel:true,fit:true,minRadius:3,maxRadius:62},
         unavailable:{fallback:true,licenses:true},contextRecovery:{clockPaused:true,playbackResumed:true,...frame}};
 };

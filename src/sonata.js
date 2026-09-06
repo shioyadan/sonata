@@ -55,6 +55,7 @@
     let renderWidth = 0, renderHeight = 0, cssWidth = 0, cssHeight = 0, pixelRatio = 1;
     let cameraMode = "orbit", azimuth = 0.20, elevation = 0.73, radius = 32.5;
     let targetAzimuth = azimuth, targetElevation = elevation, targetRadius = radius;
+    const minCameraRadius=3,maxCameraRadius=62;
     let focus=[0,0,0],targetFocus=[0,0,0];
     const compactMedia=matchMedia("(max-width:760px), (max-width:1000px) and (max-height:600px)");
     let lastTime = performance.now(), artTime = 0, frameCount = 0, fpsTime = lastTime, fps = 0, nextUI = 0;
@@ -1606,8 +1607,8 @@
     });
     mobilePanel.addEventListener("keydown",event=>event.stopPropagation());
     $("zoom-fit").addEventListener("click",()=>setCamera(cameraMode));
-    $("zoom-in").addEventListener("click",()=>{toggleAuto(false);targetRadius=clamp(targetRadius/1.3,10,62);});
-    $("zoom-out").addEventListener("click",()=>{toggleAuto(false);targetRadius=clamp(targetRadius*1.3,10,62);});
+    $("zoom-in").addEventListener("click",()=>{toggleAuto(false);targetRadius=clamp(targetRadius/1.3,minCameraRadius,maxCameraRadius);});
+    $("zoom-out").addEventListener("click",()=>{toggleAuto(false);targetRadius=clamp(targetRadius*1.3,minCameraRadius,maxCameraRadius);});
     // 2 点のタッチで拡大と平行移動を制御する。片方の指を先に離す場合も、
     // 2 点の中心に対応するシーン上の位置を保つ。
     const pointers=new Map();let pinch=null;
@@ -1620,8 +1621,10 @@
         targetFocus=targetFocus.map((v,i)=>clamp(v+(right[i]*dx-up[i]*dy)*units,-[20,12,14][i],[20,12,14][i]));
     }
     canvas.addEventListener("pointerdown",event=>{
-        if(event.button!==0||pointers.size>=2)return;
-        pointers.set(event.pointerId,{x:event.clientX,y:event.clientY,startX:event.clientX,startY:event.clientY,moved:false});canvas.setPointerCapture(event.pointerId);
+        const zoom=event.pointerType==="mouse"&&event.button===2;
+        if((event.button!==0&&!zoom)||pointers.size>=2)return;
+        if(pointers.size&&(zoom||[...pointers.values()].some(p=>p.zoom)))return;
+        pointers.set(event.pointerId,{x:event.clientX,y:event.clientY,startX:event.clientX,startY:event.clientY,moved:false,zoom});canvas.setPointerCapture(event.pointerId);
         if(pointers.size===2){for(const p of pointers.values())p.moved=true;pinch=touchPair();toggleAuto(false);}
     });
     canvas.addEventListener("pointermove",event=>{
@@ -1631,16 +1634,20 @@
         drag.x=event.clientX;drag.y=event.clientY;
         if(pointers.size===2){
             const next=touchPair(),oldRadius=targetRadius,rect=canvas.getBoundingClientRect();
-            targetRadius=clamp(oldRadius*pinch.distance/next.distance,10,62);
+            targetRadius=clamp(oldRadius*pinch.distance/next.distance,minCameraRadius,maxCameraRadius);
             const scale=targetRadius/oldRadius,units=2*Math.tan(.66/2)*oldRadius*Math.max(1,1.48/(cssWidth/cssHeight))/cssHeight;
             moveFocus((pinch.x-rect.left-rect.width/2)*(1-scale)-(next.x-pinch.x)*scale,
                 (pinch.y-rect.top-rect.height/2)*(1-scale)-(next.y-pinch.y)*scale,units);
             pinch=next;
-        }else if(drag.moved){toggleAuto(false);targetAzimuth-=dx*.006;targetElevation=clamp(targetElevation+dy*.005,.24,1.50);}
+        }else if(drag.moved){
+            toggleAuto(false);
+            if(drag.zoom)targetRadius=clamp(targetRadius*Math.exp(dy*.008),minCameraRadius,maxCameraRadius);
+            else {targetAzimuth-=dx*.006;targetElevation=clamp(targetElevation+dy*.005,.24,1.50);}
+        }
     });
     function endPointer(event){
         const drag=pointers.get(event.pointerId);if(!drag)return;
-        if(event.type==="pointerup"&&!drag.moved){
+        if(event.type==="pointerup"&&!drag.moved&&!drag.zoom){
             const rect=canvas.getBoundingClientRect(),x=event.clientX-rect.left,y=event.clientY-rect.top;
             const closest=visibleParticles.map(p=>({p,d:Math.hypot(p.screen[0]-x,p.screen[1]-y)})).sort((a,b)=>a.d-b.d)[0];
             selectedID=closest&&closest.d<22?closest.p.op.id:null;nextUI=0;
@@ -1649,7 +1656,9 @@
         if(canvas.hasPointerCapture(event.pointerId))canvas.releasePointerCapture(event.pointerId);
     }
     for(const type of ["pointerup","pointercancel","lostpointercapture"])canvas.addEventListener(type,endPointer);
-    canvas.addEventListener("wheel",event=>{event.preventDefault();targetRadius=clamp(targetRadius*Math.exp(event.deltaY*.001),10,62);},{passive:false});
+    canvas.addEventListener("wheel",event=>{event.preventDefault();targetRadius=clamp(targetRadius*Math.exp(event.deltaY*.001),minCameraRadius,maxCameraRadius);},{passive:false});
+    // 右ボタンのドラッグ中にブラウザのメニューが開いて操作を中断しないようにする。
+    canvas.addEventListener("contextmenu",event=>event.preventDefault());
     canvas.addEventListener("dblclick",()=>setCamera("orbit"));
     canvas.addEventListener("webglcontextlost",event=>{
         event.preventDefault();contextLost=true;cancelAnimationFrame(animationID);$("fallback").hidden=false;

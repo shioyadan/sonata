@@ -17,7 +17,7 @@
 
     <main>
         <section class="world" id="world" aria-label="Interactive 3D processor pipeline">
-            <canvas id="scene" tabindex="0" aria-label="3D instruction flow. Drag to orbit; scroll or pinch to zoom; drag with two fingers to move. Space to play or pause, arrow keys to step."></canvas>
+            <canvas id="scene" tabindex="0" aria-label="3D instruction flow. Drag to orbit; right-drag up to zoom in, down to zoom out; scroll or pinch to zoom; drag with two fingers to move. Space to play or pause, arrow keys to step."></canvas>
             <div class="mobile-run"><strong id="mobile-simulator"></strong><span id="mobile-workload"></span></div>
             <div class="mobile-cycle"><span>CYCLE</span><output id="mobile-cycle-value"></output></div>
             <div class="touch-camera" aria-label="Camera zoom"><button id="zoom-out" aria-label="Zoom out">−</button><button id="zoom-fit" aria-label="Fit the entire pipeline">Fit</button><button id="zoom-in" aria-label="Zoom in">+</button></div>
@@ -52,7 +52,7 @@
             <div class="flush-alert" id="flush-alert" role="status"><span class="alert-icon">↯</span><div><strong>PIPELINE FLUSH</strong><span id="flush-detail"></span></div><span class="alert-tag">WRONG PATH</span></div>
             <div class="world-bottom">
                 <div class="legend"><span><i class="integer"></i>Integer</span><span><i class="memory"></i>Memory</span><span><i class="branch"></i>Branch</span><span><i class="squash"></i>Squashed</span><span class="link-key" title="Link lines match the displayed module widths: N pipes at both execution ports, fetch / allocation width at the frontend, and commit width at the output. Widths are inferred from the source trace.">LINKS · PARALLEL LANES</span><span id="matrix-source" class="link-key"></span></div>
-                <span class="gesture-hint">DRAG TO ORBIT <b>·</b> SCROLL TO EXPLORE</span>
+                <span class="gesture-hint">DRAG TO ORBIT <b>·</b> RIGHT-DRAG / SCROLL TO ZOOM</span>
             </div>
 
             <div id="fallback" hidden><strong>WebGL 2 is unavailable.</strong><p>Open this mockup in a browser with graphics acceleration enabled.</p><p>Sonata requires WebGL 2. All demo data is included in this page.</p></div>

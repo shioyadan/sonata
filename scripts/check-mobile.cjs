@@ -71,6 +71,14 @@ module.exports=async function reviewMobile(window,screenshots){
         assert.deepEqual(await js("sonata.camera.targetFocus"),[0,0,0]);
         assert.equal(await js("sonata.camera.targetRadius"),32.5);
 
+        // 細部まで近づける新しい上限を、実際のピンチ操作でも確認する。
+        await touch("touchStart",pair(8));
+        for(let i=1;i<=6;i++){await touch("touchMove",pair(8+i*20));await settle();}
+        assert.equal(await js("sonata.camera.targetRadius"),3,"Pinch kept the old zoom limit");
+        await touch("touchEnd",[]);
+        await js("document.getElementById('zoom-fit').click()");
+        assert.equal(await js("sonata.camera.targetRadius"),32.5,"Fit did not reset detailed pinch zoom");
+
         await js("document.getElementById('mobile-details').click()");
         assert.ok(await js("document.getElementById('mobile-panel').open&&document.getElementById('mobile-panel').contains(document.activeElement)"));
         await js("document.getElementById('license-open').scrollIntoView();document.getElementById('license-open').click()");
@@ -99,7 +107,7 @@ module.exports=async function reviewMobile(window,screenshots){
         // パネルを開いたままデスクトップへ戻す場合も、表示とフォーカスが取り残されない。
         await js("document.getElementById('mobile-details').click()");
         assert.ok(await js("document.getElementById('mobile-panel').open"));
-        result={layouts,touch:{pinch:true,pan:true,orbit:true,cancel:true,fit:true},demos:keys.length};
+        result={layouts,touch:{pinch:true,detailZoom:true,pan:true,orbit:true,cancel:true,fit:true},demos:keys.length};
     }finally{
         try{
             window.setContentSize(1440,1000);

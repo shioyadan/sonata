@@ -42,7 +42,7 @@ app.whenReady().then(async () => {
     };
     await window.loadFile(entry);
     if(process.argv.includes("--browser")){
-        const browser=await require("./check-browser.cjs")(window,entry);
+        const browser=await require("./check-browser.cjs")(window,entry,screenshots);
         assert.deepEqual(errors,[]);assert.deepEqual(unexpectedRequests,[]);
         console.log(JSON.stringify({browser,errors,externalRequests:unexpectedRequests},null,2));
         fs.rmSync(isolated,{recursive:true,force:true});app.quit();return;
@@ -695,7 +695,7 @@ app.whenReady().then(async () => {
     await window.loadFile(entry);
     assert.equal(await js("sonata.playing&&document.getElementById('motion-effects').getAttribute('aria-pressed')==='true'&&document.getElementById('motion-notice').hidden"),true,"Reload did not restore the default animation and playback");
     window.webContents.debugger.detach();
-    const browser=await require("./check-browser.cjs")(window,entry);
+    const browser=await require("./check-browser.cjs")(window,entry,screenshots);
     assert.deepEqual(errors, [], `Browser errors: ${errors.join("; ")}`);
     assert.deepEqual(unexpectedRequests,[],"The copied HTML tried to fetch another resource");
     console.log(JSON.stringify({samples: results, controls, rewind, unravel,branchReview,matrixReview,registerReview,registerReadReview,recovery:{frames:recoveryFrames.length,rates:recoveryFrames.map(f=>({age:f.age,rate:f.rate}))},notification, rsd, bounds,
