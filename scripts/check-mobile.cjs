@@ -12,6 +12,7 @@ module.exports=async function reviewMobile(window,screenshots){
     const capture=async name=>fs.writeFileSync(path.join(screenshots,`sonata-mobile${name}.png`),(await window.webContents.capturePage()).toPNG());
     const settle=()=>js("new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))");
     const layouts=[];
+    let result;
     try{
         await command("Emulation.setTouchEmulationEnabled",{enabled:true,maxTouchPoints:2});
         await js(`sonata.loadTrace('rename-rush');sonata.captureAt(sonata.trace.demo.screenshotCycle);
@@ -95,12 +96,28 @@ module.exports=async function reviewMobile(window,screenshots){
         await js("document.getElementById('mobile-details').click();document.getElementById('show-highlight').click()");
         assert.ok(await js("!document.getElementById('mobile-panel').open&&sonata.playing"),"Highlight stayed hidden behind the sheet");
         await js("sonata.setPlaying(false);document.querySelector('[data-view=orbit]').click()");
-        return {layouts,touch:{pinch:true,pan:true,orbit:true,cancel:true,fit:true},demos:keys.length};
+        result={layouts,touch:{pinch:true,pan:true,orbit:true,cancel:true,fit:true},demos:keys.length};
     }finally{
-        await command("Emulation.clearDeviceMetricsOverride");
-        await command("Emulation.setTouchEmulationEnabled",{enabled:false});
-        debuggerAPI.detach();
-        window.setContentSize(1440,1000);await delay(400);
-        assert.ok(await js("document.querySelector('main').contains(document.querySelector('.telemetry'))"),"Desktop sidebar did not return after rotation / resize");
+        try{
+            window.setContentSize(1440,1000);
+            await command("Emulation.clearDeviceMetricsOverride");
+            await command("Emulation.setTouchEmulationEnabled",{enabled:false});
+        }finally{
+            debuggerAPI.detach();
+        }
     }
+    // ネイティブウィンドウ、viewport、media query の反映を実状態で待つ。
+    // 本体の検査が失敗した場合はここへ進まず、後始末の assertion で原因を隠さない。
+    const deadline=Date.now()+5000;
+    let desktop;
+    do{
+        desktop=await js(`({width:innerWidth,height:innerHeight,compact:sonata.camera.compact,
+            sidebarInMain:document.querySelector('main').contains(document.querySelector('.telemetry')),
+            panelOpen:document.getElementById('mobile-panel').open})`);
+        if(desktop.width===1440&&desktop.height===1000&&!desktop.compact&&desktop.sidebarInMain&&!desktop.panelOpen){
+            return {...result,desktopRestore:desktop};
+        }
+        await delay(60);
+    }while(Date.now()<deadline);
+    assert.fail(`Desktop sidebar did not return after rotation / resize: ${JSON.stringify(desktop)}`);
 };
