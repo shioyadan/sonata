@@ -51,6 +51,12 @@ app.whenReady().then(async () => {
     assert.equal(await js("typeof sonata"), "object", "WebGL mockup did not initialize");
     assert.equal(await js("document.querySelectorAll('script[src],link[rel=stylesheet]').length"),0,"Deliverable has external code or styles");
     await js("sonata.setPlaying(false); document.getElementById('auto-camera').click();");
+    await js("document.getElementById('license-open').click()");
+    assert.ok(await js("document.getElementById('license-panel').open&&document.getElementById('license-text').textContent.includes('Embedded Microprocessor Benchmark Consortium')"),"License notices are not readable from the app");
+    await settle();
+    fs.writeFileSync(path.join(screenshots,"sonata-licenses.png"),(await window.webContents.capturePage()).toPNG());
+    await js("document.querySelector('#license-panel button').click()");
+    assert.ok(await js("!document.getElementById('license-panel').open"));
     const results = [];
     const keys = await js("embeddedFlowTraces.map(t => t.key)");
     assert.deepEqual(keys,["branch-storm","wide-open","memory-tide","rename-rush","x86-recovery"]);
@@ -205,7 +211,7 @@ app.whenReady().then(async () => {
             assert.match(result.simulator,/gem5 v25\.1\.0\.1/);assert.match(result.workload,/CoreMark/);
         }else{
             assert.match(result.simulator,/RSD processor/);
-            assert.match(result.workload,/not yet identified/);
+            assert.match(result.workload,/IntRegImm test/);
         }
         assert.equal(result.stats.issue, result.expected.issue, `${key}: issue occupancy`);
         assert.equal(result.stats.rob, result.expected.rob, `${key}: ROB occupancy`);

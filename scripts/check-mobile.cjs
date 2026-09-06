@@ -72,6 +72,11 @@ module.exports=async function reviewMobile(window,screenshots){
 
         await js("document.getElementById('mobile-details').click()");
         assert.ok(await js("document.getElementById('mobile-panel').open&&document.getElementById('mobile-panel').contains(document.activeElement)"));
+        await js("document.getElementById('license-open').scrollIntoView();document.getElementById('license-open').click()");
+        assert.ok(await js(`(()=>{const panel=document.getElementById('license-panel'),r=panel.getBoundingClientRect();return panel.open&&r.left>=0&&r.right<=innerWidth&&r.top>=0&&r.bottom<=innerHeight&&panel.scrollWidth<=panel.clientWidth;})()`),"License notices overflow the phone viewport");
+        await settle();await capture("-licenses");
+        await js("document.querySelector('#license-panel button').click();document.getElementById('mobile-panel').scrollTop=0");
+        assert.ok(await js("!document.getElementById('license-panel').open&&document.getElementById('mobile-panel').open"));
         const keys=await js("embeddedFlowTraces.map(t=>t.key)");
         for(const key of keys){
             await js(`(()=>{const select=document.getElementById('trace-select');select.value=${JSON.stringify(key)};select.dispatchEvent(new Event('change'));})()`);

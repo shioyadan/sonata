@@ -5,6 +5,7 @@
 - 出典: https://github.com/shioyadan/Konata
 - 元の場所: `src/core/`
 - リビジョン、各ファイルの SHA-256: [UPSTREAM.json](UPSTREAM.json)
+- 固定リビジョンはローカルの Konata 開発履歴を指します。2026-09-06 時点では公開リポジトリから取得できないため、このディレクトリの同梱ソースと SHA-256 を再現性の基準にしてください。
 - ライセンス: [BSD-3-Clause](LICENSE.md)
 - 取り込み時の変更: TypeScript ソースは変更なし。ライセンス本文は行末の空白だけを整理。
 

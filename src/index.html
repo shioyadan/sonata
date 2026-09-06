@@ -9,7 +9,7 @@
 </head>
 <body>
     <header class="topbar">
-        <a class="brand" href="#" title="Sonata"><span class="brand-mark">σ</span> sonata<span class="brand-divider"></span><span class="brand-section">pipeline visualizer</span></a>
+        <a class="brand" href="#" title="Sonata">sonata<span class="brand-divider"></span><span class="brand-section">pipeline visualizer</span></a>
         <div class="experiment"><span class="live-dot"></span> PROCESSOR TRACES <span>/</span> IN MOTION</div>
         <button id="mobile-details" class="mobile-details" aria-haspopup="dialog" aria-controls="mobile-panel"><strong id="mobile-demo"></strong><span>Demo &amp; settings <b>⌄</b></span></button>
         <button id="fullscreen" class="quiet-button" title="Toggle fullscreen">Fullscreen <span>↗</span></button>
@@ -78,6 +78,7 @@
 
             <div class="appearance"><div class="appearance-heading"><span class="eyebrow">ATMOSPHERE</span><span class="effect-tag">WEBGL 2</span></div><label class="range-label" for="bloom"><span>Bloom</span><output id="bloom-value">170%</output></label><input id="bloom" type="range" min="0" max="220" value="170"><div class="effect-toggles"><button id="instruction-stream" aria-pressed="true">Instruction stream <span>ON</span></button><button id="motion-effects" aria-pressed="true">Motion effects <span>ON</span></button><button id="trails" aria-pressed="true">Light trails <span>ON</span></button><button id="auto-camera" aria-pressed="true">Auto orbit <span>ON</span></button></div></div>
             <div class="aside-foot"><span class="live-dot"></span> REAL TRACE. UNREAL LIGHT.</div>
+            <button id="license-open" class="license-open" aria-haspopup="dialog" aria-controls="license-panel">Licenses</button>
         </aside>
     </main>
 
@@ -88,6 +89,7 @@
     </footer>
     <div class="statusbar"><span><span class="status-dot"></span> <span id="renderer-status">Initializing light field…</span></span><span>SPACE <b>play / pause</b> <span class="status-separator">/</span> ← → <b>step</b> <span class="status-separator">/</span> F <b>next flush</b> <span class="status-separator">/</span> C <b>cinema</b></span><span>SONATA <b>v.0.1.0</b></span></div>
     <dialog id="mobile-panel" aria-labelledby="mobile-panel-title"><div class="mobile-panel-heading"><strong id="mobile-panel-title">Demo &amp; settings</strong><button id="mobile-close" aria-label="Close demo and settings">Done</button></div></dialog>
+    <dialog id="license-panel" aria-labelledby="license-panel-title"><div class="license-panel-heading"><strong id="license-panel-title">Licenses &amp; acknowledgments</strong><form method="dialog"><button>Close</button></form></div><pre id="license-text"><!-- SONATA_LICENSE_NOTICES --></pre></dialog>
     <script src="../data/traces.js"></script>
     <script src="replay-model.js"></script>
     <script src="sonata.js"></script>

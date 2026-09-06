@@ -29,6 +29,12 @@ function build() {
     let html=read("src/index.html");
     const license=read("LICENSE.md").replace(/--/g,"—");
     html=html.replace("<!doctype html>",()=>`<!doctype html>\n<!-- Sonata · BSD-3-Clause\n${license}\n-->`);
+    // 単一 HTML をコピーして配布する場合も、第三者の権利表示と全文を持ち運ぶ。
+    const noticeFiles=["LICENSE.md","THIRD_PARTY_NOTICES.md","licenses/COREMARK-LICENSE.md","licenses/RSD-LICENSE.txt","licenses/RSD-CREDITS.md"];
+    const notices=noticeFiles.map(file=>`${file}\n${"=".repeat(file.length)}\n${read(file).trim()}`).join("\n\n");
+    const noticeMarker="<!-- SONATA_LICENSE_NOTICES -->";
+    if(!html.includes(noticeMarker))throw new Error("Missing license notice placeholder");
+    html=html.replace(noticeMarker,()=>notices.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;"));
     const css=read("src/sonata.css").replace(/<\/style/gi,"<\\/style");
     html=html.replace('<link rel="stylesheet" href="sonata.css">',()=>`<style>\n${css}\n</style>`);
     for(const [url,file] of [["../data/traces.js","data/traces.js"],["replay-model.js","src/replay-model.js"],["sonata.js","src/sonata.js"]]){

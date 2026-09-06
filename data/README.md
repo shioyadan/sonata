@@ -6,13 +6,15 @@
 | --- | --- | --- | --- |
 | `branch-storm` | `gem5-traces/full-2iter/arm64/trace.log` | 73208–73335 | gem5 v25.1.0.1 / ARM64 O3、CoreMark 2 iterations |
 | `wide-open` | 同上 | 73388–73515 | 同じ実行の別区間 |
-| `memory-tide` | `rsd/mshr.log` | 3964–4091 | RSD / RISC-V、プログラム名・シミュレータの版は未確認 |
+| `memory-tide` | `rsd/mshr.log` | 3964–4091 | RSD / RISC-V、IntRegImm テストの起動処理。シミュレータの版は未確認 |
 | `rename-rush` | `gem5-traces/detailed/arm64/trace.log` | 404–531 | gem5 v25.1.0.1 / ARM64 O3、CoreMark 1 iteration |
 | `x86-recovery` | `gem5-traces/detailed/x86/trace.log` | 1596–1723 | gem5 v25.1.0.1 / x86 O3、CoreMark 1 iteration |
 
 gem5 の詳細ログは O3PipeView と O3CPUAll を含みます。実際の整数物理レジスタの rename / read / write / restore を抽出しています。最初の2本は O3PipeView が中心で、対応や値が記録されていない箇所は未観測として表示します。
 
-RSD のログはプロセッサ RSD から取得されたものです。`D$-miss`、MSHR、`Br-pred-miss-ex` の注釈でキャッシュミスと予測ミスを確認しています。元プログラム名を推測で補っていません。
+RSD のログはプロセッサ RSD から取得されたものです。`D$-miss`、MSHR、`Br-pred-miss-ex` の注釈でキャッシュミスと予測ミスを確認しています。
+
+公開前の照合で、元ログ全体の 108 種類の命令アドレスと命令内容が、RSD の `Asm/IntRegImm` テストの実行ファイルと一致しました。同梱デモの表示命令は `rsd-loader.c` の `_load`（データコピーと BSS 初期化）です。gem5 の4デモの命令アドレスは、CoreMark の行列処理・リスト初期化・リスト整列の関数に対応します。命令列の出典、照合したリビジョン、再配布時に保持する権利表示は [第三者ライセンス](../THIRD_PARTY_NOTICES.md) を参照してください。
 
 実行条件の根拠となる README / config の相対位置も、各デモの `demo.provenance.evidence` に残しています。それらの元ファイルは埋め込み HTML に含まれません。抽出条件は [generate-demos.ts](../scripts/generate-demos.ts)、表示する出自は [provenance.ts](../scripts/provenance.ts) が管理します。
 

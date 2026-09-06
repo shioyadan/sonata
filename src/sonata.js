@@ -5,6 +5,9 @@
 (() => {
     "use strict";
     const $ = (id) => document.getElementById(id);
+    // 権利表示は WebGL の初期化状態にかかわらず開けるようにする。
+    $("license-open").addEventListener("click",()=>$("license-panel").showModal());
+    $("license-panel").addEventListener("keydown",event=>event.stopPropagation());
     const canvas = $("scene");
     // オフスクリーンのシーンにアンチエイリアスを適用し、canvas には全画面の合成結果だけを出す。
     const gl = canvas.getContext("webgl2", { alpha: false, antialias: false, powerPreference: "high-performance" });

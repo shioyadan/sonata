@@ -10,7 +10,7 @@ Sonata（そなた）は、プロセッサ内部を流れる命令を WebGL で�
 
 ## 起動
 
-Node.js **22.12 以降**を使用します。ビルドとローカル表示には Node の標準ライブラリだけを使うので、依存パッケージのインストールは不要です。
+Node.js **22.23.2 以降**を使用します。推奨バージョンは `.nvmrc` に記録しています。ビルドとローカル表示には Node の標準ライブラリだけを使うので、依存パッケージのインストールは不要です。
 
 ```sh
 git clone https://github.com/shioyadan/sonata.git
@@ -42,7 +42,7 @@ npm run build
 | --- | --- | --- |
 | Branch storm | gem5 ARM64 O3 | CoreMark、連続する予測ミス |
 | Wide open | gem5 ARM64 O3 | CoreMark、高い命令流量 |
-| Miss & recover | RSD / RISC-V | `mshr.log`、キャッシュミスと予測ミス。プログラム名は未確認 |
+| Miss & recover | RSD / RISC-V | IntRegImm テストの起動処理、キャッシュミスと予測ミス |
 | Rename rush | gem5 ARM64 O3 | CoreMark、記録されたリネームと物理レジスタの読み書き |
 | x86 recovery | gem5 x86 O3 | CoreMark、micro-op とレジスタ復元 |
 
@@ -53,6 +53,7 @@ npm run build
 ```sh
 npm ci
 npm test
+npm run test:server
 npm run test:render
 ```
 
@@ -86,4 +87,6 @@ work/                   ローカル作業メモ・引き継ぎ資料（Git 対�
 
 ## ライセンス
 
-[BSD-3-Clause](LICENSE.md)。Konata から引き継いだ著作権表示を保持しています。解析コードの出典・固定リビジョンは [vendor/konata-core](vendor/konata-core/README.md) に記録しています。
+Sonata 本体は [BSD-3-Clause](LICENSE.md) です。Konata から引き継いだ著作権表示を保持しています。解析コードの出典・固定リビジョンは [vendor/konata-core](vendor/konata-core/README.md) に記録しています。
+
+同梱デモに含まれる CoreMark と RSD 由来の命令列には、それぞれのライセンスが適用されます。出典・権利表示は [第三者ライセンス](THIRD_PARTY_NOTICES.md) を参照してください。配布 HTML にも全文を含め、画面の **Licenses** から確認できます。

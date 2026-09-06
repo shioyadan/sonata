@@ -26,6 +26,8 @@ jobs:
       - run: npm ci
       - name: Check replay model and portable HTML build
         run: npm test
+      - name: Check preview server and malformed requests
+        run: npm run test:server
       - name: Check desktop, mobile, touch and offline playback
         run: xvfb-run -a -s '-screen 0 1600x1100x24' npm run test:render
 

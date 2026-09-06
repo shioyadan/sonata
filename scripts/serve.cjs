@@ -6,7 +6,11 @@ const html=fs.readFileSync(build());
 const listenHost=process.env.SONATA_HOST??"127.0.0.1";
 const listenPort=Number(process.env.SONATA_PORT??4173);
 const server=http.createServer((request,response)=>{
-    const pathname=new URL(request.url,"http://localhost").pathname;
+    let pathname;
+    try{pathname=new URL(request.url,"http://localhost").pathname;}
+    catch{
+        response.writeHead(400,{"Content-Type":"text/plain; charset=utf-8"});response.end("Bad request");return;
+    }
     if(!["GET","HEAD"].includes(request.method)){
         response.writeHead(405,{Allow:"GET, HEAD"});response.end();return;
     }

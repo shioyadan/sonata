@@ -90,11 +90,11 @@ Top-down の分類名・割合・細いバーは画面の右下に表示しま�
 | デモ | シミュレータ / プロセッサ | 実行プログラム |
 | --- | --- | --- |
 | Branch storm / Wide open | gem5 **v25.1.0.1**、ARM64 O3、out-of-order。8-wide、192-entry ROB、2 GHz、1 thread、L1 cache、512 MiB memory | **CoreMark を2周**。同一実行の異なる区間。引数は `0x0 0x0 0x66 2 7 1 2000` |
-| Miss & recover | **プロセッサ RSD から取得**した RISC-V のトレース。実行に用いたシミュレータの backend / version は未確認 | **プログラム名は未確認**。元ログは `rsd/mshr.log`。この区間には byte の load / store と分岐、キャッシュミスの明示的な記録がある |
+| Miss & recover | **プロセッサ RSD から取得**した RISC-V のトレース。実行に用いたシミュレータの backend / version は未確認 | **IntRegImm テストの起動処理**。元ログは `rsd/mshr.log`。この区間には byte の load / store と分岐、キャッシュミスの明示的な記録がある |
 | Rename rush | gem5 **v25.1.0.1**、ARM64 O3、192-entry ROB、256 integer physical registers | **CoreMark を1周**。`iterate` 領域の詳細ログ。リネーム・レジスタ値の更新と復元を観察 |
 | x86 recovery | gem5 **v25.1.0.1**、x86-64 O3、同じ ROB / 整数物理レジスタ容量 | **CoreMark を1周**。命令を展開した micro-op と、実際のレジスタ読み出し・予測ミスからの復帰を観察 |
 
-gem5 の情報は `gem5-traces/full-2iter/README.md`、`arm64/config.ini`、`arm64/coremark.out` で確認しました。CoreMark の短時間実行を可視化するためのログであり、規定時間のスコア計測ではありません。RSD の由来はユーザーの説明を反映しています。追加した詳細ログの条件は `gem5-parser-study/report.md` と各 `detailed/*/config.ini` で確認しました。未確認のプログラム名はファイル名から推測せず、画面にも `Program not yet identified` と表示します。出典と確認状況は `scripts/provenance.ts` に保持し、デモデータの再生成にも引き継ぎます。
+gem5 の情報は `gem5-traces/full-2iter/README.md`、`arm64/config.ini`、`arm64/coremark.out` で確認しました。CoreMark の短時間実行を可視化するためのログであり、規定時間のスコア計測ではありません。RSD の取得元はユーザーの説明を反映し、プログラム名は元ログ全体の 108 種類の命令アドレスと命令内容を `Asm/IntRegImm` の実行ファイルと照合して確認しました。同梱区間は `_load` のデータコピーと BSS 初期化です。追加した詳細ログの条件は `gem5-parser-study/report.md` と各 `detailed/*/config.ini` で確認しました。出典と確認状況は `scripts/provenance.ts` に保持し、デモデータの再生成にも引き継ぎます。
 
 ## データの扱い
 

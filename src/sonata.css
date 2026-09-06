@@ -85,15 +85,6 @@ button,input,select {
     font-weight:700;
 }
 
-.brand-mark {
-    font-size:30px;
-    line-height:30px;
-    color:var(--cyan);
-    transform:rotate(-12deg);
-    font-family:Georgia,serif;
-    margin-right:2px;
-}
-
 .brand-divider {
     width:1px;
     height:20px;
@@ -894,6 +885,15 @@ h1>span {
     height:3px;
 }
 
+.license-open { display:block;margin-top:12px;padding:6px 0;color:#8aa9b9;font-size:11px; }
+#license-panel { width:min(760px,calc(100% - 24px));max-height:85dvh;padding:0;border:1px solid #30404b;border-radius:8px;background:#101820;color:var(--text); }
+#license-panel::backdrop { background:#02070bc9; }
+.license-panel-heading { position:sticky;top:0;display:flex;align-items:center;justify-content:space-between;gap:12px;padding:8px 18px;background:#101820;border-bottom:1px solid var(--border); }
+.license-panel-heading strong { font-size:14px;font-weight:500; }
+.license-panel-heading form { margin:0; }
+.license-panel-heading button { min-width:60px;min-height:44px;color:var(--cyan); }
+#license-text { margin:0;padding:18px;font:12px/1.7 monospace;white-space:pre-wrap;overflow-wrap:anywhere; }
+
 .transport {
     height:136px;
     border-top:1px solid var(--border);
@@ -1421,7 +1421,6 @@ body.cinema .cinema-caption { top:auto;bottom:52px; }
     body { height:100dvh;min-height:360px;display:grid;grid-template-rows:calc(56px + env(safe-area-inset-top)) minmax(0,1fr) calc(132px + env(safe-area-inset-bottom));overflow:hidden; }
     .topbar { height:auto;gap:12px;padding:env(safe-area-inset-top) max(14px,env(safe-area-inset-right)) 0 max(14px,env(safe-area-inset-left)); }
     .brand { font-size:19px;gap:5px;flex-shrink:0; }
-    .brand-mark { font-size:26px; }
     .brand-section,.brand-divider,.experiment,.statusbar { display:none; }
     .mobile-details { display:flex;flex:1;min-width:0;min-height:44px;flex-direction:column;align-items:flex-end;justify-content:center;gap:3px;padding:0; }
     .mobile-details strong { max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px;font-weight:500;color:#cbdfe4; }
