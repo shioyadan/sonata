@@ -41,7 +41,8 @@
     const hash = (n) => { const x = Math.sin(n * 127.1 + 311.7) * 43758.5453; return x - Math.floor(x); };
     const rgb = (c) => `rgb(${c.map((v) => Math.round(v * 255)).join(",")})`;
     const samples = globalThis.embeddedFlowTraces;
-    let reducedMotion = matchMedia("(prefers-reduced-motion: reduce)").matches;
+    // 初回の操作を不要にするため、再生と演出は ON で開始する。Motion effects から OFF にできる。
+    let reducedMotion = false;
     let trace, ops = [], nodes = new Map(), connections = [], flushEvents = [], activity = [],commitGroups=new Map();
     let transferProfile=new Map(),lastPlayback={seconds:0,cycles:0,rate:1};
     let robReplay, memoryEvents = [], activeNotifications = [], branchRecoveries = [], activeBranches = [];

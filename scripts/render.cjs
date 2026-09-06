@@ -632,13 +632,22 @@ app.whenReady().then(async () => {
     assert.match(await js("document.getElementById('run-file').textContent"),/mshr\.log/);
     await js("document.getElementById('run-details').open=false");
     const mobile=await require("./check-mobile.cjs")(window,screenshots);
-    // 動きを減らす設定を有効にし、CODE SQUASH だけが表示される状態を再現する。
+    // OS が動きを減らす設定でも、操作なしで再生・演出が始まることを確認する。
     window.setSize(1440,1000);
     window.webContents.debugger.attach("1.3");
     await window.webContents.debugger.sendCommand("Emulation.setEmulatedMedia",{features:[{name:"prefers-reduced-motion",value:"reduce"}]});
     await window.loadFile(entry);
     assert.equal(await js("matchMedia('(prefers-reduced-motion: reduce)').matches"),true);
-    assert.equal(await js("sonata.playing"),false,"Reduced motion must remain the default until explicitly enabled");
+    assert.equal(await js("sonata.playing"),true,"Playback must start without an enable action");
+    assert.equal(await js("document.getElementById('motion-effects').getAttribute('aria-pressed')"),"true","Motion effects must start enabled");
+    assert.equal(await js("document.getElementById('auto-camera').getAttribute('aria-pressed')"),"true","Auto orbit must start enabled");
+    assert.equal(await js("document.getElementById('motion-notice').hidden"),true,"Default playback displayed an enable prompt");
+    const automaticStart=await js("sonata.cycle");
+    await waitFor(`sonata.cycle>${automaticStart}`,"Default playback clock did not advance");
+    await js("sonata.captureAt(sonata.flushEvents[0]+2.1)");
+    assert.ok(await js("sonata.codeFragments.length>40"),"Default motion did not animate code unraveling");
+    // ユーザーが手動で OFF にした場合は、従来どおり CODE SQUASH に留める。
+    await js("document.getElementById('motion-effects').click()");
     await js("sonata.captureAt(sonata.flushEvents[0]+2.1)");
     assert.equal(await js("sonata.codeRewind.phase"),"notice");
     assert.deepEqual(await js("sonata.codeFragments"),[]);
@@ -682,6 +691,9 @@ app.whenReady().then(async () => {
     assert.deepEqual(await js("sonata.codeFragments"),[],"Disabling motion left unraveling letters visible");
     await js("document.getElementById('motion-effects').click()");
     assert.ok(await js("sonata.codeFragments.length>40"),"Motion toggle did not restore the code animation");
+    await js("document.getElementById('motion-effects').click()");
+    await window.loadFile(entry);
+    assert.equal(await js("sonata.playing&&document.getElementById('motion-effects').getAttribute('aria-pressed')==='true'&&document.getElementById('motion-notice').hidden"),true,"Reload did not restore the default animation and playback");
     window.webContents.debugger.detach();
     const browser=await require("./check-browser.cjs")(window,entry);
     assert.deepEqual(errors, [], `Browser errors: ${errors.join("; ")}`);
