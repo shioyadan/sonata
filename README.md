@@ -1,5 +1,7 @@
 # Sonata
 
+**[▶ Live demo](https://shioyadan.github.io/sonata/)**
+
 **Processor traces in motion.**
 
 Sonata（そなた）は、プロセッサ内部を流れる命令を WebGL で可視化するブラウザアプリです。命令列、依存行列、レジスタリネーム、物理レジスタ、実行パイプ、ROB、コミット、予測ミスからの復帰を、実トレースに沿って再生します。

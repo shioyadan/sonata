@@ -1,4 +1,4 @@
-name: Verify Sonata
+name: Verify and publish Sonata
 
 on:
   push:
@@ -28,3 +28,33 @@ jobs:
         run: npm test
       - name: Check desktop, mobile, touch and offline playback
         run: xvfb-run -a -s '-screen 0 1600x1100x24' npm run test:render
+
+  pages:
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    needs: verify
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: .nvmrc
+      # The verified commit builds with Node alone; no runtime packages are needed.
+      - name: Build the live demo
+        run: |
+          npm run build
+          mkdir -p artifacts/pages
+          cp dist/sonata.html artifacts/pages/index.html
+      - uses: actions/configure-pages@v6
+      - uses: actions/upload-pages-artifact@v5
+        with:
+          path: artifacts/pages
+      - name: Publish the verified demo
+        id: deployment
+        uses: actions/deploy-pages@v5

@@ -46,3 +46,11 @@ xvfb-run -a -s '-screen 0 1600x1100x24' npm run test:mobile
 ソース、埋め込みデモ、ロックファイル、解析器の出典、文書を管理します。README 用の代表画像だけは `docs/images/overview.png` に置きます。日々のスクリーンショットやレポートは `artifacts/`、配布用 HTML は `dist/`、元ログは `inputs/` に分離し、これらは `.gitignore` で除外します。
 
 Konata の解析コードを更新する場合は [vendor の手順](../vendor/konata-core/README.md) に従い、デモの再生成と描画検査を実行してください。ブラウザ側の演出を変えるだけなら、元ログや解析器の再生成は不要です。
+
+## ライブデモの公開
+
+公開先は https://shioyadan.github.io/sonata/ です。初回公開前に GitHub リポジトリの **Settings → Pages → Build and deployment → Source** を **GitHub Actions** に設定してください。
+
+`.github/workflows/ci.yml` は `main` への push または手動実行でモデル・ビルド・描画を検証し、成功した同じコミットから `dist/sonata.html` を生成して、Pages の `index.html` として公開します。pull request は検証だけを行います。依存パッケージやソース、元ログを公開用ディレクトリへコピーしません。
+
+README 冒頭の **Live demo** はこの公開先へリンクします。初回の Pages 設定とワークフローが完了するまではリンク先は未公開です。
