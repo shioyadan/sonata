@@ -1,13 +1,13 @@
 # Konata core snapshot
 
-デモの抽出・構造検出・Top-down 集計に必要な Konata の10モジュールを、依存関係を含めて固定しています。ブラウザ用の Sonata や配布 HTML からは読み込みません。
+This directory pins the ten Konata modules required for demo extraction, structure detection, and Top-down analysis, including their local dependencies. The Sonata browser application and standalone HTML do not load these modules.
 
-- 出典: https://github.com/shioyadan/Konata
-- 元の場所: `src/core/`
-- リビジョン、各ファイルの SHA-256: [UPSTREAM.json](UPSTREAM.json)
-- ライセンス: [BSD-3-Clause](LICENSE.md)
-- 取り込み時の変更: TypeScript ソースは変更なし。ライセンス本文は行末の空白だけを整理。
+- Source: https://github.com/shioyadan/Konata
+- Original directory: `src/core/`
+- Revision and per-file SHA-256 hashes: [UPSTREAM.json](UPSTREAM.json)
+- License: [BSD-3-Clause](LICENSE.md)
+- Local changes: TypeScript sources are unchanged. Only trailing whitespace was removed from the license text.
 
-`file_line_reader`、Kanata / gem5 パーサー、モデルと op store、ステージ構造検出、cycle activity / Top-down 解析、Zstandard の互換層が対象です。`@hpcc-js/wasm-zstd` はデモ抽出用の開発依存として取得します。
+The snapshot includes `file_line_reader`, the Kanata and gem5 parsers, the model and op store, stage structure detection, cycle activity and Top-down analysis, and the Zstandard compatibility layer. `@hpcc-js/wasm-zstd` is installed as a development dependency for trace extraction.
 
-更新時はこのディレクトリだけで完結する依存関係を維持し、固定リビジョンとファイルハッシュを更新してください。ローカルに変更を加える場合は、その内容とハッシュも明示します。`npm test` で記録との一致を確認します。
+When updating the snapshot, keep all local module dependencies within this directory and update the pinned revision and hashes. Document any local source changes and update their hashes as well. `npm test` verifies that the files match the recorded hashes.

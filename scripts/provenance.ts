@@ -1,5 +1,5 @@
-// Run provenance is independent of the excerpt-selection score and demo title.
-// Keep unknown workloads explicit until the original run can be identified.
+// 実行の出自は、区間選択のスコアやデモ名から独立して管理する。
+// 元の実行を特定できるまで、未確認のワークロードは未確認と明示する。
 export const runProvenance = {
     "gem5-arm-coremark": {
         simulator: "gem5 v25.1.0.1 · O3",

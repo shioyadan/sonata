@@ -1,5 +1,5 @@
 "use strict";
-// Run from the repository root:
+// リポジトリのルートから実行する。
 // xvfb-run -a -s '-screen 0 1600x1100x24' node_modules/.bin/electron --no-sandbox scripts/render.cjs
 const {app, BrowserWindow} = require("electron");
 const fs = require("node:fs");
@@ -620,7 +620,7 @@ app.whenReady().then(async () => {
     assert.match(await js("document.getElementById('run-file').textContent"),/mshr\.log/);
     await js("document.getElementById('run-details').open=false");
     const mobile=await require("./check-mobile.cjs")(window,screenshots);
-    // Reproduce the user's CODE SQUASH-only display with reduced motion enabled.
+    // 動きを減らす設定を有効にし、CODE SQUASH だけが表示される状態を再現する。
     window.setSize(1440,1000);
     window.webContents.debugger.attach("1.3");
     await window.webContents.debugger.sendCommand("Emulation.setEmulatedMedia",{features:[{name:"prefers-reduced-motion",value:"reduce"}]});

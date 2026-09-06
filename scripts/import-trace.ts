@@ -618,8 +618,8 @@ export async function buildSample(source: TraceSource) {
                 else {
                     node = "rob";
                 }
-                // RSD explicitly distinguishes issue handoff, register read,
-                // execution and writeback. Preserve those stages on memory retries too.
+                // RSD は発行の受け渡し、レジスタ読み出し、実行、書き戻しを明示的に区別する。
+                // メモリアクセスの再試行時も、そのステージ区分を維持する。
                 if(explicitRsdStages){
                     if(range.name==="Is"||range.name==="Rr")node="register-read";
                     else if(["X","Mt","Ma"].includes(range.name))node=executionNode;

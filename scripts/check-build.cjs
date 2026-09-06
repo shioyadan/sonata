@@ -1,5 +1,5 @@
 "use strict";
-// The portable checkout must build without Konata, node_modules, or source logs.
+// 別の場所へ移したソースだけで、Konata・node_modules・元ログなしにビルドできることを確認する。
 const assert=require("node:assert/strict");
 const fs=require("node:fs");
 const os=require("node:os");

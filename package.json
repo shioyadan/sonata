@@ -2,7 +2,7 @@
   "name": "sonata",
   "version": "0.1.0",
   "private": true,
-  "description": "A cinematic WebGL processor trace visualizer, descended from Kanata and Konata",
+  "description": "A cinematic WebGL processor trace visualizer",
   "license": "BSD-3-Clause",
   "author": "Ryota Shioya",
   "repository": {

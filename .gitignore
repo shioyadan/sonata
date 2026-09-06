@@ -2,6 +2,7 @@
 /dist/
 /artifacts/
 /inputs/
+/work/
 /coverage/
 /.cache/
 .env

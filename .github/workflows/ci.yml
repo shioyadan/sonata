@@ -45,7 +45,7 @@ jobs:
       - uses: actions/setup-node@v6
         with:
           node-version-file: .nvmrc
-      # The verified commit builds with Node alone; no runtime packages are needed.
+      # 検証済みのコミットを Node だけでビルドし、実行時の依存パッケージは含めない。
       - name: Build the live demo
         run: |
           npm run build

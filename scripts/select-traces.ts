@@ -1,4 +1,4 @@
-/** Scan bounded prefixes of real local traces; rank short, eventful demo windows.
+/** 実トレースの先頭を上限付きで読み、イベントの多い短い区間を順位付けする。
  * node --import tsx scripts/select-traces.ts
  */
 import fs from "node:fs";

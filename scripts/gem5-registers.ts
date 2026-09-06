@@ -3,15 +3,15 @@ import type {Op} from "../vendor/konata-core/model";
 import {allocationEvidence,type AllocationEvent} from "./register-allocation";
 
 function logicalRegisterLayout(x86:boolean,observed:Iterable<number>=[]){
-    // gem5 v25.1 arch/{x86,arm}/regs/int.hh: integer class indices.
-    const base=x86?Array.from({length:32},(_,r)=>r):[...Array.from({length:31},(_,r)=>r),38]; // AArch64 SP_EL0
+    // gem5 v25.1 の arch/{x86,arm}/regs/int.hh にある整数クラスの番号を使う。
+    const base=x86?Array.from({length:32},(_,r)=>r):[...Array.from({length:31},(_,r)=>r),38]; // AArch64 の SP_EL0。
     const rows=[...new Set([...base,...observed])].sort((a,b)=>a-b);
     const x86Names=["RAX","RCX","RDX","RBX","RSP","RBP","RSI","RDI","R8","R9","R10","R11","R12","R13","R14","R15"];
     const logicalNames=Object.fromEntries(rows.map(r=>[r,x86?(x86Names[r]??(r<32?`t${r-16}`:`i${r}`)):(r<31?`x${r}`:r===38?"SP_EL0":`i${r}`)]));
     return {rows,logicalNames};
 }
 
-// Only integer register events actually printed by gem5's O3CPUAll trace.
+// gem5 の O3CPUAll トレースに実際に出力された整数レジスタのイベントだけを扱う。
 export function readGem5Registers(fileName:string,allOps:Readonly<Op>[],firstCycle:number,lastCycle:number,prefixBytes=24*1024*1024){
     const fd=fs.openSync(fileName,"r"),buffer=Buffer.alloc(Math.min(fs.fstatSync(fd).size,prefixBytes));
     const size=fs.readSync(fd,buffer,0,buffer.length,0);fs.closeSync(fd);
@@ -46,8 +46,8 @@ export function readGem5Registers(fileName:string,allOps:Readonly<Op>[],firstCyc
         }
         if((m=line.match(/Removing history entry with sequence number (\d+) \(archReg: (\d+), newPhysReg: (\d+), prevPhysReg: (\d+)\)/))){
             const seq=Number(m[1]),logical=Number(m[2]),physical=Number(m[3]),previous=Number(m[4]),entries=history.get(seq)??[];
-            // Physical indices overlap between register classes. Match an actual
-            // integer rename instead of treating every index below 256 as integer.
+            // 物理番号はレジスタクラス間で重なる。256 未満をすべて整数と扱わず、
+            // 実際に記録された整数レジスタの rename と照合する。
             const match=entries.findIndex(e=>e.logical===logical&&e.physical===physical&&e.previous===previous);
             if(match>=0){
                 entries.splice(match,1);

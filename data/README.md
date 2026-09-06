@@ -1,39 +1,39 @@
 # Embedded demo traces
 
-`traces.js` と `demo-manifest.json` は Git に含めます。前者はブラウザ用の実トレース抜粋、後者は出自・区間・イベント数などの生成レポートです。元の大きなログは含めません。
+`traces.js` and `demo-manifest.json` are tracked in Git. The former contains the browser-ready trace excerpts; the latter records provenance, cycle ranges, event counts, and other extraction results. The original large logs are not included.
 
-| Key | Source log（元ログのルートからの相対位置） | Cycle | 実行内容 |
+| Key | Source log, relative to the input root | Cycles | Execution |
 | --- | --- | --- | --- |
-| `branch-storm` | `gem5-traces/full-2iter/arm64/trace.log` | 73208–73335 | gem5 v25.1.0.1 / ARM64 O3、CoreMark 2 iterations |
-| `wide-open` | 同上 | 73388–73515 | 同じ実行の別区間 |
-| `memory-tide` | `rsd/mshr.log` | 3964–4091 | RSD / RISC-V、プログラム名・シミュレータの版は未確認 |
-| `rename-rush` | `gem5-traces/detailed/arm64/trace.log` | 404–531 | gem5 v25.1.0.1 / ARM64 O3、CoreMark 1 iteration |
-| `x86-recovery` | `gem5-traces/detailed/x86/trace.log` | 1596–1723 | gem5 v25.1.0.1 / x86 O3、CoreMark 1 iteration |
+| `branch-storm` | `gem5-traces/full-2iter/arm64/trace.log` | 73208–73335 | gem5 v25.1.0.1 / ARM64 O3; CoreMark, 2 iterations |
+| `wide-open` | Same as above | 73388–73515 | Another excerpt from the same run |
+| `memory-tide` | `rsd/mshr.log` | 3964–4091 | RSD / RISC-V; workload and simulator version not yet identified |
+| `rename-rush` | `gem5-traces/detailed/arm64/trace.log` | 404–531 | gem5 v25.1.0.1 / ARM64 O3; CoreMark, 1 iteration |
+| `x86-recovery` | `gem5-traces/detailed/x86/trace.log` | 1596–1723 | gem5 v25.1.0.1 / x86 O3; CoreMark, 1 iteration |
 
-gem5 の詳細ログは O3PipeView と O3CPUAll を含みます。実際の整数物理レジスタの rename / read / write / restore を抽出しています。最初の2本は O3PipeView が中心で、対応や値が記録されていない箇所は未観測として表示します。
+The detailed gem5 logs contain O3PipeView and O3CPUAll output, including recorded integer-register rename, read, write, and restore events. The first two demos primarily use O3PipeView; mappings and values absent from the log are displayed as unobserved.
 
-RSD のログはプロセッサ RSD から取得されたものです。`D$-miss`、MSHR、`Br-pred-miss-ex` の注釈でキャッシュミスと予測ミスを確認しています。元プログラム名を推測で補っていません。
+The RSD trace was obtained from the RSD processor. `D$-miss`, MSHR, and `Br-pred-miss-ex` annotations identify cache misses and branch mispredictions. The original workload remains unidentified.
 
-実行条件の根拠となる README / config の相対位置も、各デモの `demo.provenance.evidence` に残しています。それらの元ファイルは埋め込み HTML に含まれません。抽出条件は [generate-demos.ts](../scripts/generate-demos.ts)、表示する出自は [provenance.ts](../scripts/provenance.ts) が管理します。
+Each demo's `demo.provenance.evidence` retains relative paths to the source README and configuration files used to establish its execution conditions. Those original files are not embedded in the HTML. [generate-demos.ts](../scripts/generate-demos.ts) defines the excerpts, and [provenance.ts](../scripts/provenance.ts) provides the displayed provenance.
 
-## 再生成
+## Regeneration
 
-通常のビルドではこの操作は不要です。元ログを再取得した場合や抽出区間を変える場合に使います。
+This step is unnecessary for normal builds. Use it when the original logs are available and you want to change or regenerate the excerpts.
 
 ```sh
 npm ci
-# デフォルトはリポジトリ内の inputs/。元ログ4本を上表の相対位置に配置する。
+# Place the four source logs under inputs/, using the relative paths above.
 npm run demos:generate
 npm test
 npm run build
 ```
 
-元ログが別の場所にある場合は、ルートを明示できます。
+To use logs stored elsewhere, set their root explicitly:
 
 ```sh
 SONATA_TRACE_ROOT=/path/to/trace-inputs npm run demos:generate
 ```
 
-ARM64 / x86 の大きなログは先頭24 MiBまでを読みます。候補区間の探索は `npm run demos:select` で行い、結果を `artifacts/trace-selection.json` に保存します。探索候補のうち元ログがないものはレポートにエラーとして記録し、取得できたログの探索を続けます。
+Large ARM64 and x86 logs are read up to the first 24 MiB. Run `npm run demos:select` to rank candidate excerpts; the report is written to `artifacts/trace-selection.json`. Missing candidate logs are recorded as errors in that report, while other candidates continue to be examined.
 
-Top-down は固定した Konata 解析コードで集計した slot と照合し、commit / squash を観測する前に結果を先取りしないよう、その観測時刻も含めます。抽出時に既知のイベント数や整合性を検査します。
+Top-down data is checked against slot counts from the pinned analysis modules. Observation times are included so playback does not anticipate a commit or squash before it occurs. Extraction also checks known events and consistency constraints.

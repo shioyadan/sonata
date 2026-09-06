@@ -1,5 +1,5 @@
 "use strict";
-// Build the offline deliverable with Node only. No runtime assets are required.
+// Node の標準機能だけでオフライン配布用 HTML を生成し、実行時の外部資源を不要にする。
 const fs=require("node:fs");
 const path=require("node:path");
 const root=path.resolve(__dirname,"..");
@@ -9,7 +9,7 @@ function formatTraceScript(source) {
     const marker="globalThis.embeddedFlowTraces=",start=source.indexOf(marker);
     if(start<0)throw new Error("Missing embedded trace assignment");
     const json=source.slice(start+marker.length).trim().replace(/;$/,"");
-    JSON.parse(json); // Only JSON is reformatted, never arbitrary JavaScript.
+    JSON.parse(json); // 整形対象を JSON に限定し、任意の JavaScript は整形しない。
     let quoted=false,escaped=false,column=0,formatted="";
     for(let index=0;index<json.length;index++){
         const char=json[index];

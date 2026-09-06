@@ -6,8 +6,8 @@ type Timing = { allocation:(op:Readonly<Op>)=>number|null; ready:(op:Readonly<Op
 type Dependency = { id:number; ready:number|null; register?:string };
 type EvidenceOp = { id:number; dependencies:Dependency[]; slot?:number };
 
-// This intentionally covers the scalar ARM64 instructions in the embedded reels.
-// It estimates register RAW edges only, never memory aliasing or physical names.
+// 対象は埋め込みデモ内の ARM64 スカラ命令に限定する。
+// レジスタ RAW 依存だけを推定し、メモリの alias や物理レジスタ名は推測しない。
 function armOperands(label:string) {
     const text=label.replace(/^(?:0x)?[0-9a-f]+:\s*/i,"").trim().toLowerCase();
     const mnemonic=text.split(/\s+/)[0],args=text.slice(mnemonic.length);

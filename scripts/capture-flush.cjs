@@ -1,5 +1,5 @@
 "use strict";
-// Capture the existing deliverable through normal playback after Jump to flush.
+// ビルド済み HTML で Jump to flush を実行し、通常再生中の画面を撮影する。
 // xvfb-run -a -s '-screen 0 1600x1100x24' node_modules/.bin/electron --no-sandbox scripts/capture-flush.cjs
 const {app,BrowserWindow}=require("electron");
 const fs=require("node:fs");

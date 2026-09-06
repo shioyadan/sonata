@@ -4,15 +4,13 @@
 
 **Processor traces in motion.**
 
-Sonata（そなた）は、プロセッサ内部を流れる命令を WebGL で可視化するブラウザアプリです。命令列、依存行列、レジスタリネーム、物理レジスタ、実行パイプ、ROB、コミット、予測ミスからの復帰を、実トレースに沿って再生します。
+Sonata is a WebGL visualizer for processor execution traces. Follow instructions through the frontend, dependency matrix, register renaming, physical registers, execution pipes, reorder buffer, and commit. Watch cache misses stall work and branch mispredictions unwind the pipeline.
 
-Kanata → Konata に続く名前として、Sonata を選びました。Konata の Flow Field モックアップから独立したプロジェクトです。
+![Sonata pipeline view](docs/images/overview.png)
 
-![Sonata のパイプライン表示](docs/images/overview.png)
+## Run
 
-## 起動
-
-Node.js **22.12 以降**を使用します。ビルドとローカル表示には Node の標準ライブラリだけを使うので、依存パッケージのインストールは不要です。
+Use **Node.js 22.12 or later**. Building and serving the app use only Node's standard library; no dependency installation is required.
 
 ```sh
 git clone https://github.com/shioyadan/sonata.git
@@ -20,37 +18,37 @@ cd sonata
 npm run build
 ```
 
-生成された **`dist/sonata.html`** をブラウザで開いてください。コード・スタイル・全5デモが入った単一 HTML です。別の場所へコピーしても、ネットワーク接続なしで動きます。ブラウザは WebGL 2 が必要です。
+Open **`dist/sonata.html`** in a browser with WebGL 2 support. This single HTML file contains the application, styles, and all five demos. You can copy it elsewhere and use it offline.
 
-ローカル HTTP サーバーで開く場合は `npm start` を使います。ビルド後に `http://127.0.0.1:4173` で表示できます。ソース変更後は再起動してください。
+For a local HTTP server, run `npm start` and open `http://127.0.0.1:4173`. Restart the server after editing the source.
 
-## 操作
+## Controls
 
-| 操作 | 動作 |
+| Input | Action |
 | --- | --- |
-| ドラッグ / 1本指 | カメラを回転 |
-| ホイール / ピンチ | 拡大・縮小 |
-| 2本指の平行移動 | 図を移動 |
-| Fit / ダブルクリック | カメラをリセット |
-| Space / ← → | 再生・停止 / 1サイクル移動 |
-| F / C | 次のフラッシュ / Cinema |
-| 命令の粒子をクリック | 対象命令を追跡 |
+| Drag / one finger | Orbit the camera |
+| Mouse wheel / pinch | Zoom |
+| Move two fingers together | Pan |
+| Fit / double-click | Reset the camera |
+| Space / left and right arrows | Play or pause / step one cycle |
+| F / C | Jump to the next flush / toggle Cinema |
+| Click an instruction particle | Follow that instruction |
 
-スマートフォンでは再生・シークを画面内に保ち、**Demo & settings** からデモや表示設定を開きます。横向きにも対応しています。動きを減らす OS 設定を尊重し、画面上でアニメーションを有効にできます。
+On phones, playback and seeking stay on screen. Open **Demo & settings** to change demos or display settings. Portrait and landscape layouts are supported. The app respects the OS reduced-motion preference and offers an explicit control to enable animation.
 
-## デモ
+## Demos
 
-| デモ | シミュレータ / プロセッサ | 実行内容・見どころ |
+| Demo | Simulator / processor | Workload and highlights |
 | --- | --- | --- |
-| Branch storm | gem5 ARM64 O3 | CoreMark、連続する予測ミス |
-| Wide open | gem5 ARM64 O3 | CoreMark、高い命令流量 |
-| Miss & recover | RSD / RISC-V | `mshr.log`、キャッシュミスと予測ミス。プログラム名は未確認 |
-| Rename rush | gem5 ARM64 O3 | CoreMark、記録されたリネームと物理レジスタの読み書き |
-| x86 recovery | gem5 x86 O3 | CoreMark、micro-op とレジスタ復元 |
+| Branch storm | gem5 ARM64 O3 | CoreMark; repeated branch mispredictions |
+| Wide open | gem5 ARM64 O3 | CoreMark; sustained instruction throughput |
+| Miss & recover | RSD / RISC-V | `mshr.log`; cache misses and branch mispredictions; workload not yet identified |
+| Rename rush | gem5 ARM64 O3 | CoreMark; recorded renaming and physical-register reads and writes |
+| x86 recovery | gem5 x86 O3 | CoreMark; micro-ops and register-map recovery |
 
-実行条件は各デモの **Run details** と [デモの出自](data/README.md) に記載しています。データに記録された時刻・依存関係と、推定した構造や光の演出を区別しています。Top-down はトレースから推定した分類を、現在から過去8サイクルの窓で表示します。実装上の解釈は [可視化の仕様](docs/visualization.md) を参照してください。
+Each demo's **Run details** and the [trace documentation](data/README.md) describe the execution conditions. Recorded timing and dependencies are distinguished from inferred structure and visual effects. Top-down estimates use a trailing eight-cycle window ending at the current playback time. See the [visualization specification](docs/visualization.md) (Japanese) for details.
 
-## 開発と検証
+## Development and verification
 
 ```sh
 npm ci
@@ -58,31 +56,34 @@ npm test
 npm run test:render
 ```
 
-Electron はブラウザの検証用です。配布 HTML には含みません。画面のない Linux では Xvfb を使用します。
+Electron is used for browser verification and is not included in the standalone HTML. On Linux without a display, use Xvfb:
 
 ```sh
 xvfb-run -a -s '-screen 0 1600x1100x24' npm run test:render
-# スマートフォンの表示・タッチ操作だけを検査
+# Check only mobile layouts and touch interaction.
 xvfb-run -a -s '-screen 0 1600x1100x24' npm run test:mobile
 ```
 
-検証画像は `artifacts/screenshots/` に出力します。描画検査は HTML だけを一時フォルダへコピーし、外部アクセスを禁止して実行します。CI でもモデル・単一 HTML・デスクトップ・モバイルを確認します。詳細は [開発ガイド](docs/development.md) にまとめています。
+Screenshots are written to `artifacts/screenshots/`. Browser checks copy only the built HTML into a temporary directory and block external requests. CI verifies the replay model, standalone build, desktop view, and mobile interaction. See the [development guide](docs/development.md) (Japanese) for details.
 
-## 構成
+README files are written in English; explanatory source-code comments are written in Japanese.
+
+## Layout
 
 ```text
-src/                    HTML・CSS・WebGL 描画・再生モデル
-data/                   Git に含める5本の実トレース抜粋と出自
-scripts/                ビルド・検証・デモ抽出
-vendor/konata-core/      抽出に使う Konata 解析コードの固定スナップショット
-docs/                   可視化の仕様と開発手順
-dist/sonata.html         配布用の生成物（Git 対象外）
-artifacts/              検証画像・レポート（Git 対象外）
-inputs/                 再抽出用の元ログ（Git 対象外）
+src/                    HTML, CSS, WebGL rendering, and replay model
+data/                   Five embedded trace excerpts and their provenance
+scripts/                Build, verification, and trace-extraction tools
+vendor/konata-core/      Pinned analysis modules used for trace extraction
+docs/                   Visualization specification and development guide
+dist/sonata.html         Standalone build output (ignored by Git)
+artifacts/              Verification images and reports (ignored by Git)
+inputs/                 Source logs for regeneration (ignored by Git)
+work/                   Local working notes and handoff material (ignored by Git)
 ```
 
-通常のビルド・検証には Konata のチェックアウトや元ログは不要です。デモを再抽出する場合だけ、[再生成の手順](data/README.md#再生成) に沿って元ログを用意してください。
+Normal builds and verification use the embedded data and require no source logs or external project checkout. To change the demo excerpts, follow the [regeneration instructions](data/README.md#regeneration).
 
-## ライセンス
+## License
 
-[BSD-3-Clause](LICENSE.md)。Konata から引き継いだ著作権表示を保持しています。解析コードの出典・固定リビジョンは [vendor/konata-core](vendor/konata-core/README.md) に記録しています。
+[BSD-3-Clause](LICENSE.md). Attribution and the pinned revision of the bundled analysis modules are documented in [vendor/konata-core](vendor/konata-core/README.md).

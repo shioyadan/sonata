@@ -1403,7 +1403,7 @@ body.cinema .flush-alert {
 
 .front-label.rename-label small { display:block;font:8px monospace;letter-spacing:.6px; }
 .front-label.rename-label::after { height:44px; }
-/* Only the motion opt-in remains in the heading area. */
+/* 見出し領域には、アニメーションを有効にする案内だけを置く。 */
 .world-heading { top:74px;left:auto;right:34px;width:300px; }
 body.cinema .cinema-caption { top:auto;bottom:52px; }
 
@@ -1415,8 +1415,8 @@ body.cinema .cinema-caption { top:auto;bottom:52px; }
 .mobile-panel-heading strong { font-size:15px;font-weight:500; }
 #mobile-close { min-width:60px;min-height:44px;color:var(--cyan);font-size:14px; }
 
-/* A phone keeps the scene and transport on screen. The existing telemetry
-   moves into a modal sheet, so all demos and settings remain available. */
+/* スマートフォンでは図と再生操作を画面内に保つ。既存のテレメトリを
+   モーダルパネルへ移し、すべてのデモと設定を引き続き操作できるようにする。 */
 @media(max-width:760px), (max-width:1000px) and (max-height:600px) {
     body { height:100dvh;min-height:360px;display:grid;grid-template-rows:calc(56px + env(safe-area-inset-top)) minmax(0,1fr) calc(132px + env(safe-area-inset-bottom));overflow:hidden; }
     .topbar { height:auto;gap:12px;padding:env(safe-area-inset-top) max(14px,env(safe-area-inset-right)) 0 max(14px,env(safe-area-inset-left)); }
@@ -1515,7 +1515,7 @@ body.cinema .cinema-caption { top:auto;bottom:52px; }
     #mobile-panel #bloom { height:28px;margin:8px 0; }
 }
 
-/* Landscape leaves a narrow HUD beside the canvas instead of covering it. */
+/* 横画面では canvas の横に細い HUD 領域を確保する。 */
 @media(max-width:600px) and (max-height:700px) {
     body { grid-template-rows:calc(56px + env(safe-area-inset-top)) minmax(0,1fr) calc(118px + env(safe-area-inset-bottom)); }
     #scene { position:absolute;top:112px;height:calc(100% - 200px); }

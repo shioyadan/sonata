@@ -1,12 +1,12 @@
-/* Sonata — an independent, dependency-free WebGL 2 processor trace visualizer.
- * Trace stages and occupancy come from ../data/traces.js.
- * Geometry, light trails, orbital motion and shockwaves are illustrative.
+/* Sonata — 実行時依存を持たない WebGL 2 プロセッサトレース可視化。
+ * ステージと占有数は ../data/traces.js の記録を使う。
+ * 立体形状、光跡、周回運動、衝撃波は表示上の演出。
  */
 (() => {
     "use strict";
     const $ = (id) => document.getElementById(id);
     const canvas = $("scene");
-    // Antialias the offscreen scene; the canvas itself only receives a full-screen composite.
+    // オフスクリーンのシーンにアンチエイリアスを適用し、canvas には全画面の合成結果だけを出す。
     const gl = canvas.getContext("webgl2", { alpha: false, antialias: false, powerPreference: "high-performance" });
     if (!gl) {
         $("fallback").hidden = false;
@@ -60,7 +60,7 @@
     let sceneTopDown={available:false},topDownRegion=null,topDownRail=[];
     let boundDisplay={trace:null,shares:null,weights:{},color:boundRGB("unavailable")};
 
-    // Small column-major matrix toolkit keeps the experiment usable offline.
+    // 列優先の小さな行列演算を内蔵し、オフラインでも動作させる。
     const normalize = (a) => { const n = Math.hypot(...a) || 1; return a.map((v) => v / n); };
     const cross = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
     const dot = (a, b) => a.reduce((s, v, i) => s + v * b[i], 0);
@@ -181,7 +181,7 @@
     function deleteBuffer(b) { if (b) { gl.deleteBuffer(b.vbo); gl.deleteVertexArray(b.vao); } }
     const movingLines = buffer([], false, true), particles = buffer([], true, true);
     const analysisSurface = buffer([], false, true),registerSurface = buffer([], false, true);
-    // A high-resolution atlas with mipmaps preserves glyph coverage as the ribbon shrinks.
+    // 高解像度アトラスと mipmap により、命令列の縮小時も文字の輪郭を保つ。
     const glyphCanvas=document.createElement("canvas");glyphCanvas.width=1536;glyphCanvas.height=960;
     const glyphContext=glyphCanvas.getContext("2d");
     glyphContext.font="bold 128px monospace";glyphContext.fillStyle="white";glyphContext.textBaseline="middle";glyphContext.textAlign="center";
@@ -286,8 +286,8 @@
             if(i%2===0)line(lines,bottom[i],shoulder[i],color,glow*.35);
         }
     }
-    // Geometry, light guides and actual instruction positions share these lane endpoints.
-    // The lane assignment is illustrative: the excerpts do not identify physical pipes.
+    // 立体形状、光の経路、命令の座標は、同じ管路の端点を共有する。
+    // 抜粋には物理 pipe の識別情報がないため、管路への割り振りは演出として扱う。
     function executionLane(node, index) {
         const pitch=Math.min(.72,(node.d-.65)/node.pipeCount),z=node.z+(index-(node.pipeCount-1)/2)*pitch;
         const y=node.h+.34,half=(node.w-.78)/2;
@@ -310,8 +310,8 @@
     }
     function addConnection(from,to,color) {
         const peak=(transferProfile.get(`${from}>${to}`)??(from==="register-read"?transferProfile.get(`issue>${to}`):null))?.peak??0;
-        // Capacity has the same source as the labels on the modules. An excerpt
-        // can exercise fewer lanes; that observed peak is a separate diagnostic.
+        // 並列幅はモジュールのラベルと同じ情報から決める。抜粋内で実際に使う
+        // 管路はこれより少ない場合があるため、観測ピークは別の診断値に保持する。
         const execution=nodes.get(from)?.pipeCount??nodes.get(to)?.pipeCount;
         const memoryPath=from==="memory-wait"||to==="memory-wait";
         const retiring=from==="commit"||to==="commit";
@@ -341,7 +341,7 @@
         const {x,z,w,d,h,color}=node;
         housing(tris,lines,x,-.25,z,w+.2,.16,d+.2,color,.2);
         housing(tris,lines,x,-.05,z,w,h+.05,d,color,.23);
-        // Recessed parallel conduits have an open upper shell, exposing their light cores.
+        // 並列の管路は上部を開いた溝として描き、内部を流れる光が見えるようにする。
         for(let k=0;k<node.pipeCount;k++){
             const {inlet:a,outlet:b,radius:r}=executionLane(node,k);
             housing(tris,lines,x,h+.01,a[2],b[0]-a[0]+.16,.09,r*2.5,color,.16);
@@ -355,7 +355,7 @@
             line(lines,a,b,color,.05);
             for(const t of node.compact?[0,1]:[0,.33,.67,1])pipeCollar(lines,mix(a[0],b[0],t),a[1],a[2],r,color,t===0||t===1?.23:.12);
             for(const t of node.compact?[.5]:[.28,.72])flowChevron(lines,mix(a[0],b[0],t),a[1]-.01,a[2],r*.7,color,.16);
-            // Keep each connection aligned with its own pipe through both ports.
+            // 入口・出口の両方で、各接続線を対応する pipe の軸に揃える。
             const intake=[nodePort(node,false)[0],a[1],a[2]],outlet=[nodePort(node,true)[0],b[1],b[2]];
             for(const [from,to] of [[intake,a],[b,outlet]])
                 for(let j=0;j<16;j++)line(lines,route(from,to,j/16),route(from,to,(j+1)/16),color,.09);
@@ -370,7 +370,7 @@
         }
     }
     function route(a, b, t) {
-        // Cubic arcs join stage centres; their paths are visual, not physical wiring.
+        // 三次曲線でステージ中心を結ぶ。経路は表示用であり、実配線の再現ではない。
         const bend = Math.min(2, Math.abs(b[0] - a[0]) * .48), q = 1 - t;
         const c = [a[0] + bend, a[1] + .22, a[2]], d = [b[0] - bend, b[1] + .22, b[2]];
         return a.map((v, i) => q*q*q*v + 3*q*q*t*c[i] + 3*q*t*t*d[i] + t*t*t*b[i]);
@@ -441,15 +441,15 @@
             const op=byID.get(issue.id),color=C[op.kind],fade=1-issue.progress;
             const path=issuePath(issue),rowProgress=clamp(issue.progress/.18);
             const head=path.origin.map((v,i)=>mix(v,path.exit[i],smooth(rowProgress)));
-            // A short, quiet dash crosses the cells. Bloom belongs at the outlet.
+            // セル上は控えめな短い線で横切り、強い発光は出口に置く。
             if(rowProgress<1)line(lines,[Math.max(path.origin[0],head[0]-.12),head[1],head[2]],head,color,fade*.24);
             else{
                 point(points,path.exit,color,10,fade*.7);
                 point(points,route(path.exit,path.port,smooth((issue.progress-.18)/.82)),color,16,fade*.85);
             }
             if(issue.column!==null){
-                // The selected row leaves to the right; its selection signal wraps
-                // around that edge and rises through the matching entry column.
+                // 選択された行の命令は右へ抜ける。選択信号はその端を回り込み、
+                // 対応するエントリの列を下から上へ進む。
                 const progress=issue.progress<.3?clamp((issue.progress-.12)/.18)*2:2+clamp((issue.progress-.3)/.4);
                 const columnGlow=smooth((issue.progress-.3)/.10)*(1-smooth((issue.progress-.68)/.32));
                 for(let k=0;k<path.signal.length-1&&k<progress;k++){
@@ -460,7 +460,7 @@
                 }
                 if(columnGlow>0){
                     const bottom=matrixPosition(trace.structure.queueCapacity-1,issue.column),top=matrixPosition(0,issue.column);
-                    // Keep the selected column legible as one bright, thin stroke.
+                    // 選択列は明るい細線として一続きに描き、列全体を見分けやすくする。
                     line(lines,bottom,top,color,columnGlow*.85);
                     for(const target of issue.targets)point(points,matrixPosition(target.row,issue.column),C[byID.get(target.id).kind],8,columnGlow*.95);
                 }
@@ -486,15 +486,15 @@
         const pitch=n.d*.84/banks,z=n.z-n.d*.42+(bank+.5)*pitch;
         const bits=Math.max(1,Math.ceil(Math.log2((trace.evidence.registers.capacity??registerTags.at(-1)+1))));
         const x=n.x+(column-3.5)*n.w*.095,y=n.h+.23+bank*.018;
-        // Word bars run along Z, perpendicular to instruction flow along X.
+        // レジスタを表すバーは Z 軸方向に向け、X 軸方向の命令の流れと直交させる。
         return {bits,bank,start:[x,y,z-pitch*.32],end:[x,y,z+pitch*.32],halfWidth:n.w*.031};
     }
     function renameModule(tris,lines,n){
         housing(tris,lines,n.x,-.25,n.z,n.w+.18,.16,n.d+.16,C.blue,.25);
         housing(tris,lines,n.x,-.05,n.z,n.w,n.h+.05,n.d,C.blue,.35);
         const banks=Math.ceil(n.mapWords/8),pitch=n.d*.84/banks;
-        // Four stacked groups of eight words form a physical RAT array on Rn.
-        // The small cells hold the physical destination's binary address.
+        // Rn 上に 8 本ずつ 4 組のバーを重ね、RAT の立体配列を構成する。
+        // 内部の小さなセルは割り当て先の物理レジスタ番号を二進数で表す。
         for(let bank=0;bank<banks;bank++){
             const z=n.z-n.d*.42+(bank+.5)*pitch,y=n.h+.065+bank*.018;
             housing(tris,lines,n.x,y,z,n.w*.87,.14,pitch*.87,C.blue,.22);
@@ -519,8 +519,8 @@
             const progress=reducedMotion?1:row.event?smooth((cycle-row.event.cycle)/.8):1;
             const known=row.physical!==null,active=row.pulse>0&&!row.constant&&previous!==row.physical;
             const sweep=mix(z0,z1,restoring?1-progress:progress),cells=[];
-            // A single bar is one logical register. Address bits are quiet marks
-            // inside it, without individual boxes that resemble extra registers.
+            // バー 1 本が論理レジスタ 1 個を表す。番号のビットは内部の控えめな印とし、
+            // 別のレジスタが増えたように見える独立した箱にはしない。
             const bar=[[x-halfWidth,y+.005,z0],[x+halfWidth,y+.005,z0],[x+halfWidth,y+.005,z1],[x-halfWidth,y+.005,z1]];
             for(const i of [0,1,2,0,2,3])vertex(tris,bar[i],color,known?.10:.012);
             for(let bit=0;bit<bits;bit++){
@@ -682,8 +682,8 @@
         const canceledIDs=new Set(feedState.ids),layers=[];
         if(feedState.cancelAlpha>0)layers.push({kind:"rewind",cursor:feedState.cursor,alpha:feedState.cancelAlpha,shift:0});
         if(feedState.flowAlpha>0)layers.push({kind:"fetch",cursor:feedState.normalCursor,alpha:feedState.flowAlpha,shift:(1-feedState.recovery)*.25});
-        // The incoming ribbon is a preview of recorded fetch order, not another queue.
-        // During flush, actual canceled rows reappear as a separate historical layer.
+        // 流入する命令列は記録された fetch 順の先読み表示で、別のキューではない。
+        // フラッシュ中は実際に取り消された行を履歴の層として再表示する。
         for(const layer of layers)for(let index=Math.floor(layer.cursor);index<Math.min(feedOps.length,Math.ceil(layer.cursor)+feedRows);index++){
             const distance=(index+.5-layer.cursor)/feedRows+layer.shift;if(distance<=0||distance>=1)continue;
             const op=feedOps[index],canceled=layer.kind==="rewind"&&canceledIDs.has(op.id);
@@ -693,19 +693,19 @@
             const worldPerPixel=2*screen[2]*Math.tan(.66/2)/cssHeight;
             const scale=smooth(distance/.30),alpha=smooth((1-distance)/.15)*(.32+.68*u)*layer.alpha;
             const color=canceled?C.red:instructionColor(op,cycle),text=op.feedText,cell=.146*scale,height=.38*scale;
-            // Align every instruction to the same left edge of the tapered ribbon.
+            // 先細りする帯の左端に、すべての命令の開始位置を揃える。
             const left=-3.0*scale,rightEdge=left+text.length*cell;
             for(let j=0;j<text.length;j++){
                 const code=text.charCodeAt(j)-32;if(code<=0||code>=95)continue;
                 const x=left+j*cell,col=code%16,row=Math.floor(code/16);
                 const origin=offset(p,x+cell/2,0);
-                // Peel actual canceled glyphs from the retained ribbon. Travel is in
-                // CSS pixels so separation survives camera distance and high DPI.
+                // 保持している命令列から、実際に取り消された文字を剥がす。移動量は
+                // CSS ピクセルで定め、カメラ距離や高 DPI によらず分離が見えるようにする。
                 const stagger=hash(op.id+j*17)*.18,travel=smooth((dissolve-stagger)/(1-stagger));
                 let fragment=origin,rotation=0,glyphWidth=cell,glyphHeight=height,opacity=(canceled?layer.alpha*(.7+.3*u):alpha)*(j<8?.5:1);
                 if(canceled&&travel>0){
                     const home=project(origin),spread=clamp(cssWidth*.065,35,75);
-                    // A gentle shared drift replaces the wide, explosive scatter.
+                    // 文字群は共通の方向へ穏やかに漂わせ、広く激しく飛び散らせない。
                     const drift=(.2+hash(op.id+31)*.4+(hash(op.id+j*31)-.5)*.5)*spread;
                     const targetX=clamp(home[0]+drift,16,cssWidth-16);
                     const targetY=clamp(home[1]-12-hash(op.id+j*43)*38,cssWidth<700?120:175,cssHeight-60);
@@ -731,14 +731,14 @@
             point(points,p,color,scale<.5?6:2,alpha*.45*intact);
             feedVisible.push({id:op.id,fetch:op.fetch,label:op.label,position:p,progress:u,layer:layer.kind,canceled});
         }
-        // Rows condense at the inlet, then the existing fetch particles take over.
+        // 行を入口に集め、その先の表示は既存の fetch 粒子へ引き継ぐ。
         const recent=fetchGroups.find(g=>cycle>=g.time-feedLead&&cycle<g.time+.3);
         if(recent&&feedState.flowAlpha>0){
             const glow=Math.sin(clamp((cycle-recent.time+feedLead)/(feedLead+.3))*Math.PI);
             point(points,feedPath(1),C.integer,22,glow*.85*feedState.flowAlpha);
         }
         const rewinding=feedState.phase==="rewind"||feedState.phase==="discard";
-        // The red pulse moves out of fetch along the same ribbon as the reversed code.
+        // 赤いパルスは、逆流するコードと同じ帯を fetch から外向きに進む。
         if(feedState.time!==null&&!reducedMotion){
             const pulse=1-clamp(feedState.age/1.3),strength=(1-smooth(feedState.age/2.2));
             point(points,feedPath(pulse),C.red,26,strength*.9);
@@ -812,7 +812,7 @@
             if(node.mapWords){renameModule(tris,lines,node);continue;}
             box(tris, lines, x, -.25, z, w+.25, .16, d+.25, color, .22);
             box(tris, lines, x, -.05, z, w, h, d, color, .52);
-            // Fine etched top surface and side fins give the light a physical substrate.
+            // 天面の細かい刻みと側面のフィンで、光を載せる物体の質感を表す。
             for (let k = 0; k < 8; k++) {
                 const dz = z-d*.38 + k*d*.76/7;
                 line(lines, [x-w*.38,h-.04,dz], [x+w*.38,h-.04,dz], color, .16);
@@ -826,7 +826,7 @@
                 }
             }
         }
-        // Consecutive physical addresses form one serpentine circular FIFO.
+        // 連続した物理スロットを蛇行させ、1 本の循環 FIFO を構成する。
         for(let slot=0;slot<trace.structure.robCapacity-1;slot++)line(lines,robCell(slot,-.09),robCell(slot+1,-.09),C.blue,.28);
         const first=robCell(0,-.09),last=robCell(trace.structure.robCapacity-1,-.09);
         const wrap=[last,[last[0]+.32,last[1],last[2]-.26],[first[0]-.32,first[1],first[2]-.26],first];
@@ -836,8 +836,8 @@
             for(let i=0;i<80;i++)line(lines,wakePath(source,i/80),wakePath(source,(i+1)/80),C.memory,.12);
         }
         for (const {color,lanes} of connections) {
-            // The conductor count matches each module's displayed parallel width.
-            // Ports line up with the execution pipes without extra decorative rails.
+            // 配線の本数は各モジュールに表示する並列幅に合わせる。
+            // 余分な装飾線は加えず、ポートを実行 pipe に揃える。
             for(const {source,target} of lanes){
                 for(let k=0;k<48;k++)line(lines,route(source,target,k/48),route(source,target,(k+1)/48),color,.32);
                 for(const p of [source,target])point(stars,p,color,3,.4);
@@ -1075,8 +1075,8 @@
     }
 
     function drawTopDown(lines,dt) {
-        // A ground overlay conveys aggregate allocation evidence. It never changes
-        // instruction brightness, stage timing or individual unit activity.
+        // 基板上の重ね描きで割り当ての集計を示す。命令の明るさ、ステージ時刻、
+        // 個々のユニットの活動状態には影響させない。
         sceneTopDown=sonataReplay.sampleTopDown(trace.topDown,cycle);
         const triangles=[];topDownRegion=null;topDownRail=[];
         const snap=!dt||reducedMotion||boundDisplay.trace!==trace||!boundDisplay.shares;
@@ -1113,8 +1113,8 @@
                     line(lines,[x+sx*.6,y+.015,z+sz*.08],[x+sx*1.15,y+.015,z+sz*.08],color,weight);
                 }
             }
-            // The board's front edge is a stacked bar in scene coordinates.
-            // Lengths represent the exact same shares as the readable HUD.
+            // 基板の手前の縁に、シーン座標で積み上げバーを描く。
+            // 各区間の長さは HUD に表示する割合と一致させる。
             let x=-13.6;
             for(const key of boundKeys){
                 const share=shares[key],next=x+27.2*share,col=boundRGB(key);
@@ -1167,7 +1167,7 @@
             }
 
         }
-        // Faint carrier pulses illuminate the wiring without adding trace operations.
+        // 配線を照らす薄いパルスは演出として描き、トレースの命令を追加しない。
         for(const {from,to,color,lanes} of connections){
             if(!activeNodes.has(from)&&!activeNodes.has(to))continue;
             for(let k=0;k<lanes.length;k++){
@@ -1175,7 +1175,7 @@
                 point(points,route(lanes[k].source,lanes[k].target,t),color,4,.24);
             }
         }
-        // Physical slots never move on completion; tail allocates and head retires.
+        // 完了しても物理スロットは動かさず、末尾で割り当て、先頭でコミットする。
         const fifo=robReplay.stateAt(cycle),occupied=new Map(fifo.entries.map(entry=>[entry.slot,entry.op]));
         for(let slot=0;slot<trace.structure.robCapacity;slot++){
             const p=robCell(slot),op=occupied.get(slot);
@@ -1191,7 +1191,7 @@
         line(lines,head,[head[0],head[1]+.55,head[2]],headColor,.75);
         ring(lines,tail[0],tail[1]+.03,tail[2],.15,C.blue,.8,0,TAU,20);
         line(lines,tail,[tail[0],tail[1]+.4,tail[2]],C.blue,.65);
-        // A completion broadcasts back to the scheduler. Trace issue times stay intact.
+        // 完了通知をスケジューラへ返す。トレースの発行時刻は変更しない。
         activeNotifications=memoryEvents.filter(event=>cycle>=event.time&&cycle<event.time+wakeEffectCycles);
         for(const event of activeNotifications){
             const age=cycle-event.time,source=location(event.op,event.wait,event.time-.001);
@@ -1289,7 +1289,7 @@
         $("world").classList.toggle("zoomed",radius<24);
         const drift=autoOrbit&&cameraMode!=="plan"?Math.sin(artTime*.12)*.16:0;
         const a=azimuth+drift;
-        // Fit the complete processor on portrait screens too.
+        // 縦画面でもプロセッサ全体が収まるようにする。
         const distance=radius*Math.max(1,1.48/(cssWidth/cssHeight));
         eye=[Math.sin(a)*Math.cos(elevation)*distance,Math.sin(elevation)*distance,Math.cos(a)*Math.cos(elevation)*distance].map((value,i)=>value+focus[i]);
         viewProjection=multiply(perspective(cssWidth/cssHeight),lookAt(eye,focus));
@@ -1314,12 +1314,12 @@
         blur(bloomA,bloomB,0,1/bloomA.h,0);
         blur(bloomB,bloomA,2/bloomA.w,0,0);
         blur(bloomA,bloomB,0,2/bloomA.h,0);
-        // Keep the glyph cores crisp: text uses the scene depth but does not feed bloom.
+        // 文字はシーンの奥行きを使いつつブルームの入力から外し、輪郭を鮮明に保つ。
         gl.bindFramebuffer(gl.FRAMEBUFFER,sceneTarget.fbo);gl.viewport(0,0,renderWidth,renderHeight);
         gl.enable(gl.DEPTH_TEST);gl.enable(gl.BLEND);gl.blendFunc(gl.SRC_ALPHA,gl.ONE);
         gl.useProgram(typeProgram.p);gl.activeTexture(gl.TEXTURE0);gl.bindTexture(gl.TEXTURE_2D,glyphTexture);gl.uniform1i(typeProgram.u("uGlyphs"),0);
         drawBuffer(feedType,gl.TRIANGLES,typeProgram);
-        // Detached historical letters stay in front of the chip while they unravel.
+        // 履歴から剥がれた文字は、ほどけている間はチップの手前に表示する。
         gl.disable(gl.DEPTH_TEST);drawBuffer(unravelType,gl.TRIANGLES,typeProgram);
         gl.disable(gl.BLEND);
         gl.bindFramebuffer(gl.FRAMEBUFFER,null);gl.viewport(0,0,renderWidth,renderHeight);
@@ -1383,8 +1383,8 @@
         feedLabel.hidden=!instructionStream||feedAnchor[2]<0;
         feedLabel.style.transform=`translate(${feedAnchor[0]+(cameraMode==="plan"?135:0)}px,${feedAnchor[1]+(cameraMode==="plan"?-28:24)}px) translateX(-50%)`;
         updateTopDownUI(dt>0&&!reducedMotion);
-        // Keep readable stage names in the overview; progressively expose detail
-        // while zooming. Do not let projected labels cover controls or each other.
+        // 全体表示では読めるステージ名を残し、拡大に応じて詳細を表示する。
+        // 投影したラベルが操作部や他のラベルを覆わないようにする。
         if(compactMedia.matches){
             const bounds=canvas.getBoundingClientRect();
             const occupied=[...document.querySelectorAll('.view-controls,.mobile-run,.mobile-cycle,.touch-camera,.bound-scene')].map(el=>el.getBoundingClientRect());
@@ -1507,7 +1507,7 @@
     function setCycle(value){
         if(!Number.isFinite(value))return;
         cycle=clamp(value,trace.firstCycle,trace.lastCycle);render();updateUI();
-        // Seeking displays the new cycle immediately, including the flush notice.
+        // シーク時はフラッシュ通知も含め、移動先のサイクルを即座に表示する。
         $("flush-alert").getAnimations().forEach(animation=>animation.finish());
     }
     function step(delta){setPlaying(false);setCycle(Math.floor(cycle)+delta);}
@@ -1604,8 +1604,8 @@
     $("zoom-fit").addEventListener("click",()=>setCamera(cameraMode));
     $("zoom-in").addEventListener("click",()=>{toggleAuto(false);targetRadius=clamp(targetRadius/1.3,10,62);});
     $("zoom-out").addEventListener("click",()=>{toggleAuto(false);targetRadius=clamp(targetRadius*1.3,10,62);});
-    // Two touch points control both zoom and translation. The world point under
-    // their midpoint stays anchored, including when one finger lifts first.
+    // 2 点のタッチで拡大と平行移動を制御する。片方の指を先に離す場合も、
+    // 2 点の中心に対応するシーン上の位置を保つ。
     const pointers=new Map();let pinch=null;
     function touchPair(){
         const [a,b]=[...pointers.values()];
@@ -1658,7 +1658,7 @@
     new ResizeObserver(()=>{if(!contextLost)resize();}).observe($("world"));
     window.addEventListener("resize",drawTimeline);
     loadTrace(samples.find(s=>s.key==="rename-rush")?.key??samples[0].key);toggleAuto(autoOrbit);setPlaying(playing);render();updateUI();
-    // Read-only diagnostics plus deterministic seek make visual review reproducible.
+    // 読み取り専用の診断値と決定的なシークにより、表示の確認を再現可能にする。
     globalThis.sonata={
         get camera(){return {mode:cameraMode,radius,targetRadius,azimuth,elevation,focus:[...focus],targetFocus:[...targetFocus],pointers:pointers.size,compact:compactMedia.matches};},
         get trace(){return trace;},get cycle(){return cycle;},get playing(){return playing;},get ops(){return ops;},get flushEvents(){return [...flushEvents];},

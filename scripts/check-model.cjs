@@ -62,7 +62,7 @@ assert.deepEqual(registers.stateAt(4.8).allocationCounts,{allocated:1,free:1,unk
 const allocationSnapshot=registers.stateAt(4.8);registers.stateAt(8);assert.deepEqual(registers.stateAt(4.8),allocationSnapshot);
 assert.equal(createRegisterReplay(null).stateAt(4).available,false);
 
-// Slow motion must release continuously, including at the old four-cycle cutoff.
+// 従来の 4 サイクル境界でも、スローモーションから連続的に復帰することを確認する。
 for(const boundary of [-.8,0,2.8,4,5.4]){
     assert.ok(Math.abs(flushPlaybackRate(boundary-.0001,[0])-flushPlaybackRate(boundary+.0001,[0]))<.0001);
 }
@@ -77,7 +77,7 @@ for(const speed of [1,4,16]){
     const t=advancePlayback(-.001,.075,speed,[0]);
     assert.ok(t>0&&t<.9,'Playback skipped the visible beginning of a flush');
 }
-// Count crossings, not residence time or repeated ranges within one execution module.
+// 滞在時間や同一実行モジュール内の重複区間ではなく、境界の通過を数える。
 const transfers=measureTransfers([
     {id:1,fetch:0,allocation:1,end:5,flush:false,stages:[{node:'front-0',start:0},{node:'exec-integer',start:1},{node:'exec-integer',start:2},{node:'rob',start:3}]},
     {id:2,fetch:0,allocation:1,end:5,flush:false,stages:[{node:'front-0',start:0},{node:'issue',start:1},{node:'exec-integer',start:2},{node:'rob',start:4}]},
@@ -91,7 +91,7 @@ assert.equal(transfers.get('exec-integer>rob').peak,2);
 assert.equal(transfers.get('rob>commit').peak,2,'Squash or an out-of-window retirement counted as a transfer');
 assert.equal(transfers.has('input>front-0'),false,'Out-of-window fetches affected the width');
 
-// A trailing window must not leak a later bottleneck into the current display.
+// 後方の平均窓に将来のボトルネックが入り込まないことを確認する。
 const topDownFixture={firstCycle:10,windowCycles:2,slots:[[2,0,0,0,0,0],[0,0,0,0,2,0],[0,1,1,0,0,0],[0,0,0,0,0,2]]};
 assert.equal(sampleTopDown(topDownFixture,10.5).dominant,"active");
 assert.equal(sampleTopDown(topDownFixture,12).dominant,"mixed");
@@ -121,7 +121,7 @@ for(const t of [8,10.5,13,15.5]){
     assert.equal(state.shares.unresolved,0,'Commit latency longer than the window must not make a busy pipeline permanently pending');
 }
 
-// A younger instruction finishes early but cannot free a slot or pass the head.
+// 若い命令が先に完了しても、スロットを解放したり先頭を追い越したりできない。
 const fixture=[
     {id:1,allocation:0,completion:4,end:5,flush:false},
     {id:2,allocation:1,completion:1.5,end:6,flush:false},
@@ -132,14 +132,14 @@ const fixture=[
 const r=createRobReplay(fixture,3);
 assert.deepEqual(r.stateAt(4).entries.map(e=>e.op.id),[1,2,3]);
 assert.equal(r.stateAt(4).head,0);
-assert.equal(r.stateAt(4).tail,0); // full is distinguished by count
-assert.equal(r.slots.get(4),0); // wrap, instead of reusing an arbitrary hole
+assert.equal(r.stateAt(4).tail,0); // 満杯かどうかは個数で区別する。
+assert.equal(r.slots.get(4),0); // 任意の空きを再利用せず、末尾を循環させる。
 assert.deepEqual(r.stateAt(5).entries.map(e=>e.op.id),[2,3,4]);
 assert.equal(r.stateAt(5).head,1);
-assert.equal(r.slots.get(5),0); // squash rewinds tail to the discarded suffix
+assert.equal(r.slots.get(5),0); // squash では取り消した末尾の開始位置へ巻き戻す。
 assert.deepEqual(r.stateAt(7).entries.map(e=>e.op.id),[3,5]);
 assert.equal(r.stateAt(9).entries.length,0);
-// Seeking backwards is independent of the last rendered frame.
+// 逆向きシークの結果は、直前に描画したフレームに依存しない。
 assert.equal(r.stateAt(1).tail,2);
 assert.deepEqual(r.stateAt(1).entries.map(e=>e.op.id),[1,2]);
 
