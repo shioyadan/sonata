@@ -60,12 +60,13 @@ Blocks の命令は、待機・移動・実行を通して同じ大きさを保�
 
 ```sh
 npm ci
+npm run typecheck
 npm test
 npm run test:server
 npm run test:render
 ```
 
-Electron はブラウザの検証用です。配布 HTML には含みません。画面のない Linux では Xvfb を使用します。
+TypeScript は再生モデルと幾何計算の型検査用、Electron はブラウザの検証用です。配布 HTML には含みません。画面のない Linux では Xvfb を使用します。
 
 ```sh
 xvfb-run -a -s '-screen 0 1600x1100x24' npm run test:render
@@ -82,8 +83,8 @@ README とソースコードの説明コメントは日本語で記述します�
 ```text
 src/                    編集用の10ファイル
   sonata.js             起動・操作・カメラ・DOM 表示
-  replay-model.js       デモ準備・時刻に対応する再生状態
-  geometry.js           座標・経路・回転・接地
+  replay-model.cts       デモ準備・時刻に対応する再生状態
+  geometry.cts           座標・経路・回転・接地
   scene.js              配置・固定部品・外観プリセット
   activity.js           命令・待機列・レジスタ等の動的表示
   renderer.js           GPU 資源・描画順・シェーダー

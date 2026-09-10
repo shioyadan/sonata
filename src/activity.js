@@ -1,7 +1,7 @@
 "use strict";
 // 命令・待機列・レジスタ・命令列・Top-down の表示状態と描画データ。
-const {TAU,clamp,mix,smooth,hash,route,rgb,normalize,cross}=require("./geometry.js");
-const sonataReplay=require("./replay-model.js");
+const {TAU,clamp,mix,smooth,hash,route,rgb,normalize,cross}=require("./geometry.cts");
+const sonataReplay=require("./replay-model.cts");
 const {feedRows,feedLead}=sonataReplay;
 const wakeFlightCycles=1.2,wakeEffectCycles=2.8;
 const $=id=>document.getElementById(id);

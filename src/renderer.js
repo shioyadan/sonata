@@ -1,6 +1,6 @@
 "use strict";
 // WebGL 資源と描画順。シェーダーは末尾の材質別生成関数で定義する。
-const {TAU,mix,smooth,hash,multiply,lookAt,normalize}=require("./geometry.js");
+const {TAU,mix,smooth,hash,multiply,lookAt,normalize}=require("./geometry.cts");
 const crystalTransmission=.40;
 
 function createGpu({gl,canvas,onResize}) {

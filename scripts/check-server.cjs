@@ -43,7 +43,7 @@ async function main(){
         const head=await request("/","HEAD");
         assert.equal(head.status,200);assert.equal(head.body.length,0);
         assert.equal(Number(head.headers["content-length"]),html.length);
-        for(const target of ["/src/sonata.js","/data/traces.js","/.git/config","/work/HANDOFF.md","/../README.md","/%2e%2e/README.md"]){
+        for(const target of ["/src/sonata.js","/src/geometry.cts","/src/replay-model.cts","/data/traces.js","/.git/config","/work/HANDOFF.md","/../README.md","/%2e%2e/README.md"]){
             assert.equal((await request(target)).status,404,`Source path exposed: ${target}`);
         }
         const post=await request("/","POST");
@@ -53,7 +53,10 @@ async function main(){
             assert.equal((await request(target)).status,400);
             assert.equal((await request("/")).status,200,"Malformed URL stopped the server");
         }
-        assert.equal(errors,"");
+        // Node の型変換が出す既知の警告だけを許容し、その他の診断は引き続き失敗にする。
+        const transformWarning=`(node:${child.pid}) ExperimentalWarning: stripTypeScriptTypes is an experimental feature and might change at any time\n`
+            +"(Use `node --trace-warnings ...` to show where the warning was created)\n";
+        assert.ok(errors===""||errors===transformWarning,`Unexpected server diagnostics:\n${errors}`);
         console.log("Server: HTML / HEAD / source isolation / method rejection / malformed URL recovery verified");
     }finally{
         child.kill();await stopped;

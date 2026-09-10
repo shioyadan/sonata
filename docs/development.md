@@ -68,10 +68,10 @@ git worktree list
 
 ## 境界
 
-`src/` は JavaScript 6個・CSS 3個・HTML 1個にまとめます。各ファイルの責務と状態の所有者は [ソースの構造](architecture.md) を参照してください。
+`src/` は TypeScript 2個・JavaScript 4個・CSS 3個・HTML 1個にまとめます。各ファイルの責務と状態の所有者は [ソースの構造](architecture.md) を参照してください。
 
 - `src/sonata.js`: 起動、再生時計、入力・カメラ、DOM と診断 API。
-- `src/replay-model.js` / `src/geometry.js`: トレース準備と再生状態、経路・回転・接地。DOM / GPU から独立して検査可能。
+- `src/replay-model.cts` / `src/geometry.cts`: トレース準備と再生状態、経路・回転・接地。DOM / GPU から独立して検査可能。
 - `src/scene.js` / `src/activity.js` / `src/renderer.js`: 固定シーン、動的表示、WebGL 資源・影・シェーダーと描画。
 - `src/index.html` / `src/sonata.css` / `src/scene.css` / `src/appearance.css`: 画面の骨格、共通 UI、シーン、画面サイズと配色の上書き。CSS の適用順は HTML の link 順。
 - `scripts/import-trace.ts` と関連モジュール: 元ログからデモ用の小さなデータを抽出。
@@ -83,7 +83,7 @@ git worktree list
 
 `npm run build` は Node の標準ライブラリだけで、`src/index.html` にスタイル・スクリプト・デモを埋め込みます。出力は `dist/sonata.html`。ライセンス表示も HTML 内に保持します。埋め込み JSON の文字列内を変更せず、長すぎる行を改行します。
 
-ブラウザ用の相対 CommonJS は `scripts/bundle.cjs` で結合します。新しいモジュールは拡張子付きの相対パスで参照し、実行時の外部読み込みを追加しません。ソースを直接開かず、ビルドした HTML または `npm start` で確認します。
+ブラウザ用の相対 CommonJS は `scripts/bundle.cjs` で結合します。`.cts` の型と CommonJS 用の import/export 構文は Node 標準の `stripTypeScriptTypes` の `transform` モードで変換します。新しいモジュールは拡張子付きの相対パスで参照し、実行時の外部読み込みを追加しません。ソースを直接開かず、ビルドした HTML または `npm start` で確認します。
 
 `npm start` はビルドした HTML だけを配信します。ソースディレクトリや元ログを公開するサーバーではありません。環境変数 `SONATA_HOST` / `SONATA_PORT` で待ち受け先を変更できます。スマートフォンから同じネットワーク経由で確認する場合の例:
 
@@ -92,6 +92,19 @@ SONATA_HOST=0.0.0.0 npm start
 ```
 
 端末のブラウザで開発マシンの IP アドレスとポート4173を開きます。
+
+## 型検査
+
+```sh
+npm ci
+npm run typecheck
+```
+
+TypeScript 化は段階的に進めます。現在の対象は `src/replay-model.cts` と `src/geometry.cts` で、`tsconfig.json` の `strict` と `noEmit` を使います。UI・固定シーン・動的表示・GPU の JavaScript、デモ抽出スクリプト、vendor はこの型検査の対象外です。型のためだけに `src/` のファイルを増やさず、共有型は所有者のモジュールから公開します。
+
+型検査用の TypeScript と Node の型定義は開発依存としてバージョンを固定します。通常ビルドはこれらを読み込みません。型変換だけでは型の正しさを検査できないため、CI は `npm run typecheck` と実行時の検証を別々に実施します。`scripts/check-types.cts` は誤った引数型や null の見落としを拒否することも確認し、型が `any` に落ちた場合に検出できるようにします。
+
+[Node の TypeScript 対応](https://nodejs.org/docs/latest-v22.x/api/typescript.html)に合わせ、CommonJS を明示する `.cts` を使います。直接読み込む Node の検査は `--experimental-transform-types` 付きで起動します（`npm test` に設定済み）。変換 API は実験的なので、`.nvmrc` の更新時は型検査、モジュール結合、依存なしの再現ビルドを確認してください。独自の構文変換器や tsconfig のパス別名は追加しません。
 
 ## 検証
 

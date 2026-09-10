@@ -1,7 +1,7 @@
 "use strict";
 // 共通の座標・接続と、固定部品の外観を組み立てる。
-const {TAU,clamp,mix,smooth,hash,rgb,route,crossesBox,createGround}=require("./geometry.js");
-const sonataReplay=require("./replay-model.js");
+const {TAU,clamp,mix,smooth,hash,rgb,route,crossesBox,createGround}=require("./geometry.cts");
+const sonataReplay=require("./replay-model.cts");
 const $=id=>document.getElementById(id);
 
 /* 外観だけのプリセット。命令の配置、再生時刻、記録値は再生モデルと共通にする。 */

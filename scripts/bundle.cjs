@@ -1,19 +1,23 @@
 "use strict";
 // src 内の CommonJS を単一のスクリプトへ結合する。実行時の外部読み込みは行わない。
 const fs=require("node:fs"),path=require("node:path");
+const {stripTypeScriptTypes}=require("node:module");
 function bundle(directory,entry){
     const files=[];
     function collect(folder){
         for(const item of fs.readdirSync(folder,{withFileTypes:true}).sort((a,b)=>a.name.localeCompare(b.name,"en"))){
             const file=path.join(folder,item.name);
             if(item.isDirectory())collect(file);
-            else if(item.isFile()&&item.name.endsWith(".js"))files.push(file);
+            else if(item.isFile()&&/\.(js|cts)$/.test(item.name)&&!item.name.endsWith(".d.cts"))files.push(file);
         }
     }
     collect(directory);
     const modules=files.map(file=>{
         const name=path.relative(directory,file).split(path.sep).join("/");
-        return `${JSON.stringify(name)}:function(require,module,exports){\n${fs.readFileSync(file,"utf8")}\n}`;
+        const source=fs.readFileSync(file,"utf8");
+        // 型と CommonJS の import/export 構文を Node 標準機能で変換する。型検査は別途行う。
+        const code=file.endsWith(".cts")?stripTypeScriptTypes(source,{mode:"transform"}):source;
+        return `${JSON.stringify(name)}:function(require,module,exports){\n${code}\n}`;
     });
     // この関数は生成 HTML 内でもそのまま実行する。Node の API には依存しない。
     function run(modules,entry){

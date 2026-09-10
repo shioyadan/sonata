@@ -1,7 +1,7 @@
 "use strict";
 // 配置と経路は DOM / WebGL なしで準備でき、別の再生インスタンスを変更しない。
 const assert=require("node:assert/strict"),fs=require("node:fs"),path=require("node:path"),vm=require("node:vm");
-const {createReplay}=require("../src/replay-model.js"),{createPaths}=require("../src/geometry.js");
+const {createReplay}=require("../src/replay-model.cts"),{createPaths}=require("../src/geometry.cts");
 const {createScene,styles}=require("../src/scene.js");
 const data={};vm.runInNewContext(fs.readFileSync(path.join(__dirname,"../data/traces.js"),"utf8"),data);
 const samples=data.embeddedFlowTraces,original=JSON.stringify(samples);

@@ -1,6 +1,6 @@
 "use strict";
 const assert=require("node:assert/strict");
-const {createRollingTrack}=require("../src/geometry.js");
+const {createRollingTrack}=require("../src/geometry.cts");
 const near=(a,b,message)=>assert.ok(Math.hypot(...a.map((v,i)=>v-b[i]))<1e-9,message);
 const turn=(q,v)=>{
     const [x,y,z,w]=q,[a,b,c]=v;

@@ -1,6 +1,6 @@
 "use strict";
 const assert=require("node:assert/strict");
-const {createRobReplay,memoryCompletions,createFeedReplay,codeRewindDuration,sampleTopDown,flushPlaybackRate,advancePlayback,measureTransfers,createDependencyReplay,createRegisterReplay,findRecoveryBranches}=require("../src/replay-model.js");
+const {createRobReplay,memoryCompletions,createFeedReplay,codeRewindDuration,sampleTopDown,flushPlaybackRate,advancePlayback,measureTransfers,createDependencyReplay,createRegisterReplay,findRecoveryBranches}=require("../src/replay-model.cts");
 
 const matrix=createDependencyReplay([
     {id:10,allocation:0,issue:4,end:8,issueSlot:3},

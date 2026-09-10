@@ -46,6 +46,7 @@ Node は `.nvmrc`、依存は `package-lock.json` を基準にする。必要な
 
 | 変更 | 検証 |
 | --- | --- |
+| TypeScript、型検査設定 | `npm run typecheck` と変更対象の実行時検証 |
 | 再生モデル、ビルド、ライセンス、データ、vendor | `npm test` |
 | プレビューサーバー | `npm run test:server` |
 | 描画、DOM、CSS、操作、描画検査スクリプト | `npm run test:render` |

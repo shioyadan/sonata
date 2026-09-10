@@ -1,6 +1,6 @@
 "use strict";
 const assert=require("node:assert/strict");
-const {createGround}=require("../src/geometry.js");
+const {createGround}=require("../src/geometry.cts");
 const identity=[0,0,0,1],near=(a,b,message,tolerance=1e-7)=>assert.ok(Math.abs(a-b)<tolerance,`${message}: ${a} / ${b}`);
 const plane=(height,x0=-3,x1=3)=>[[[x0,height,-3],[x1,height,-3],[x1,height,3]],[[x0,height,-3],[x1,height,3],[x0,height,3]]];
 const ground=createGround(plane(.4),-.8);

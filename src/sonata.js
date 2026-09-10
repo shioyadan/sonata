@@ -1,7 +1,7 @@
 "use strict";
 // アプリの起動・再生時計・共通操作。描画と観測モデルには必要な依存だけを渡す。
-const {clamp,mix,smooth,rgb,multiply,perspective,lookAt,instructionRadius,createPaths}=require("./geometry.js");
-const sonataReplay=require("./replay-model.js");
+const {clamp,mix,smooth,rgb,multiply,perspective,lookAt,instructionRadius,createPaths}=require("./geometry.cts");
+const sonataReplay=require("./replay-model.cts");
 const {createScene,styles}=require("./scene.js");
 const {createActivity,wakeFlightCycles}=require("./activity.js");
 const {createGpu,createRenderer}=require("./renderer.js");
