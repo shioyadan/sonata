@@ -12,6 +12,60 @@ README は日本語で、機能・操作・開発手順を説明します。プ�
 
 日付、依頼、変更理由、検証結果、残作業は `work/WORKLOG.md` に記録します。`work/` はローカルの履歴・引き継ぎ用で、Git 管理対象外です。継続して必要な仕様・判断理由・再現方法は `docs/` の関連文書へ反映し、個人環境のパスや一時的な調査ログはローカルに保持します。
 
+## 並列作業用のworktree
+
+親のチェックアウトを調整・統合の場所にし、編集を伴う各タスクを `task/<作業名>/` のworktreeと同名の `task/<作業名>` ブランチへ割り当てます。`task/` 全体はGit対象外で、必要なときだけ作成します。各worktreeはリポジトリの追跡ファイル一式を持ち、Gitのコミット・ブランチ情報を共有します。
+
+親はまず独立した2タスク程度に分け、同じファイルや共通APIを変更する場合は担当と取り込み順を先に決めます。共有の型・関数を変更するタスクに依存する場合は、その変更を先に取り込み、後続のworktreeを作ります。
+
+### 作成と割り当て
+
+以下は親のチェックアウトのルートで実行します。`task-name` は未使用の作業名へ置き換えます。親の追跡ファイルの変更を先にコミットし、子へ渡す基点を確定してください。未コミットの編集は新しいworktreeへ引き継がれません。
+
+```sh
+git status --short
+git worktree list
+mkdir -p task
+git worktree add -b task/task-name task/task-name HEAD
+git -C task/task-name rev-parse --show-toplevel
+git -C task/task-name rev-parse HEAD
+```
+
+最後の2コマンドで得た絶対パスと基点コミットを、目的・担当ファイル・共有インターフェース・完了条件・必要な検証とともにサブエージェントへ渡します。子が使うコマンドの作業ディレクトリと編集先を、そのworktreeに固定します。worktreeの作成だけでエージェントの作業場所が切り替わるわけではありません。同じブランチを親と子で同時にcheckoutしません。
+
+親は `work/TASKS.md` に作業名、パス、ブランチ、基点、担当、変更範囲、状態、結果のコミットIDを記録します。これは並列作業を始めるときに作るローカル記録です。子が必要とする引き継ぎ情報は親が渡し、全体の `work/` を複製・共有しません。
+
+子は担当worktreeのルートから既存のAGENTS・開発文書を読み、必要な検証に合わせて `npm ci` やビルドを実行します。`node_modules/`・`dist/`・`artifacts/` は各worktreeで管理し、親の生成物を上書きしません。各自の `work/WORKLOG.md` に理由と結果を残し、検証後にスコープ付きConventional Commitを作ります。
+
+Electron/SwiftShaderの検査と性能計測は、worktree間でもCPU/GPUを共有します。親へ実行の開始・終了を連絡して順番に実行し、終了コードとログの場所を返します。プレビューサーバーを並べる場合は `SONATA_PORT` を分けます。
+
+### レビューと統合
+
+子は変更内容、コミットID、検証結果、残課題を親へ返します。親は担当範囲と差分を確認し、自身の統合先ブランチへ一つずつ取り込みます。以下も親のチェックアウトのルートで実行し、作業ツリーがクリーンであることを確認してからマージします。
+
+```sh
+git status --short
+git log --oneline HEAD..task/task-name
+git diff HEAD...task/task-name
+git merge --ff -m "chore(worktree): integrate task-name" task/task-name
+```
+
+fast-forwardできる場合は既存コミットを保ち、分岐している場合は上記のスコープ付きメッセージでマージコミットを作ります。競合は親が担当者と調整して解消し、統合後の変更範囲に必要な検証を行います。各タスクの検証成功と、統合後の成功は分けて記録します。pushはユーザーから明示的に依頼された場合だけ親が実行します。
+
+### 片付け
+
+子と関連プロセスの終了後、親が必要な `work/` の記録や `artifacts/` を回収し、全体のWORKLOGへ結果をまとめます。継続して必要な判断は `docs/` に反映します。無視されたファイルも含めて確認し、残したい情報があるworktreeは保持します。
+
+```sh
+git -C task/task-name status --short --ignored
+git merge-base --is-ancestor task/task-name HEAD &&
+  git worktree remove task/task-name &&
+  git branch -d task/task-name
+git worktree list
+```
+
+取り込みの確認が失敗した場合や、削除をGitが拒否した場合は内容を調べます。`--force`で消さず、未コミットの変更と必要な記録を保存してから再実行します。空の `task/` は次の作業用に残せます。
+
 ## 境界
 
 `src/` は JavaScript 6個・CSS 3個・HTML 1個にまとめます。各ファイルの責務と状態の所有者は [ソースの構造](architecture.md) を参照してください。
