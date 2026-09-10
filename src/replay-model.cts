@@ -241,7 +241,7 @@ function sampleTopDown(data:TopDownData|null|undefined,time:number) {
     // 主表示が未確定・不明のままにならないようにする。
     const ranked=Object.entries({active:shares.retiring+shares.inFlight,badSpeculation:shares.badSpeculation,
         frontend:shares.frontend,backend:shares.backend,unresolved:shares.unresolved}).sort((a,b)=>b[1]-a[1]);
-    const dominant=Math.abs(ranked[0][1]-ranked[1][1])<1e-9?"mixed":ranked[0][0] as BoundCategory;
+    const dominant:BoundCategory|"mixed"=Math.abs(ranked[0][1]-ranked[1][1])<1e-9?"mixed":ranked[0][0] as BoundCategory;
     return {available:true as const,firstCycle:data.firstCycle+first,lastCycle:data.firstCycle+end,
         cycles:end-first,totalSlots:total,counts,shares,dominant,dominantShare:ranked[0][1]};
 }
