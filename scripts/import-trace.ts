@@ -104,6 +104,46 @@ export function getOps(trace: ParsedTrace): Readonly<Op>[] {
     return ops;
 }
 
+// Store Tick は実行完了や retire と別の観測値。既存のステージ・終了時刻には混ぜない。
+// parser が保持した fetch tick と cycle の組から校正し、未観測の書込みを補完しない。
+export function getGem5StoreCompletions(
+    source: Pick<TraceSource, "parser">,
+    ops: readonly Readonly<Pick<Op, "id" | "labelName" | "labelDetail" | "fetchedCycle" | "retired" | "flush">>[]
+): [number, number][] {
+    if (source.parser !== "gem5") return [];
+    const calibration = ops.flatMap((op) => {
+        const fetch = /^Fetched Tick: (\d+)$/m.exec(op.labelDetail);
+        return fetch ? [{ tick: Number(fetch[1]), cycle: op.fetchedCycle }] : [];
+    });
+    const first = calibration[0];
+    const second = calibration.find((entry) => entry.cycle !== first?.cycle);
+    if (!first || !second) return [];
+    const ticksPerCycle = (second.tick - first.tick) / (second.cycle - first.cycle);
+    const cycleAt = (tick: number) => first.cycle + (tick - first.tick) / ticksPerCycle;
+    if (
+        !Number.isFinite(ticksPerCycle) ||
+        ticksPerCycle <= 0 ||
+        calibration.some(({ tick, cycle }) => !Number.isSafeInteger(tick) || Math.abs(cycleAt(tick) - cycle) > 1e-6)
+    )
+        return [];
+    return ops.flatMap((op) => {
+        if (!op.retired || op.flush) return [];
+        const mnemonic = op.labelName
+            .replace(/^(?:0x)?[0-9a-f]+:\s*/i, "")
+            .trim()
+            .replace(/^[A-Z0-9_]+\s*:\s*/, "")
+            .split(/\s+/)[0]
+            .toLowerCase();
+        // ARM の通常 store と x86 の store micro-op。排他的 store や RMW は含めない。
+        if (!/^(?:st|str[bh]?|stur[bh]?|stp|stnp|stlr[bh]?)$/.test(mnemonic)) return [];
+        const store = /^Store Tick: (\d+)$/m.exec(op.labelDetail);
+        const tick = store ? Number(store[1]) : 0;
+        if (!Number.isSafeInteger(tick) || tick <= 0) return [];
+        const cycle = cycleAt(tick);
+        return Number.isFinite(cycle) && cycle >= op.fetchedCycle ? [[op.id, cycle] as [number, number]] : [];
+    });
+}
+
 // O3PipeViewのretire:0にはsquash時刻がない。詳細ログが併記されている場合は
 // [sn:N]を持つsquash行から実時刻を回収し、なければ同じ連続列の最終観測時刻を使う。
 export function getGem5FlushCycles(source: TraceSource, ops: readonly Readonly<Op>[]): ReadonlyMap<number, number> {
@@ -797,6 +837,8 @@ export async function buildSample(source: TraceSource) {
             ? readGem5Registers(source.fileName, allOps, firstCycle, lastCycle, source.prefixBytes)
             : configuredGem5Registers();
     }
+    const sampledIDs = new Set(sampleOps.map((op) => op.id));
+    const storeCompletions = getGem5StoreCompletions(source, allOps).filter(([id]) => sampledIDs.has(id));
     const sample = {
         key: source.key,
         label: source.label,
@@ -811,6 +853,7 @@ export async function buildSample(source: TraceSource) {
         initialCycle,
         ...(source.includeTopDown ? { topDown } : {}),
         ...(source.includeEvidence ? { evidence } : {}),
+        ...(storeCompletions.length ? { storeCompletions } : {}),
         fetchWidth: Math.max(...fetchCounts.values()),
         retireWidth: Math.max(...retireCounts.values()),
         structure: {
