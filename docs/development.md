@@ -68,11 +68,12 @@ git worktree list
 
 ## 境界
 
-現在の `src/` は TypeScript 6個・CSS 3個・HTML 1個です。ファイル数は固定せず、責務と変更のまとまりに応じて見直します。各ファイルの責務と状態の所有者は [ソースの構造](architecture.md) を参照してください。
+現在の `src/` は TypeScript 8個・CSS 3個・HTML 1個です。ファイル数は固定せず、責務と変更のまとまりに応じて見直します。各ファイルの責務と状態の所有者は [ソースの構造](architecture.md) を参照してください。
 
-- `src/sonata.cts`: 起動、再生時計、入力・カメラ、DOM と診断 API。
+- `src/sonata.cts`: 起動、再生時計、共通操作、DOM と診断 API。
+- `src/camera.cts`: カメラの状態・投影とマウス / タッチ操作。GPU 資源から独立。
 - `src/replay-model.cts` / `src/geometry.cts`: トレース準備と再生状態、経路・回転・接地。DOM / GPU から独立して検査可能。
-- `src/scene.cts` / `src/activity.cts` / `src/renderer.cts`: 固定シーン、動的表示、WebGL 資源・影・シェーダーと描画。
+- `src/scene.cts` / `src/activity.cts` / `src/renderer.cts`: 固定シーン、動的表示、WebGL 資源・影と描画。材質の GLSL は `src/shaders.cts`。
 - `src/index.html` / `src/sonata.css` / `src/scene.css` / `src/appearance.css`: 画面の骨格、共通 UI、シーン、画面サイズと配色の上書き。CSS の適用順は HTML の link 順。
 - `scripts/import-trace.ts` と関連モジュール: 元ログからデモ用の小さなデータを抽出。
 - `vendor/konata-core/`: 抽出にだけ使う解析器の固定スナップショット。
@@ -88,7 +89,7 @@ npm run format:check
 
 `src/` と自作の `scripts/` を、開発依存に固定した Prettier で整形します。設定は `.prettierrc.json` の4スペース・行幅120文字を目安とし、長い文字列やHTMLの空白の意味を保つために例外を許容します。文・型の項目・長い引数列を適切に改行し、行数を減らすために詰め直しません。データ・vendor・ライセンス原文・生成物・作業用worktreeは整形対象外です。
 
-文字列内のスクリプトやGLSLは自動整形の対象外です。GLSLを編集するときも文ごとの改行と字下げを保ち、`#version`・補間・演算子の意味を変えないようにします。HTMLやCSSの整形は空白の意味が変わり得るため、描画検査も行います。フォーマッターは通常ビルドには使いません。
+文字列内のスクリプトやGLSLは自動整形の対象外です。GLSLを編集するときも文ごとの改行と字下げを保ち、`#version`・補間・演算子の意味を変えないようにします。HTMLやCSSの整形は空白の意味が変わり得るため、描画検査も行います。CI は `npm run format:check` で整形を確認します。フォーマッターは通常ビルドには使いません。
 
 ## ビルド
 
@@ -111,7 +112,7 @@ npm ci
 npm run typecheck
 ```
 
-`src/` の6本の `.cts` をすべて `tsconfig.json` の `strict` と `noEmit` で検査します。再生モデル・経路計算から UI・固定シーン・動的表示・GPU への型の受け渡しも対象です。デモ抽出スクリプトと vendor はこの型検査の対象外です。型のためだけに `src/` のファイルを増やさず、共有型は所有者のモジュールから公開します。
+`src/` の全 `.cts` と画面検査の `scripts/check-browser.cts` / `scripts/browser-test.cts` を `tsconfig.json` の `strict` と `noEmit` で検査します。再生モデル・経路計算から UI・固定シーン・動的表示・GPU への型の受け渡しも対象です。デモ抽出スクリプトと vendor はこの型検査の対象外です。型のためだけに `src/` のファイルを増やさず、共有型は所有者のモジュールから公開します。
 
 型検査用の TypeScript と Node の型定義は開発依存としてバージョンを固定します。通常ビルドはこれらを読み込みません。型変換だけでは型の正しさを検査できないため、CI は `npm run typecheck` と実行時の検証を別々に実施します。`scripts/check-types.cts` は誤った引数型や null の見落としを拒否することも確認し、型が `any` に落ちた場合に検出できるようにします。未生成の GPU 資源、Blocks の材質設定、経路計算で保持すべき命令・ステージ情報も型の回帰検査に含めます。
 
@@ -121,7 +122,7 @@ npm run typecheck
 
 `npm test` は再生モデルの整合性、命令の回転計算、命令の接地、ビルドの独立性を検査します。回転の検査は `scripts/check-piece-motion.cjs` にあり、方向・距離・曲がり角・待機・逆戻りと、再生の細かさやシーク順によらず同じ姿勢になることを確認します。ビルド検査は、必要なソースだけを別の一時ディレクトリにコピーし、`node_modules` や Konata のチェックアウトなしで同一 HTML を作れることを確認します。デモの内容、UTF-8、外部スクリプトの不在、vendor のハッシュも確認します。
 
-`scripts/check-scene.cjs` は全5デモの配置と命令経路を DOM / GPU なしで準備し、別のインスタンスへの状態混入と元データの変更を検出します。`scripts/check-bundle.cjs` は独立した JavaScript 環境で相対パス、変数スコープ、一度だけの実行、循環参照、不正な参照の拒否を確認します。どちらも `npm test` に含まれます。
+`scripts/check-scene.cjs` は全5デモの配置と命令経路を DOM / GPU なしで準備し、別のインスタンスへの状態混入と元データの変更を検出します。未読込み・空の一覧・読込み失敗時の状態保持と、再読込み後も配置が同じ参照を使えることも確認します。`scripts/check-bundle.cjs` は独立した JavaScript 環境で相対パス、変数スコープ、一度だけの実行、循環参照、不正な参照の拒否を確認します。`scripts/check-browser-test.cjs` はページ内関数の引数・Promise・例外の受け渡しと、フレーム待機・期限超過時の診断を別のJavaScript実行環境で確認します。いずれも `npm test` に含まれます。
 
 Node の推奨バージョンは `.nvmrc` に固定し、セキュリティ修正版へ更新します。`npm run test:server` はローカルでサーバーを起動し、GET / HEAD、ソースの非公開、未対応メソッドと不正な URL の拒否、異常なリクエスト後も配信が継続することを確認します。
 
@@ -131,7 +132,7 @@ Node の推奨バージョンは `.nvmrc` に固定し、セキュリティ修�
 
 モバイルは DPR 2 とタッチイベントを使い、320 × 568、390 × 844、430 × 932、932 × 430 で検査します。ピンチ、2本指の移動、指を離した後の回転、キャンセル、Fit、設定パネル、横向きからの復帰を含みます。実機 Safari / Chrome の検査を置き換えるものではありません。
 
-ブラウザの回帰検査は `scripts/check-browser.cjs` にまとめ、`npm run test:render` と CI に含めています。個別に実行する場合は `npm run test:browser` を使います。
+ブラウザの回帰検査は `scripts/check-browser.cts` にまとめ、`npm run test:render` と CI に含めています。個別に実行する場合は `npm run test:browser` を使います。ページ内で実行する操作も TypeScript の関数として記述し、診断 API の名前や引数の変更を型検査で検出します。検査用モジュールは Electron 側で Node 標準の型除去を使って読み込み、製品 HTML には含めません。共通の待機処理は `scripts/browser-test.cts` が担当し、検査ごとの期限・収束条件・失敗時の診断は呼び出し側で指定します。
 
 - Electron の入力イベントで、矢印・Space・Cinema・Escape と、トレースの先頭・末尾の境界を検査します。
 - 右ドラッグ・左ドラッグ・ホイールの実入力でズームと回転の分離を確認し、ズームボタン・ピンチの拡大上限と Fit への復帰も検査します。

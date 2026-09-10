@@ -24,6 +24,8 @@ jobs:
           node-version-file: .nvmrc
           cache: npm
       - run: npm ci
+      - name: Check source formatting
+        run: npm run format:check
       - name: Check TypeScript boundaries
         run: npm run typecheck
       - name: Check replay model and portable HTML build

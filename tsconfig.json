@@ -9,5 +9,10 @@
     "types": ["node"],
     "lib": ["ES2023", "DOM", "DOM.Iterable"]
   },
-  "include": ["src/**/*.cts", "scripts/check-types.cts"]
+  "include": [
+    "src/**/*.cts",
+    "scripts/check-types.cts",
+    "scripts/check-browser.cts",
+    "scripts/browser-test.cts"
+  ]
 }

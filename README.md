@@ -82,13 +82,15 @@ xvfb-run -a -s '-screen 0 1600x1100x24' npm run test:mobile
 ## 構成
 
 ```text
-src/                    編集用の10ファイル
-  sonata.cts            起動・操作・カメラ・DOM 表示
+src/                    編集用のソース
+  sonata.cts            起動・操作・DOM 表示
+  camera.cts            カメラ・投影・ポインター操作
   replay-model.cts      デモ準備・時刻に対応する再生状態
   geometry.cts          座標・経路・回転・接地
   scene.cts             配置・固定部品・外観プリセット
   activity.cts          命令・待機列・レジスタ等の動的表示
-  renderer.cts          GPU 資源・描画順・シェーダー
+  renderer.cts          GPU 資源・描画順
+  shaders.cts           材質ごとの GLSL
   index.html            画面の骨格
   sonata.css            共通 UI・情報パネル
   scene.css             シーン上の表示
