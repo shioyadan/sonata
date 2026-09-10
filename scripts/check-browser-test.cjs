@@ -39,7 +39,7 @@ async function checkBrowserTest() {
         globalThis.document={getElementById(id){return id==='scene'?{getContext(){return {finish(){finished++;}};}}:null;}};`,
         context
     );
-    const { evaluate, settle } = helpers.createBrowserTest({
+    const { evaluate, sampleFrame, settle } = helpers.createBrowserTest({
         webContents: {
             async executeJavaScript(source) {
                 return structuredClone(await vm.runInContext(source, context));
@@ -77,6 +77,70 @@ async function checkBrowserTest() {
     await settle({ finish: true });
     assert.equal(context.frameCallbacks, 4);
     assert.equal(context.finished, 1, "Explicit GPU completion was not awaited");
+
+    const sampledFrames = context.frameCallbacks;
+    let sampleCalls = 0;
+    const sample = await sampleFrame(async () => {
+        sampleCalls++;
+        return evaluate(() => ({ frame: globalThis.frameCallbacks }));
+    });
+    assert.equal(sampleCalls, 1, "A frame sample ran more than once");
+    assert.deepEqual(sample, { frame: sampledFrames }, "Sampling occurred after the next frame");
+    assert.equal(context.frameCallbacks, sampledFrames + 1, "Sampling did not yield one frame");
+    const sampleError = new Error("sample failure");
+    await assert.rejects(
+        sampleFrame(() => Promise.reject(sampleError)),
+        (error) => error === sampleError
+    );
+    assert.equal(context.frameCallbacks, sampledFrames + 1, "A failed sample requested another frame");
+
+    // 採取失敗後の復元が無応答でも、転送検査は元のエラーをそのまま返す。
+    const reviewStageTransfers = require("./check-stage-transfers.cjs");
+    let transferEvaluations = 0;
+    await assert.rejects(
+        bounded(
+            reviewStageTransfers({
+                webContents: {
+                    executeJavaScript() {
+                        transferEvaluations++;
+                        if (transferEvaluations === 1)
+                            return Promise.resolve({ saved: { style: "neon", cycle: 0 }, trace: "test", cases: [] });
+                        if (transferEvaluations === 2) return Promise.reject(sampleError);
+                        return new Promise(() => {});
+                    }
+                }
+            })
+        ),
+        (error) => error === sampleError
+    );
+    assert.equal(transferEvaluations, 2, "A failed transfer sample started another browser evaluation");
+
+    let resolveSample;
+    await assert.rejects(
+        bounded(
+            sampleFrame(
+                () =>
+                    new Promise((resolve) => {
+                        resolveSample = resolve;
+                    }),
+                { timeout: 100 }
+            )
+        ),
+        isTimeout("Frame sample did not complete within 100 ms")
+    );
+    resolveSample("late sample");
+    await helpers.delay(10);
+    assert.equal(context.frameCallbacks, sampledFrames + 1, "A late sample requested another frame");
+    const originalSampleRAF = context.requestAnimationFrame;
+    context.requestAnimationFrame = () => {};
+    try {
+        await assert.rejects(
+            bounded(sampleFrame(() => 1, { timeout: 100 })),
+            isTimeout("Animation frame after sample did not settle within 100 ms")
+        );
+    } finally {
+        context.requestAnimationFrame = originalSampleRAF;
+    }
 
     let attempts = 0;
     await helpers.waitFor(
@@ -260,6 +324,18 @@ async function checkBrowserTest() {
             bounded(staged.settle({ finish: true, timeout: 20 })),
             isTimeout("GPU completion did not settle within 20 ms")
         );
+        await assert.rejects(
+            bounded(
+                staged.sampleFrame(
+                    () => {
+                        elapsed += 15;
+                        return "sample";
+                    },
+                    { timeout: 20 }
+                )
+            ),
+            isTimeout("Animation frame after sample did not settle within 20 ms")
+        );
     } finally {
         performance.now = originalNow;
     }
@@ -274,7 +350,8 @@ async function checkBrowserTest() {
         (async()=>{
             await waitFor(()=>true, 'ready', {timeout:60000});
             await waitFor(()=>{throw Error('expected')}, 'unused', {timeout:60000}).catch(()=>{});
-            const {settle}=createBrowserTest({webContents:{executeJavaScript:()=>Promise.resolve()}});
+            const {sampleFrame,settle}=createBrowserTest({webContents:{executeJavaScript:()=>Promise.resolve()}});
+            await sampleFrame(()=>"sample", {timeout:60000});
             await settle({finish:true, timeout:60000});
             console.log('Deadline timers cleared');
         })().catch(error=>{console.error(error);process.exitCode=1});

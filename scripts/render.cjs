@@ -17,6 +17,8 @@ const screenshots = path.join(root, "artifacts/screenshots");
 fs.mkdirSync(screenshots, { recursive: true });
 const sourceEntry = process.env.SONATA_HTML ? path.resolve(process.env.SONATA_HTML) : require("./build.cjs").build();
 const isolated = fs.mkdtempSync(path.join(os.tmpdir(), "sonata-offline-"));
+// ローカルでもCIと同じく、前回のGPUキャッシュや設定に依存しない初期状態から検査する。
+app.setPath("userData", path.join(isolated, "profile"));
 const entry = path.join(isolated, "sonata.html");
 fs.copyFileSync(sourceEntry, entry);
 const unexpectedRequests = [];
@@ -49,13 +51,7 @@ app.whenReady()
             }));
             const samples = [];
             for (let cycle = firstCycle; cycle <= lastCycle; cycle++) {
-                await waitUntil(async () => {
-                    samples.push(await sample(cycle));
-                    await browserTest.evaluate(
-                        () => new Promise((resolve) => requestAnimationFrame(() => resolve(true)))
-                    );
-                    return true;
-                }, `Trace scan frame did not settle at cycle ${cycle}`);
+                samples.push(await browserTest.sampleFrame(() => sample(cycle)));
             }
             return { firstCycle, samples };
         };

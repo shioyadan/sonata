@@ -6,7 +6,7 @@ const { createBrowserTest, waitFor: waitUntil, delay } = require("./load-test.cj
 
 module.exports = async function reviewStyles(window, entry, screenshots) {
     const js = (source) => window.webContents.executeJavaScript(source);
-    const { settle } = createBrowserTest(window);
+    const { sampleFrame, settle } = createBrowserTest(window);
     const waitFor = (source, message, timeout = 10000) =>
         waitUntil(() => js(source), message, {
             timeout,
@@ -90,11 +90,14 @@ module.exports = async function reviewStyles(window, entry, screenshots) {
             spacing[name] = minimum;
         }
         for (const cycle of checkpoints) {
-            const result = await js(`(()=>{
+            const result = await sampleFrame(() =>
+                js(`(()=>{
                 reviewStyle('neon');sonata.captureAt(${cycle});const before=reviewState(),trace=sonata.trace;
                 reviewStyle('blocks');const blocks=reviewState(),pieces=sonata.renderer.pieceVertices,shape=sonata.renderer.instructionShape,radii=[...new Set(sonata.pieces.map(p=>p.radius))];
-                reviewStyle('neon');return {before,blocks,shape,after:reviewState(),sameTrace:trace===sonata.trace,pieces,radii,error:sonata.renderer.error};
-            })()`);
+                reviewStyle('neon');return {before,blocks,shape,after:reviewState(),sameTrace:trace===sonata.trace,pieces,radii,error:sonata.renderer.error,contextLost:document.getElementById('scene').getContext('webgl2').isContextLost()};
+            })()`)
+            );
+            assert.equal(result.contextLost, false, `${key} @ ${cycle}: graphics context lost during style switching`);
             if (fixedRadius === undefined) fixedRadius = result.radii[0];
             assert.deepEqual(
                 result.radii,

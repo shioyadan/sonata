@@ -167,6 +167,8 @@ xvfb-run -a -s '-screen 0 1600x1100x24' npm run test:mobile
 xvfb-run -a -s '-screen 0 1600x1100x24' npm run test:browser
 ```
 
+描画検査は一時的なブラウザプロファイルを使い、ローカルでもCIと同じ初期状態から始めます。大量の時刻やスタイルを続けて検査するときは、`createBrowserTest(window).sampleFrame(() => evaluate(...))` で状態の採取と1フレームの待機を行います。戻り値は待機前に採取した状態で、採取と待機は合計10秒（必要なら `timeout`）に制限されます。
+
 画像は `artifacts/screenshots/` に保存します。SwiftShader による CPU 描画で検証するため、記録される fps は実 GPU の速度と異なります。
 
 既存の HTML 自体を検査したい場合は、`SONATA_HTML=/path/to/sonata.html` を指定します。通常は毎回ビルドするので、古い生成物を誤って検査しません。`npm run capture:flush` はビルド済み HTML の通常再生から巻き戻し・分解中の画像を取得します。

@@ -111,6 +111,19 @@ function createBrowserTest(window: Pick<BrowserWindow, "webContents">) {
         const source = `(${fn.toString()})((${pageContext.toString()})(),...${JSON.stringify(args)})`;
         return window.webContents.executeJavaScript(source) as Promise<Awaited<Result>>;
     }
+    // 採取した状態を保持し、次の描画へ制御を返してから次のサンプルへ進む。
+    // 採取と1フレームの待機で同じ期限を共有し、期限後は後続の評価を始めない。
+    async function sampleFrame<T>(sample: () => T | Promise<T>, { timeout = 10000 } = {}) {
+        const deadline = performance.now() + timeout;
+        const result = await beforeDeadline(sample, deadline);
+        if (result === expired) assert.fail(`Frame sample did not complete within ${timeout} ms`);
+        const frame = await beforeDeadline(
+            () => evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => resolve()))),
+            deadline
+        );
+        if (frame === expired) assert.fail(`Animation frame after sample did not settle within ${timeout} ms`);
+        return result;
+    }
     async function settle({ finish = false, timeout = 10000 }: { finish?: boolean; timeout?: number } = {}) {
         const deadline = performance.now() + timeout;
         const frames = await beforeDeadline(
@@ -127,7 +140,7 @@ function createBrowserTest(window: Pick<BrowserWindow, "webContents">) {
         if (finish && (await beforeDeadline(() => evaluate(({ gl }) => gl.finish()), deadline)) === expired)
             assert.fail(`GPU completion did not settle within ${timeout} ms`);
     }
-    return { evaluate, settle };
+    return { evaluate, sampleFrame, settle };
 }
 
 // 新しいページの起動前に行う故障注入にも、型検査済みの関数を使う。
