@@ -37,6 +37,7 @@ interface SceneNode {
     names?: string[];
     pipeCount?: number;
     compact?: boolean;
+    latency?: number;
     matrixDepth?: number;
     mapWords?: number;
     instructionSlots?: number;
@@ -188,14 +189,15 @@ function createScene({ gpu, replay, session }: SceneOptions) {
         // 並列幅はモジュールのラベルと同じ情報から決める。抜粋内で実際に使う
         // 管路はこれより少ない場合があるため、観測ピークは別の診断値に保持する。
         const execution = scene.nodes.get(from)?.pipeCount ?? scene.nodes.get(to)?.pipeCount;
-        const memoryPath = from === "memory-wait" || to === "memory-wait";
+        const memoryPath = [from, to].some((id) => id === "memory-wait" || id === "store-wait");
         const retiring = from === "commit" || to === "commit";
         const count =
             from === "issue" && to === "register-read"
-                ? replay.trace.structure.executionNodes.reduce((sum, n) => sum + n.pipeCount, 0)
+                ? replay.memory.executionNodes.reduce((sum, n) => sum + n.pipeCount, 0)
                 : (execution ??
                   (memoryPath
-                      ? scene.nodes.get("exec-memory")!.pipeCount!
+                      ? (scene.nodes.get(from === "store-wait" || to === "store-wait" ? "exec-store" : "exec-load")
+                            ?.pipeCount ?? 1)
                       : retiring
                         ? replay.trace.retireWidth
                         : to === "issue"
@@ -321,10 +323,21 @@ function createScene({ gpu, replay, session }: SceneOptions) {
         ];
     }
 
-    function registerReadPort(op: Pick<sonataReplay.Operation, "execution" | "index">): Vector {
+    function memoryWaitPosition(id: string, slot: number): Vector {
+        const n = scene.nodes.get(id)!;
+        const columns = 3,
+            rows = Math.max(1, Math.floor((n.d - 0.4) / 0.3));
+        return [
+            n.x + ((slot % columns) - 1) * 0.3,
+            n.h + 0.34,
+            n.z + (Math.floor(slot / columns) - (rows - 1) / 2) * 0.3
+        ];
+    }
+
+    function registerReadPort(op: Pick<sonataReplay.Operation, "execution" | "index" | "pipeLane">): Vector {
         const n = scene.nodes.get("register-read")!,
             execution = scene.nodes.get(op.execution)!,
-            lane = executionLane(execution, op.index % execution.pipeCount!);
+            lane = executionLane(execution, (op.pipeLane ?? op.index) % execution.pipeCount!);
         return [n.x + n.w * 0.5 + 0.03, lane.inlet[1], lane.inlet[2]];
     }
 
@@ -376,7 +389,7 @@ function createScene({ gpu, replay, session }: SceneOptions) {
             scene.connections.find((c) => c.from === "issue" && c.to === op.execution) ??
             scene.connections.find((c) => c.from === "issue")!;
         const unit = scene.nodes.get(op.execution)!,
-            z = executionLane(unit, op.index % unit.pipeCount!).inlet[2];
+            z = executionLane(unit, (op.pipeLane ?? op.index) % unit.pipeCount!).inlet[2];
         const lane =
             connection.lanes.find((l) => l.target[2] === z) ?? connection.lanes[op.index % connection.lanes.length];
         const signal: Vector[] =
@@ -460,41 +473,83 @@ function createScene({ gpu, replay, session }: SceneOptions) {
         // 駒を縮めずに置けるよう、待機列の行間と筐体の奥行きを確保する。
         scheduler.matrixDepth = Math.max(scheduler.w * 0.68, replay.trace.structure.queueCapacity * 0.14);
         scheduler.d = Math.max(scheduler.d, scheduler.matrixDepth / 0.84);
-        for (const n of replay.trace.structure.executionNodes) {
-            const z = { integer: -4.2, branch: 0, memory: 4.2 }[n.kind];
-            const compact = n.kind !== "memory";
+        let executionEdge = -5.725;
+        for (const n of replay.memory.executionNodes) {
+            const memory = n.kind === "memory";
+            const latency = n.latency;
+            const width = 0.78 + 1.17 * latency;
+            const depth = memory ? Math.max(1.25, n.pipeCount * 0.38 + 0.65) : 3.05;
+            const z =
+                n.id === "exec-integer"
+                    ? -4.2
+                    : Math.max(n.id === "exec-branch" ? 0 : 2.7, executionEdge + 0.4 + depth / 2);
+            executionEdge = z + depth / 2;
+            const label = {
+                "exec-integer": "INTEGER",
+                "exec-branch": "BRANCH",
+                "exec-load": "LOAD",
+                "exec-store": "STORE",
+                "exec-memory": "ATOMIC"
+            }[n.id]!;
+            const known =
+                n.id === "exec-load"
+                    ? replay.memory.minimum.load
+                    : n.id === "exec-store"
+                      ? replay.memory.minimum.store
+                      : null;
             const node = makeNode(
                 n.id,
-                { integer: "INTEGER", branch: "BRANCH", memory: "LOAD / STORE" }[n.kind],
-                hasRegisters ? 2.1 : 0.9,
+                label,
+                (hasRegisters ? 1.515 : 0.315) + (width - 0.78) / 2,
                 z,
-                compact ? 1.95 : 3.65,
-                3.05,
+                width,
+                depth,
                 0.65,
                 session.style.palette[n.kind],
-                `${n.pipeCount} ${n.pipeCount === 1 ? "PIPE" : "PIPES"} · →`
+                memory
+                    ? `${known == null ? "LATENCY ?" : `${known} CYC MIN`} · ${n.pipeCount} ROUTES / ${n.sharedPipes} SHARED`
+                    : `${n.pipeCount} ${n.pipeCount === 1 ? "PIPE" : "PIPES"} · →`
             );
             node.pipeCount = n.pipeCount;
-            node.compact = compact;
+            node.compact = latency <= 1;
+            node.latency = latency;
         }
-        if (replay.trace.structure.memoryWait)
+        for (const [id, execution, label, slots] of [
+            ["memory-wait", "exec-load", "LOAD WAIT", replay.memory.waitSlots.load],
+            ["store-wait", "exec-store", "STORE WAIT", replay.memory.waitSlots.store]
+        ] as const) {
+            const pipe = scene.nodes.get(execution);
+            if (!pipe || (!slots && id === "memory-wait")) continue;
+            const width = 1.15,
+                depth = Math.max(1.25, Math.ceil(Math.max(1, slots) / 3) * 0.3 + 0.4);
             makeNode(
-                "memory-wait",
-                "MEMORY WAIT",
-                hasRegisters ? 4.8 : 4.1,
-                5.5,
-                hasRegisters ? 1.3 : 1.55,
-                1.6,
+                id,
+                label,
+                pipe.x + pipe.w / 2 + width / 2 + 0.24,
+                pipe.z,
+                width,
+                depth,
                 0.5,
                 session.style.palette.memory,
-                "OBSERVED WAIT"
+                id === "store-wait"
+                    ? replay.trace.storeCompletions?.length
+                        ? "RINGS: POST-COMMIT WRITES"
+                        : "WRITE COMPLETION NOT LOGGED"
+                    : "INFERRED RESPONSE WAIT"
             );
+        }
         // 左端を保って右へ広げ、メモリ待ちからの接続線が逆向きになるのを避ける。
         const robWidth = replay.trace.structure.robCapacity > 96 ? 3.0 : 2.45;
+        const robLeft = Math.max(
+            5.575,
+            ...[...scene.nodes.values()]
+                .filter((n) => n.id.startsWith("exec") || n.id === "memory-wait" || n.id === "store-wait")
+                .map((n) => n.x + n.w / 2 + 0.3)
+        );
         makeNode(
             "rob",
             replay.trace.machineOrder === "in-order" ? "COMPLETION FIFO" : "REORDER BUFFER",
-            6.8 + (robWidth - 2.45) / 2,
+            robLeft + robWidth / 2,
             0,
             robWidth,
             8.0,
@@ -505,7 +560,7 @@ function createScene({ gpu, replay, session }: SceneOptions) {
         makeNode(
             "commit",
             "COMMIT",
-            11.1,
+            Math.max(11.1, robLeft + robWidth + 1.6),
             0,
             2.15,
             3.0,
@@ -530,13 +585,18 @@ function createScene({ gpu, replay, session }: SceneOptions) {
         front.slice(1).forEach((n, i) => addConnection(front[i].id, n.id, scene.nodes.get(front[i].id)!.color));
         addConnection(front.at(-1)!.id, "issue", session.style.palette.integer);
         if (hasRegisters) addConnection("issue", "register-read", session.style.palette.blue);
-        for (const n of replay.trace.structure.executionNodes) {
+        for (const n of replay.memory.executionNodes) {
             addConnection(hasRegisters ? "register-read" : "issue", n.id, session.style.palette[n.kind]);
             addConnection(n.id, "rob", session.style.palette[n.kind]);
         }
-        if (scene.nodes.has("memory-wait")) {
-            addConnection("exec-memory", "memory-wait", session.style.palette.memory);
-            addConnection("memory-wait", "rob", session.style.palette.memory);
+        for (const [execution, wait] of [
+            ["exec-load", "memory-wait"],
+            ["exec-store", "store-wait"]
+        ]) {
+            if (!scene.nodes.has(wait)) continue;
+            addConnection(execution, wait, session.style.palette.memory);
+            if (wait === "memory-wait" || replay.ops.some((op) => op.stages.some((s) => s.node === wait)))
+                addConnection(wait, "rob", session.style.palette.memory);
         }
         addConnection("rob", "commit", session.style.palette.integer);
         addConnection("input", front[0].id, session.style.palette.integer);
@@ -1235,8 +1295,9 @@ function createScene({ gpu, replay, session }: SceneOptions) {
             first
         ];
         for (let i = 0; i < wrap.length - 1; i++) line(lines, wrap[i], wrap[i + 1], session.style.palette.blue, 0.22);
-        if (scene.nodes.has("memory-wait")) {
-            const n = scene.nodes.get("memory-wait")!,
+        for (const id of ["memory-wait"]) {
+            if (!scene.nodes.has(id)) continue;
+            const n = scene.nodes.get(id)!,
                 source: Vector = [n.x, n.h + 0.34, n.z];
             for (let i = 0; i < 80; i++)
                 line(
@@ -1303,6 +1364,8 @@ function createScene({ gpu, replay, session }: SceneOptions) {
         for (const n of scene.nodes.values()) {
             const el = document.createElement("div");
             el.className = `stage-label${n.id.startsWith("front") ? " front-label" : ""}${n.id.startsWith("exec") ? " execution-label" : ""}`;
+            if (["exec-load", "exec-store", "memory-wait", "store-wait"].includes(n.id))
+                el.classList.add("memory-label");
             el.style.setProperty("--stage-color", rgb(n.color));
             const index = document.createElement("span");
             index.className = "stage-index";
@@ -1360,6 +1423,7 @@ function createScene({ gpu, replay, session }: SceneOptions) {
         physicalColumns,
         physicalTagPosition,
         registerReadPort,
+        memoryWaitPosition,
         robCell,
         commitSlot,
         wakeBusEntry,

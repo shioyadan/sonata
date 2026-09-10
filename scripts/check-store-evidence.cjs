@@ -5,9 +5,11 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
-const { parseTrace, getOps, getGem5StoreCompletions, buildSample } = require("./import-trace.ts");
+const { parseTrace, getOps, getGem5StoreCompletions, buildSample, instructionKind } = require("./import-trace.ts");
 
 async function main() {
+    assert.equal(instructionKind("sbfm x0, x1, #0, #7"), "integer");
+    assert.equal(instructionKind("sb x1, 0(x2)"), "memory");
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "sonata-store-evidence-"));
     let trace;
     try {

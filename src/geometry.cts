@@ -10,10 +10,12 @@ interface PathStage {
     start: number;
     end: number;
     displaySlot?: number;
+    entryCycles?: number;
 }
 interface PathOperation {
     id: number;
     index: number;
+    pipeLane?: number;
     kind: string;
     execution: string;
     fetch: number;
@@ -25,7 +27,6 @@ interface PathOperation {
     completion?: number | null;
     issueSlot?: number;
     robSlot?: number;
-    memorySlot?: number;
     commitSlot?: number;
 }
 interface PathNode {
@@ -36,6 +37,7 @@ interface PathNode {
     w: number;
     d: number;
     pipeCount?: number;
+    latency?: number;
     names?: string[];
 }
 interface Lane {
@@ -47,6 +49,7 @@ interface PathScene {
     connections: { from: string; to: string; lanes: { target: Vec3 }[] }[];
     matrixPosition(index: number): Vec3;
     registerReadPort(op: PathOperation): Vec3;
+    memoryWaitPosition(id: string, slot: number): Vec3;
     robCell(index: number, height: number): Vec3;
     executionLane(node: PathNode, index: number): Lane;
     renameInstructionPosition(index: number): Vec3;
@@ -457,7 +460,8 @@ function stageAt<T extends PathOperation>(op: T, t: number): T["stages"][number]
     }
     return last;
 }
-function stageTransition(stage: Pick<PathStage, "node" | "start" | "end">) {
+function stageTransition(stage: Pick<PathStage, "node" | "start" | "end" | "entryCycles">) {
+    if (stage.entryCycles != null) return stage.entryCycles;
     const duration = Math.max(0.001, stage.end - stage.start);
     return stage.node.startsWith("exec") ? Math.min(0.35, duration * 0.22) : Math.min(0.82, Math.max(0.08, duration));
 }
@@ -485,13 +489,13 @@ function createPaths<T extends PathOperation>({
             return [mix(n.x - n.w * 0.44, p[0], progress), p[1], p[2]];
         } else if (n.id === "rob" || (n.id === "commit" && op.robSlot !== undefined)) {
             return scene.robCell(op.robSlot ?? 0, 0.19);
-        } else if (n.id === "memory-wait") {
-            x += (((op.memorySlot ?? 0) % 3) - 1) * 0.3;
-            z += ((Math.floor((op.memorySlot ?? 0) / 3) % 4) - 1.5) * 0.25;
+        } else if (n.id === "memory-wait" || n.id === "store-wait") {
+            return scene.memoryWaitPosition(n.id, stage.displaySlot ?? 0);
         } else if (n.id.startsWith("exec")) {
-            const lane = scene.executionLane(n, op.index % n.pipeCount!),
+            const lane = scene.executionLane(n, (op.pipeLane ?? op.index) % n.pipeCount!),
                 arrival = stageTransition(stage);
-            const progress = smooth((t - stage.start - arrival) / Math.max(0.001, stage.end - stage.start - arrival));
+            const travel = stage.entryCycles != null ? (n.latency ?? 1) * 0.78 : stage.end - stage.start - arrival;
+            const progress = clamp((t - stage.start - arrival) / Math.max(0.001, travel));
             return lane.inlet.map((v, i) => mix(v, lane.outlet[i], progress)) as Vec3;
         } else if (n.names?.includes("Rn")) {
             return scene.renameInstructionPosition(stage.displaySlot ?? 0);
@@ -588,7 +592,7 @@ function createPaths<T extends PathOperation>({
         const node = stageAt(op, t)?.node;
         if (node === "register-read") return { state: "reading", brightness: 1.05, size: 25 };
         if (node === "issue") return { state: "waiting", brightness: 0.48, size: 20 };
-        if (node === "memory-wait") return { state: "waiting", brightness: 0.22, size: 14 };
+        if (node === "memory-wait" || node === "store-wait") return { state: "waiting", brightness: 0.22, size: 14 };
         if (node === "rob" || node === "commit") {
             const ready = op.completion != null && t >= op.completion;
             const completion = ready ? 1 - smooth((t - op.completion!) / 0.7) : 0;

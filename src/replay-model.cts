@@ -1,6 +1,7 @@
 "use strict";
 // 記録時刻から再生状態を復元し、同梱デモを配置で使う構造へ準備する。
 import geometry = require("./geometry.cts");
+import memoryModel = require("./memory.cts");
 const { stageTransition } = geometry;
 const feedRows = 24,
     feedLead = 0.7;
@@ -12,11 +13,13 @@ interface StageRange {
     end: number;
     names: string[];
     displaySlot?: number;
+    entryCycles?: number;
 }
 interface Instruction {
     id: number;
     rid: number;
     index: number;
+    pipeLane?: number;
     fetch: number;
     end: number;
     flush: boolean;
@@ -27,11 +30,11 @@ interface Instruction {
     completion: number | null;
     execution: string;
     kind: "integer" | "memory" | "branch";
+    memoryKind?: "load" | "store" | "atomic";
     reads: ReadInterval[];
     sourceRegisters: RegisterSource[];
     issueSlot?: number;
     robSlot?: number;
-    memorySlot?: number;
     commitSlot?: number;
     feedText?: string;
 }
@@ -112,6 +115,7 @@ interface TraceData {
     fetchWidth: number;
     parser: string;
     ops: CompactOperation[];
+    storeCompletions?: [number, number][];
     label: string;
     fileName: string;
     initialCycle: number;
@@ -733,22 +737,10 @@ function createReplay({ samples }: { samples: readonly TraceData[] }) {
 
 // 命令と表示スロットはこの読込み専用の状態に組み立てる。
 function prepareTrace(trace: TraceData): ReplayState {
-    function instructionKind(label: string): Instruction["kind"] {
-        const mnemonic = label
-            .replace(/^(?:0x)?[0-9a-f]+:\s*/i, "")
-            .trim()
-            .replace(/^[A-Z0-9_]+\s*:\s*/, "")
-            .split(/\s+/)[0]
-            .toLowerCase();
-        if (/^(b|bl|br|bx|cbz|cbnz|tbz|tbnz|jal|jalr|jr|ret|wrip)/.test(mnemonic)) return "branch";
-        if (/^(ld|ldr|ldp|lw|lh|lb|sd|st|sw|sh|sb|load|store)/.test(mnemonic)) return "memory";
-        return "integer";
-    }
-
     function allocateSlots(
         start: (op: Instruction) => number | null | undefined,
         end: (op: Instruction) => number | undefined,
-        field: "issueSlot" | "memorySlot"
+        field: "issueSlot"
     ) {
         const ends: (number | undefined)[] = [];
         for (const op of [...ops]
@@ -780,8 +772,15 @@ function prepareTrace(trace: TraceData): ReplayState {
     const ops: Instruction[] = trace.ops.map((t, index) => {
         const [id, rid, fetch, retired, flush, label, source, allocation, issue, completion, execution, flushCycle] = t;
         const end = flush ? (flushCycle ?? retired) : retired;
+        const type = memoryModel.instructionType(label);
+        const kind = type === "integer" || type === "branch" ? type : "memory";
+        const displayExecution = type === "atomic" ? "exec-memory" : `exec-${type}`;
         const stages: StageRange[] = [];
-        for (const [name, node, start, finish] of source) {
+        for (const [name, sourceNode, start, finish] of source) {
+            const node =
+                sourceNode.startsWith("exec") || (sourceNode === "memory-wait" && type !== "load" && type !== "store")
+                    ? displayExecution
+                    : sourceNode;
             if (stages.at(-1)?.node === node) {
                 stages.at(-1)!.end = Math.max(finish, stages.at(-1)!.end);
                 stages.at(-1)!.names.push(name);
@@ -800,8 +799,9 @@ function prepareTrace(trace: TraceData): ReplayState {
             allocation,
             issue,
             completion,
-            execution,
-            kind: instructionKind(label),
+            execution: displayExecution,
+            kind,
+            memoryKind: kind === "memory" ? (type as "load" | "store" | "atomic") : undefined,
             reads:
                 trace.evidence?.registers?.origin === "gem5"
                     ? [
@@ -819,6 +819,7 @@ function prepareTrace(trace: TraceData): ReplayState {
             sourceRegisters: trace.evidence?.scheduling.ops.find((o) => o.id === id)?.sources ?? []
         };
     });
+    const memory = memoryModel.prepareMemory(ops, trace);
     allocateRenameSlots();
     const commitGroups = new Map();
     for (const op of ops.filter((o) => !o.flush).sort((a, b) => a.end - b.end || a.rid - b.rid || a.id - b.id)) {
@@ -862,11 +863,6 @@ function prepareTrace(trace: TraceData): ReplayState {
         : [];
     const robReplay = createRobReplay(ops, trace.structure.robCapacity);
     for (const op of ops) op.robSlot = robReplay.slots.get(op.id);
-    allocateSlots(
-        (o) => o.stages.find((s) => s.node === "memory-wait")?.start,
-        (o) => o.stages.find((s) => s.node === "memory-wait")?.end,
-        "memorySlot"
-    );
     const memoryEvents = memoryCompletions(ops);
     const flushEvents = [
         ...new Set(
@@ -885,6 +881,7 @@ function prepareTrace(trace: TraceData): ReplayState {
     return {
         trace,
         ops,
+        memory,
         commitGroups,
         feedOps,
         fetchGroups,
@@ -903,6 +900,7 @@ function prepareTrace(trace: TraceData): ReplayState {
 interface ReplayState {
     trace: TraceData;
     ops: Instruction[];
+    memory: ReturnType<typeof memoryModel.prepareMemory>;
     flushEvents: number[];
     activity: { active: number; retired: number }[];
     commitGroups: Map<number, Instruction[]>;

@@ -140,7 +140,7 @@ app.whenReady()
             const linkGeometry=links.every(link=>link.lineCount>0
                 &&link.lanes.every(lane=>[...lane.source,...lane.target].every(Number.isFinite)&&lane.target[0]>lane.source[0])
                 &&new Set(link.lanes.map(lane=>JSON.stringify(lane))).size===link.lineCount);
-            const pipeLinkCounts=trace.structure.executionNodes.every(node=>links.filter(l=>l.from===node.id||l.to===node.id).every(link=>{
+            const pipeLinkCounts=sonata.executionNodes.every(node=>links.filter(l=>l.from===node.id||l.to===node.id).every(link=>{
                 return link.lineCount===node.pipeCount&&link.lanes.every((lane,index)=>{
                     const pipe=pipes.find(p=>p.node===node.id&&p.index===index),port=link.from===node.id?lane.source:lane.target;
                     return port[1]===pipe.inlet[1]&&port[2]===pipe.inlet[2];
@@ -156,7 +156,7 @@ app.whenReady()
             }
             const retireLink=links.find(link=>link.from==='rob'&&link.to==='commit');
             const linkCounts=retireLink.peak===Math.max(...retireCounts.values())
-                &&trace.structure.executionNodes.every(node=>{
+                &&sonata.executionNodes.every(node=>{
                     const counts=new Map();for(const op of sonata.ops){
                         const stages=trace.structure.registerRead?op.stages.filter(s=>s.node.startsWith('exec')):[op.stages.find(s=>s.node.startsWith('exec'))];
                         for(const s of stages){
@@ -166,13 +166,13 @@ app.whenReady()
                     }
                     return links.find(link=>link.from===(trace.evidence?.registers?'register-read':'issue')&&link.to===node.id).peak===Math.max(0,...counts.values());
                 });
-            const pipeCount=pipes.length===trace.structure.executionNodes.reduce((sum,n)=>sum+n.pipeCount,0);
+            const pipeCount=pipes.length===sonata.executionNodes.reduce((sum,n)=>sum+n.pipeCount,0);
             const pipeAxes=pipes.every(p=>p.outlet[0]>p.inlet[0] && p.outlet[1]===p.inlet[1] && p.outlet[2]===p.inlet[2]);
-            const pipeMotion=trace.structure.executionNodes.every(node=>{
+            const pipeMotion=sonata.executionNodes.every(node=>{
                 const op=sonata.ops.find(o=>o.stages.some(s=>s.node===node.id && s.start>=trace.firstCycle && s.end<=trace.lastCycle && s.end>s.start));
                 if(!op)return false;
                 const stage=op.stages.find(s=>s.node===node.id && s.start>=trace.firstCycle && s.end<=trace.lastCycle && s.end>s.start);
-                const lane=pipes.find(p=>p.node===node.id && p.index===op.index%node.pipeCount);
+                const lane=pipes.find(p=>p.node===node.id && p.index===(op.pipeLane??op.index)%node.pipeCount);
                 const positions=[.3,.6,.9].map(f=>{
                     sonata.captureAt(stage.start+(stage.end-stage.start)*f);
                     const particle=sonata.particles.find(p=>p.id===op.id);
@@ -182,7 +182,7 @@ app.whenReady()
                     && Math.abs(p[1]-lane.inlet[1])<1e-6 && Math.abs(p[2]-lane.inlet[2])<1e-6)
                     && positions[0][0]<positions[1][0] && positions[1][0]<positions[2][0];
             });
-            const lightContrast=['issue','memory-wait'].every(node=>{
+            const lightContrast=['issue','memory-wait','store-wait'].every(node=>{
                 const op=sonata.ops.find(o=>o.stages.some(s=>s.node===node && s.start>=trace.firstCycle && s.end<=trace.lastCycle && s.end>s.start));
                 if(!op)return true;
                 const stage=op.stages.find(s=>s.node===node && s.start>=trace.firstCycle && s.end<=trace.lastCycle && s.end>s.start);
@@ -1023,6 +1023,7 @@ app.whenReady()
         window.webContents.debugger.detach();
         const browser = await require("./load-test.cjs")("check-browser.cts")(window, entry, screenshots);
         const styles = await require("./check-styles.cjs")(window, entry, screenshots);
+        const memory = await require("./check-memory-render.cjs")(window, screenshots);
         assert.deepEqual(errors, [], `Browser errors: ${errors.join("; ")}`);
         assert.deepEqual(unexpectedRequests, [], "The copied HTML tried to fetch another resource");
         console.log(
@@ -1054,6 +1055,7 @@ app.whenReady()
                     mobile,
                     browser,
                     styles,
+                    memory,
                     errors,
                     standalone: { isolated: true, externalRequests: unexpectedRequests }
                 },

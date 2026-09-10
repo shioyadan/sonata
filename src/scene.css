@@ -264,6 +264,21 @@ h1 > span {
     margin-top: 5px;
 }
 
+.stage-label.memory-label {
+    max-width: 110px;
+    white-space: normal;
+    text-align: center;
+}
+.stage-label.memory-label .stage-index,
+.stage-label.memory-label::after {
+    display: none;
+}
+.stage-label.memory-label small {
+    font-size: 8px;
+    line-height: 1.2;
+    margin-top: 3px;
+}
+
 .stage-label::after {
     content: "";
     display: block;

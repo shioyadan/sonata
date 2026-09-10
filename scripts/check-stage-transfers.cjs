@@ -12,9 +12,11 @@ module.exports = async function reviewStageTransfers(window) {
             for (let i = 1; i < op.stages.length; i++) {
                 const from = op.stages[i - 1],
                     to = op.stages[i];
-                const duration = to.node.startsWith("exec")
-                    ? Math.min(0.35, (to.end - to.start) * 0.22)
-                    : Math.min(0.82, Math.max(0.08, to.end - to.start));
+                const duration =
+                    to.entryCycles ??
+                    (to.node.startsWith("exec")
+                        ? Math.min(0.35, (to.end - to.start) * 0.22)
+                        : Math.min(0.82, Math.max(0.08, to.end - to.start)));
                 const key = from.node + " → " + to.node;
                 if (
                     from.node !== to.node &&

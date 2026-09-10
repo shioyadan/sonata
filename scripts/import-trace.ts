@@ -12,6 +12,7 @@ import { buildCycleNavigatorData, getCycleNavigatorTopDown } from "../vendor/kon
 import { readGem5Registers, configuredGem5Registers } from "./gem5-registers";
 import { buildSchedulingEvidence, readRsdRegisterEvidence } from "./scheduling-evidence";
 import { topDownObservationTimes } from "./top-down";
+import memoryModel = require("../src/memory.cts");
 
 export interface TraceSource {
     readonly key: string;
@@ -224,19 +225,8 @@ function getStageRanges(op: Readonly<Op>, laneID: number): StageRange[] {
 }
 
 export function instructionKind(label: string): InstructionKind {
-    const mnemonic = label
-        .replace(/^(?:0x)?[0-9a-f]+:\s*/i, "")
-        .trim()
-        .replace(/^[A-Z0-9_]+\s*:\s*/, "")
-        .split(/\s+/)[0]
-        .toLowerCase();
-    if (/^(b|bl|br|bx|cbz|cbnz|tbz|tbnz|jal|jalr|jr|ret|wrip)/.test(mnemonic)) {
-        return "branch";
-    }
-    if (/^(ld|ldr|ldp|lw|lh|lb|lbu|lhu|sd|st|sw|sh|sb|load|store)/.test(mnemonic)) {
-        return "memory";
-    }
-    return "integer";
+    const type = memoryModel.instructionType(label);
+    return type === "integer" || type === "branch" ? type : "memory";
 }
 
 function selectWindow(

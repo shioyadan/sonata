@@ -404,16 +404,27 @@ function start(gl: WebGL2RenderingContext) {
     // loadTrace → rebuildWorld → render が設定した状態・要素を参照する。
     function updateLabels(dt = 0) {
         for (const n of scene.nodes.values()) {
-            const side = n.id.startsWith("exec"),
-                below = n.id === "memory-wait" || (n.id === "issue" && n.d > 6);
+            const memoryPipe = n.id === "exec-load" || n.id === "exec-store";
+            const side = n.id.startsWith("exec") && !memoryPipe,
+                below = n.id === "memory-wait" || n.id === "store-wait" || (n.id === "issue" && n.d > 6);
             const p = camera.project(
                 below
                     ? [n.x, n.h, n.z + n.d * 0.7]
-                    : side
-                      ? [n.x + n.w / 2 + 0.5, n.h + 0.6, n.z]
-                      : [n.x, n.h + 0.7, n.z - n.d * 0.52]
+                    : memoryPipe
+                      ? [n.x, n.h + 0.6, n.z]
+                      : side
+                        ? [n.x + n.w / 2 + 0.5, n.h + 0.6, n.z]
+                        : [n.x, n.h + 0.7, n.z - n.d * 0.52]
             );
-            n.element!.style.transform = `translate(${p[0].toFixed(1)}px,${p[1].toFixed(1)}px) translate(${below ? "-50%,8px" : side ? "0,-50%" : "-50%,-100%"})`;
+            // 右下の計測表示に重ならないよう、ストア待機の名前を左へ寄せる。
+            const alignment = below
+                ? n.id === "store-wait"
+                    ? "-90%,8px"
+                    : "-50%,8px"
+                : side
+                  ? "0,-50%"
+                  : "-50%,-100%";
+            n.element!.style.transform = `translate(${p[0].toFixed(1)}px,${p[1].toFixed(1)}px) translate(${alignment})`;
             n.element!.classList.toggle("below-label", below);
             n.element!.style.display = p[2] < 0 ? "none" : "";
         }
@@ -843,6 +854,15 @@ function start(gl: WebGL2RenderingContext) {
                         scene.renameInstructionPosition(slot)
                     )
                 };
+            },
+            get executionNodes() {
+                return replay.memory.executionNodes;
+            },
+            get memoryTiming() {
+                return { minimum: replay.memory.minimum, sharedPipes: replay.memory.sharedPipes };
+            },
+            get pendingStores() {
+                return activity.pendingStores;
             },
             get executionPipes() {
                 return [...scene.nodes.values()]

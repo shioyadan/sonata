@@ -1,6 +1,6 @@
 # ソースの構造
 
-編集用の `src/` は TypeScript 8個、CSS 3個、HTML 1個の計12ファイルです。配布時には `dist/sonata.html` 一つへ結合します。画面の配置・記録値・再生時刻と、外観の材質・照明・合成を分けることで、Neon / Blocks を同じ再生内容で比較できます。
+編集用の `src/` は TypeScript 9個、CSS 3個、HTML 1個の計13ファイルです。配布時には `dist/sonata.html` 一つへ結合します。画面の配置・記録値・再生時刻と、外観の材質・照明・合成を分けることで、Neon / Blocks を同じ再生内容で比較できます。
 
 ## 境界と編集先
 
@@ -9,6 +9,7 @@
 | `src/sonata.cts` | 起動、再生時計、共通操作、DOM 表示、検証用 API |
 | `src/camera.cts` | カメラの状態・補間・投影、マウスとタッチの操作 |
 | `src/replay-model.cts` | デモの準備、記録時刻に対応する FIFO・依存・レジスタ・Top-down の状態 |
+| `src/memory.cts` | 命令の分類、LOAD / STORE の基準時間・表示区間、記録された書込み待ち |
 | `src/geometry.cts` | 座標・行列、命令の経路とステージ補間、回転・接地と姿勢キャッシュ |
 | `src/scene.cts` | 外観プリセット、ユニット・セル・接続の配置、固定部品の形状・材質・ラベル・接地面 |
 | `src/activity.cts` | 現在の命令・待機列・レジスタ・通知、命令列の巻き戻し、Top-down 分類の表示 |
@@ -34,6 +35,8 @@
 `scene.buildWorld()` は新しい接地面を返し、`paths.setGround()` が受け取って姿勢キャッシュを破棄します。固定シーン側から別モジュールのキャッシュやレジスタ表示状態を書き換えません。待機列・レジスタ・命令列・Top-down の表示状態と初期化は activity が所有します。
 
 `renderer.cts` は `createGpu` と `createRenderer` を分け、資源の生成とフレームの描画をそれぞれ追えるようにします。影のターゲットと再利用条件は renderer の内部で扱い、GLSL は `shaders.cts` の固定面・Cut crystal・発光の生成関数にまとめます。シェーダー側は渡された生成関数を使い、GPU 資源や描画順を所有しません。
+
+`memory.cts` は抽出器と再生側で共有する命令分類を持ち、再生の準備時に LOAD / STORE の表示区間を分けます。元データの時刻を変更せず、準備後の `replay.memory` に基準時間・表示経路・書込み待ちをまとめます。完了、ROB、依存関係の状態は従来どおり記録時刻から求めます。
 
 再生モデルと幾何計算は DOM / GPU に依存しません。`createScene` も `buildLayout()` までなら Node 単体で使え、GPU と DOM を必要とする固定部品の組み立てを呼ばずに配置を検査できます。DOM 更新は主に `sonata.cts` が担当し、シーンのラベル作成や Top-down 表示などの部品固有の処理は担当モジュールに置きます。
 
