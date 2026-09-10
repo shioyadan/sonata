@@ -42,7 +42,7 @@ function build() {
     });
     const scripts=[
         ["../data/traces.js",formatTraceScript(read("data/traces.js"))],
-        ["sonata.js",bundle(path.join(root,"src"),"sonata.js")]
+        ["sonata.cts",bundle(path.join(root,"src"),"sonata.cts")]
     ];
     for(const [url,source] of scripts){
         const tag=`<script src="${url}"></script>`;

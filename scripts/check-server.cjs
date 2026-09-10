@@ -43,7 +43,7 @@ async function main(){
         const head=await request("/","HEAD");
         assert.equal(head.status,200);assert.equal(head.body.length,0);
         assert.equal(Number(head.headers["content-length"]),html.length);
-        for(const target of ["/src/sonata.js","/src/geometry.cts","/src/replay-model.cts","/data/traces.js","/.git/config","/work/HANDOFF.md","/../README.md","/%2e%2e/README.md"]){
+        for(const target of ["/src/sonata.cts","/src/geometry.cts","/src/replay-model.cts","/data/traces.js","/.git/config","/work/HANDOFF.md","/../README.md","/%2e%2e/README.md"]){
             assert.equal((await request(target)).status,404,`Source path exposed: ${target}`);
         }
         const post=await request("/","POST");

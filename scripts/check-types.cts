@@ -67,3 +67,18 @@ const material: renderer.Style={matte:true,background:[0,0,0]};
 // @ts-expect-error WebGL 未対応時の null で GPU を初期化してはならない。
 renderer.createGpu({gl:null,canvas:document.createElement("canvas"),onResize(){}});
 void [incomplete,material];
+
+if(globalThis.sonata){
+    const selected: number|null=globalThis.sonata.selectedID;
+    globalThis.sonata.setCamera("plan");
+    // @ts-expect-error 再生APIは文字列の時刻を受け取らない。
+    globalThis.sonata.captureAt("1");
+    // @ts-expect-error 未定義のカメラモードを指定できない。
+    globalThis.sonata.setCamera("unknown");
+    // @ts-expect-error 再生/停止には真偽値を渡す。
+    globalThis.sonata.setPlaying(1);
+    void selected;
+}else{
+    // @ts-expect-error WebGL未対応時には診断APIも未生成。
+    globalThis.sonata.setPlaying(true);
+}

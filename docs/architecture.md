@@ -1,23 +1,23 @@
 # ソースの構造
 
-編集用の `src/` は TypeScript 2個、JavaScript 4個、CSS 3個、HTML 1個の計10ファイルです。配布時には `dist/sonata.html` 一つへ結合します。画面の配置・記録値・再生時刻と、外観の材質・照明・合成を分けることで、Neon / Blocks を同じ再生内容で比較できます。
+編集用の `src/` は TypeScript 6個、CSS 3個、HTML 1個の計10ファイルです。配布時には `dist/sonata.html` 一つへ結合します。画面の配置・記録値・再生時刻と、外観の材質・照明・合成を分けることで、Neon / Blocks を同じ再生内容で比較できます。
 
 ## 境界と編集先
 
 | ファイル | 責務 |
 | --- | --- |
-| `src/sonata.js` | 起動、再生時計、操作、カメラ、DOM 表示、検証用 API |
+| `src/sonata.cts` | 起動、再生時計、操作、カメラ、DOM 表示、検証用 API |
 | `src/replay-model.cts` | デモの準備、記録時刻に対応する FIFO・依存・レジスタ・Top-down の状態 |
 | `src/geometry.cts` | 座標・行列、命令の経路とステージ補間、回転・接地と姿勢キャッシュ |
-| `src/scene.js` | 外観プリセット、ユニット・セル・接続の配置、固定部品の形状・材質・ラベル・接地面 |
-| `src/activity.js` | 現在の命令・待機列・レジスタ・通知、命令列の巻き戻し、Top-down 分類の表示 |
-| `src/renderer.js` | WebGL 資源、影・透過・発光の描画順、材質別の GLSL |
+| `src/scene.cts` | 外観プリセット、ユニット・セル・接続の配置、固定部品の形状・材質・ラベル・接地面 |
+| `src/activity.cts` | 現在の命令・待機列・レジスタ・通知、命令列の巻き戻し、Top-down 分類の表示 |
+| `src/renderer.cts` | WebGL 資源、影・透過・発光の描画順、材質別の GLSL |
 | `src/index.html` | 画面の骨格、CSS とスクリプトの読み込み順 |
 | `src/sonata.css` | 共通書式、再生操作、情報パネル |
 | `src/scene.css` | シーン上のラベル、操作部、凡例 |
 | `src/appearance.css` | 画面サイズへの対応とスタイル別の配色 |
 
-外観を変えるときは、まず `scene.js` 冒頭のプリセットと `appearance.css` の配色を編集します。固定部品の形は `scene.js`、動く表示は `activity.js`、材質の計算と描画順は `renderer.js` が担当します。共通の配置や再生モデルへ外観のための時刻変更を持ち込まないでください。具体的な材質・接地の仕様は [外観の仕様](visual-styles.md) を参照してください。
+外観を変えるときは、まず `scene.cts` 冒頭のプリセットと `appearance.css` の配色を編集します。固定部品の形は `scene.cts`、動く表示は `activity.cts`、材質の計算と描画順は `renderer.cts` が担当します。共通の配置や再生モデルへ外観のための時刻変更を持ち込まないでください。具体的な材質・接地の仕様は [外観の仕様](visual-styles.md) を参照してください。
 
 ## 状態と依存
 
@@ -25,15 +25,15 @@
 
 入口で共有する `session` は、サイクル、再生、選択、スタイル、演出の設定です。トレースの準備結果は replay、配置と固定部品は scene、経路のキャッシュは paths、カメラは camera、GPU 資源は gpu、現在の描画結果は activity が持ちます。すべての状態を一つの context に集めて各モジュールへ渡す形にはしません。
 
-`sonata.js` は時計・共通操作から再描画、DOM 更新までをローカル関数でつなぎます。カメラは同じファイル内の `createCamera` に閉じ、入力と投影をまとめます。検証用の `window.sonata` も、同じ状態を参照するローカル関数で作ります。UI 間で同じ依存一式を受け渡すだけの生成関数は不要です。
+`sonata.cts` は時計・共通操作から再描画、DOM 更新までをローカル関数でつなぎます。カメラは同じファイル内の `createCamera` に閉じ、入力と投影をまとめます。検証用の `window.sonata` も、同じ状態を参照するローカル関数で作ります。UI 間で同じ依存一式を受け渡すだけの生成関数は不要です。
 
 一つのフレームは、再生時計 → カメラ・動的な描画データ → 影・シーンの描画 → DOM ラベルの順に更新します。スタイル変更時は固定部品・材質・影を作り直し、時計・選択・カメラを保持します。
 
 `scene.buildWorld()` は新しい接地面を返し、`paths.setGround()` が受け取って姿勢キャッシュを破棄します。固定シーン側から別モジュールのキャッシュやレジスタ表示状態を書き換えません。待機列・レジスタ・命令列・Top-down の表示状態と初期化は activity が所有します。
 
-`renderer.js` は `createGpu` と `createRenderer` を分け、資源の生成とフレームの描画をそれぞれ追えるようにします。影のターゲットと再利用条件は renderer の内部で扱い、GLSL は末尾の固定面・Cut crystal・発光の生成関数にまとめます。
+`renderer.cts` は `createGpu` と `createRenderer` を分け、資源の生成とフレームの描画をそれぞれ追えるようにします。影のターゲットと再利用条件は renderer の内部で扱い、GLSL は末尾の固定面・Cut crystal・発光の生成関数にまとめます。
 
-再生モデルと幾何計算は DOM / GPU に依存しません。`createScene` も `buildLayout()` までなら Node 単体で使え、GPU と DOM を必要とする固定部品の組み立てを呼ばずに配置を検査できます。DOM 更新は主に `sonata.js` が担当し、シーンのラベル作成や Top-down 表示などの部品固有の処理は担当モジュールに置きます。
+再生モデルと幾何計算は DOM / GPU に依存しません。`createScene` も `buildLayout()` までなら Node 単体で使え、GPU と DOM を必要とする固定部品の組み立てを呼ばずに配置を検査できます。DOM 更新は主に `sonata.cts` が担当し、シーンのラベル作成や Top-down 表示などの部品固有の処理は担当モジュールに置きます。
 
 ## 分割の大きさ
 
@@ -45,13 +45,15 @@ CSS は sonata → scene → appearance の順に適用します。共通 UI、�
 
 ## ビルドと検査
 
-ブラウザ用コードは、拡張子を含む相対パスの CommonJS で参照します。TypeScript の `.cts` では `import module = require("./module.cts")` と `export = module` を使い、公開関数の型を参照先へ伝えます。型だけの namespace は実行時には残りません。
+ブラウザ用コードは、拡張子を含む相対パスの CommonJS で参照します。TypeScript の `.cts` では `import module = require("./module.cts")` と `export = module` を使い、公開関数の型を参照先へ伝えます。型だけの namespace は実行時には残りません。再生モデル・配置・GPU の公開型はそれぞれの所有者から参照し、必要な操作が少ない依存は最小の構造型で受けます。経路計算は入力命令の型をジェネリクスで保持し、表示先で命令の記録情報を型変換し直す必要をなくします。
 
-`scripts/bundle.cjs` は Node 標準の `stripTypeScriptTypes` の `transform` モードで `.cts` を変換し、JavaScript とともに関数単位のモジュールとして包み、`sonata.js` から実行するスクリプトを生成します。各モジュールは必要になったときに一度だけ実行されます。文字列の単純連結による変数共有や `eval` は使いません。
+再生器や描画先は初期化前に null になることを型にも残します。非 null assertion は、トレース読込み・配置構築・描画先作成が済んだ箇所の前提に限定します。DOM は HTML 内のタグに対応する型で参照し、描画・操作のコード全体を `any` や `@ts-nocheck` で除外しません。
+
+`scripts/bundle.cjs` は Node 標準の `stripTypeScriptTypes` の `transform` モードで `.cts` を変換し、関数単位のモジュールとして包み、`sonata.cts` から実行するスクリプトを生成します。各モジュールは必要になったときに一度だけ実行されます。文字列の単純連結による変数共有や `eval` は使いません。
 
 `scripts/build.cjs` は CSS、データ、結合済みコード、ライセンスを HTML に埋め込みます。Node 標準機能だけでビルドでき、実行時の外部読み込みもありません。開発時も `npm start` で生成物を開きます。`src/index.html` を直接開く用途は想定していません。
 
-- `npm run typecheck`: 再生モデル・幾何計算を `strict` で検査。型境界の不正な入力・null の扱いも検査。
+- `npm run typecheck`: ブラウザ用の6モジュールを `strict` で検査。型境界の不正な入力・null の扱い・GPU 資源の前提も検査。
 - `npm test`: 再生・演出計算、独立したシーン間の状態分離、モジュールの解決・キャッシュ・スコープ・循環参照、単一 HTML の再現可能なビルド。
 - `npm run test:render`: 全5デモ、両スタイル、選択・接地・回転・影、キーボード・タッチ、モバイル復帰、WebGL の障害と復旧。
 
