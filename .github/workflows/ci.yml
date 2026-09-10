@@ -33,7 +33,23 @@ jobs:
       - name: Check preview server and malformed requests
         run: npm run test:server
       - name: Check desktop, mobile, touch and offline playback
-        run: xvfb-run -a -s '-screen 0 1600x1100x24' npm run test:render
+        run: |
+          set -o pipefail
+          mkdir -p artifacts
+          xvfb-run -a -s '-screen 0 1600x1100x24' npm run test:render 2>&1 | tee artifacts/ci-render.log
+      - name: Report rendering failure
+        if: failure()
+        run: |
+          node <<'NODE'
+          const fs = require('node:fs');
+          const file = 'artifacts/ci-render.log';
+          if (fs.existsSync(file)) {
+            // 詳細ログへアクセスできない場合も、元のエラーを公開の検査注釈から確認できるようにする。
+            const tail = fs.readFileSync(file, 'utf8').trimEnd().split('\n').slice(-60).join('\n').slice(-10000);
+            const escaped = tail.replaceAll('%', '%25').replaceAll('\r', '%0D').replaceAll('\n', '%0A');
+            process.stdout.write('::error title=Rendering failure::' + escaped + '\n');
+          }
+          NODE
 
   pages:
     if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'

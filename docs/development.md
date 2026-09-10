@@ -171,6 +171,8 @@ xvfb-run -a -s '-screen 0 1600x1100x24' npm run test:browser
 
 CI の `verify` ジョブ全体は25分を上限にします。全5デモ・両スタイルを SwiftShader で順次描画すると、検査中に従来の15分上限へ達する場合があるためです。個々のフレーム・状態待機の期限や検査項目は変更せず、ジョブ全体の実行枠と区別します。
 
+描画検査の標準出力・標準エラーは `artifacts/ci-render.log` にも保存します。失敗時は末尾60行（最大10,000文字）を `Rendering failure` の検査注釈に載せ、ログAPIの権限がなくても AssertionError と前後の情報を確認できるようにします。`pipefail` で元の検査失敗を維持し、注釈出力の成否で成功扱いにしません。
+
 画像は `artifacts/screenshots/` に保存します。SwiftShader による CPU 描画で検証するため、記録される fps は実 GPU の速度と異なります。
 
 既存の HTML 自体を検査したい場合は、`SONATA_HTML=/path/to/sonata.html` を指定します。通常は毎回ビルドするので、古い生成物を誤って検査しません。`npm run capture:flush` はビルド済み HTML の通常再生から巻き戻し・分解中の画像を取得します。
