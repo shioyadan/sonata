@@ -1,27 +1,64 @@
 "use strict";
 // 命令・待機列・レジスタ・命令列・Top-down の表示状態と描画データ。
-const {TAU,clamp,mix,smooth,hash,route,rgb,normalize,cross}=require("./geometry.cts");
-const sonataReplay=require("./replay-model.cts");
+import geometry = require("./geometry.cts");
+import type sceneModule = require("./scene.cts");
+import type renderer = require("./renderer.cts");
+const {TAU,clamp,mix,smooth,hash,route,rgb,normalize,cross}=geometry;
+import sonataReplay = require("./replay-model.cts");
 const {feedRows,feedLead}=sonataReplay;
 const wakeFlightCycles=1.2,wakeEffectCycles=2.8;
-const $=id=>document.getElementById(id);
-function createActivity({camera,clock,scene,gpu,paths,replay,session}) {
-    const activity={visiblePieces:[],visibleParticles:[],currentStats:{},activeBranches:[],activeNotifications:[],
+const $=(id:string)=>document.getElementById(id)!;
+type Vector=geometry.Vector;
+type Operation=sonataReplay.Operation;
+type MatrixState=ReturnType<NonNullable<sonataReplay.Replay["dependencyReplay"]>["stateAt"]>;
+type RegisterState=ReturnType<NonNullable<sonataReplay.Replay["registerReplay"]>["stateAt"]>;
+type RegisterCell=Extract<RegisterState,{available:true}>["physical"][number];
+type RegisterRead={op:Operation;id:number;sources:NonNullable<Operation["reads"][number]["sources"]>|Operation["sourceRegisters"];progress:number};
+type FeedState=ReturnType<NonNullable<sonataReplay.Replay["feedReplay"]>["stateAt"]>;
+type Classification=ReturnType<typeof sonataReplay.sampleTopDown>;
+type Shares=Extract<Classification,{available:true}>["shares"];
+type ShareKey=keyof Shares;
+type Bound=sceneModule.Bound;
+type Bounds=[number,number,number,number];
+type RenameWord={logical:number;physical:number|null;constant:boolean;known:boolean;active:boolean;progress:number;restoring:boolean;layout:ReturnType<sceneModule.Scene["renameWordLayout"]>;cells:{bit:number;value:number|null;position:Vector}[]};
+interface ActivityState {
+    visiblePieces:geometry.Pose[];
+    visibleParticles:{op:Operation;position:Vector;pathPosition:Vector;screen:Vector;state:geometry.Light["state"];brightness:number;color:Vector}[];
+    currentStats:Partial<ReturnType<geometry.Paths<Operation>["occupancy"]>>;
+    activeBranches:sonataReplay.Replay["branchRecoveries"];activeNotifications:sonataReplay.Replay["memoryEvents"];
+    matrixState:MatrixState|null;registerState:RegisterState|null;registerReads:RegisterRead[];renameWords:RenameWord[];physicalElements:Map<number,HTMLSpanElement>;
+}
+interface StreamState {
+    feedVisible:{id:number;fetch:number;label:string;position:Vector;progress:number;layer:string;canceled:boolean}[];
+    codeFragments:{id:number;index:number;character:string;origin:Vector;position:Vector;opacity:number;rotation:number;travel:number}[];
+    feedState:FeedState|null;
+}
+interface TopDownState {
+    sceneTopDown:Classification;topDownRegion:{category:string;bounds:Bounds}|null;topDownRail:{category:ShareKey;share:number;start:number;end:number}[];
+    boundDisplay:{trace:sonataReplay.Trace|null;shares:Shares|null;weights:Partial<Record<Bound,number>>;color:Vector};
+}
+interface ActivityOptions {
+    camera:{eye:Vector;project(p:Vector):Vector};clock:{artTime:number};scene:sceneModule.Scene;gpu:renderer.Gpu;paths:geometry.Paths<Operation>;replay:sonataReplay.Replay;
+    session:{cycle:number;style:sceneModule.Style;trails:boolean;selectedID:number|null;reducedMotion:boolean;instructionStream:boolean};
+}
+// drawDynamic が各時刻の状態を更新し、その後で DOM と診断 API が参照する。
+function createActivity({camera,clock,scene,gpu,paths,replay,session}:ActivityOptions) {
+    const activity:ActivityState={visiblePieces:[],visibleParticles:[],currentStats:{},activeBranches:[],activeNotifications:[],
         matrixState:null,registerState:null,registerReads:[],renameWords:[],physicalElements:new Map()};
-    function drawDynamic(dt) {
-        const lines=[],points=[],pieces=[];
+    function drawDynamic(dt:number) {
+        const lines:number[]=[],points:number[]=[],pieces:number[]=[];
         drawTopDown(lines,dt);
         drawInstructionStream(lines,points);
         activity.currentStats=paths.occupancy(session.cycle);activity.visibleParticles=[];activity.visiblePieces=[];
         activity.activeBranches=replay.branchRecoveries.filter(e=>session.cycle>=e.cycle&&session.cycle<e.until&&paths.positionAt(e.op,session.cycle));
-        activity.matrixState=replay.dependencyReplay.stateAt(session.cycle);activity.registerState=replay.registerReplay.stateAt(session.cycle);
+        activity.matrixState=replay.dependencyReplay!.stateAt(session.cycle);activity.registerState=replay.registerReplay!.stateAt(session.cycle);
         activity.registerReads=activity.registerState.available?replay.ops.flatMap(op=>op.reads.filter(r=>session.cycle>=r.start&&session.cycle<Math.min(r.end,op.end)).map(r=>({op,id:op.id,sources:r.sources??op.sourceRegisters,progress:(session.cycle-r.start)/(r.end-r.start)}))):[];
         drawDependencyMatrix(lines,points);drawRegisters(lines,points);drawCommit(lines,points);
-        const activeNodes=new Map(),activeLanes=new Map();
-        for(const op of activity.currentStats.active){
+        const activeNodes=new Map<string,number>(),activeLanes=new Map<string,number>();
+        for(const op of activity.currentStats.active!){
             const s=paths.stageAt(op,session.cycle);if(!s)continue;
             activeNodes.set(s.node,(activeNodes.get(s.node)||0)+1);
-            const n=scene.nodes.get(s.node);
+            const n=scene.nodes.get(s.node)!;
             if(n?.pipeCount){const key=`${n.id}:${op.index%n.pipeCount}`;activeLanes.set(key,(activeLanes.get(key)||0)+1);}
         }
         for(const n of scene.nodes.values()){
@@ -54,12 +91,12 @@ function createActivity({camera,clock,scene,gpu,paths,replay,session}) {
             }
         }
         // 完了しても物理スロットは動かさず、末尾で割り当て、先頭でコミットする。
-        const fifo=replay.robReplay.stateAt(session.cycle),occupied=new Map(fifo.entries.map(entry=>[entry.slot,entry.op]));
-        for(let slot=0;slot<replay.trace.structure.robCapacity;slot++){
+        const fifo=replay.robReplay!.stateAt(session.cycle),occupied=new Map(fifo.entries.map(entry=>[entry.slot,entry.op]));
+        for(let slot=0;slot<replay.trace!.structure.robCapacity;slot++){
             const p=scene.robCell(slot),op=occupied.get(slot);
             const col=op?paths.instructionColor(op,session.cycle):session.style.matte?session.style.structure.wire:session.style.palette.blue;
             const ready=op?.completion!=null&&session.cycle>=op.completion;
-            const completion=ready?1-smooth((session.cycle-op.completion)/.7):0;
+            const completion=ready?1-smooth((session.cycle-op.completion!)/.7):0;
             scene.point(points,p,col,op?(ready?6+completion*4:4):2.5,op?(ready?.38+completion*.55:.16):.07);
             if(ready)scene.line(lines,[p[0]-.10,p[1],p[2]-.04],[p[0]+.10,p[1],p[2]-.04],col,.3+completion*.5);
         }
@@ -85,11 +122,11 @@ function createActivity({camera,clock,scene,gpu,paths,replay,session}) {
                 scene.ring(lines,source[0],source[1],source[2],.18+age*.28,session.style.palette.memory,1-age/wakeFlightCycles,0,TAU,24);
             }else{
                 const arrival=(age-wakeFlightCycles)/(wakeEffectCycles-wakeFlightCycles),p=scene.wakeBusEntry();
-                const column=replay.dependencyReplay.columnAt(event.id,session.cycle);
+                const column=replay.dependencyReplay!.columnAt(event.id,session.cycle);
                 scene.ring(lines,p[0],p[1],p[2],.10+arrival*.15,session.style.palette.integer,(1-arrival)*.8,0,TAU,32);
                 scene.point(points,p,session.style.palette.integer,25,(1-arrival)*.65);
                 if(column!==null){
-                    const target=scene.wakeColumnHead(column);
+                    const target=scene.wakeColumnHead(column!);
                     scene.line(lines,p,target,session.style.palette.integer,(1-arrival)*.65);
                     scene.point(points,route(p,target,smooth(arrival/.5)),session.style.palette.integer,14,(1-arrival)*.8);
                 }
@@ -122,8 +159,8 @@ function createActivity({camera,clock,scene,gpu,paths,replay,session}) {
                 }
             }
             if(session.style.matte){
-                pieces.push(...p,piece.radius,...color,alpha,...piece.rotation);
-                activity.visiblePieces.push(piece);
+                pieces.push(...p,piece!.radius,...color,alpha,...piece!.rotation);
+                activity.visiblePieces.push(piece!);
             }else scene.point(points,p,color,overMatrix?(selected?7:4):selected?43:squashed?31:light.size,alpha*(overMatrix?.28:selected?1.6:light.brightness));
             if(!leaving)activity.visibleParticles.push({op,position:p,pathPosition:path,screen:camera.project(p),state:light.state,brightness:light.brightness,color});
             if(recoveryBranch){
@@ -140,7 +177,7 @@ function createActivity({camera,clock,scene,gpu,paths,replay,session}) {
         const currentEvents=replay.flushEvents.filter(t=>session.cycle>=t&&session.cycle<t+2.8);
         for(const event of currentEvents){
             const age=session.cycle-event,fade=clamp(1-age/2.8);
-            const origin=scene.nodes.get("exec-branch")||scene.nodes.get("issue");
+            const origin=scene.nodes.get("exec-branch")!||scene.nodes.get("issue")!;
             shock=Math.max(shock,Math.sin(clamp(age/.5)*Math.PI/2)*fade);
             for(let r=0;r<3;r++)scene.ring(lines,origin.x,.2+r*.12,origin.z,age*(4.5+r*.4)+.35,session.style.palette.red,fade*(.9-r*.22),0,TAU,150);
             scene.point(points,[origin.x,origin.h+.6,origin.z],session.style.palette.red,100,fade*.8);
@@ -153,26 +190,26 @@ function createActivity({camera,clock,scene,gpu,paths,replay,session}) {
         return shock;
     }
 
-    function drawDependencyMatrix(lines,points) {
-        const n=scene.nodes.get("issue"),byID=new Map(replay.ops.map(op=>[op.id,op]));
-        for(const row of activity.matrixState.rows){
-            const p=scene.matrixPosition(row.slot),right=scene.matrixPosition(row.slot,replay.dependencyReplay.columnCount-1);
-            const color=byID.get(row.id)?session.style.palette[byID.get(row.id).kind]:session.style.palette.blue;
+    function drawDependencyMatrix(lines:number[],points:number[]) {
+        const n=scene.nodes.get("issue")!,byID=new Map(replay.ops.map(op=>[op.id,op]));
+        for(const row of activity.matrixState!.rows){
+            const p=scene.matrixPosition(row.slot!),right=scene.matrixPosition(row.slot!,replay.dependencyReplay!.columnCount-1);
+            const color=byID.get(row.id)?session.style.palette[byID.get(row.id)!.kind]:session.style.palette.blue;
             scene.line(lines,p,right,color,row.ready?.15:.075);
             scene.point(points,[right[0]+.14,right[1],right[2]],row.known?color:session.style.palette.blue,5,row.ready?.85:.25);
         }
-        for(const cell of activity.matrixState.cells){
-            const p=scene.matrixPosition(cell.row,cell.column),color=session.style.palette[byID.get(cell.consumer).kind];
+        for(const cell of activity.matrixState!.cells){
+            const p=scene.matrixPosition(cell.row!,cell.column!),color=session.style.palette[byID.get(cell.consumer)!.kind];
             scene.point(points,p,color,cell.waiting?7:11,cell.alpha*(cell.waiting?.8:1.2));
-            const dx=Math.min(.045,n.w*.24/replay.dependencyReplay.columnCount);
+            const dx=Math.min(.045,n.w*.24/replay.dependencyReplay!.columnCount);
             scene.line(lines,[p[0]-dx,p[1],p[2]],[p[0]+dx,p[1],p[2]],color,cell.alpha);
         }
-        for(const dep of activity.matrixState.external){
-            const p=scene.matrixPosition(dep.row),color=session.style.palette[byID.get(dep.consumer).kind];
+        for(const dep of activity.matrixState!.external){
+            const p=scene.matrixPosition(dep.row!),color=session.style.palette[byID.get(dep.consumer)!.kind];
             scene.point(points,[p[0]-.13,p[1],p[2]],color,dep.waiting?6:12,dep.alpha*(dep.waiting?.65:1.15));
         }
-        for(const issue of activity.matrixState.issues){
-            const op=byID.get(issue.id),color=session.style.palette[op.kind],fade=1-issue.progress;
+        for(const issue of activity.matrixState!.issues){
+            const op=byID.get(issue.id)!,color=session.style.palette[op.kind],fade=1-issue.progress;
             const path=scene.issuePath(issue),rowProgress=clamp(issue.progress/.18);
             const head=path.origin.map((v,i)=>mix(v,path.exit[i],smooth(rowProgress)));
             // セル上は控えめな短い線で横切り、強い発光は出口に置く。
@@ -193,32 +230,32 @@ function createActivity({camera,clock,scene,gpu,paths,replay,session}) {
                     scene.point(points,end,color,inColumn?8:10,inColumn?columnGlow*.85:fade*.75);
                 }
                 if(columnGlow>0){
-                    const bottom=scene.matrixPosition(replay.trace.structure.queueCapacity-1,issue.column),top=scene.matrixPosition(0,issue.column);
+                    const bottom=scene.matrixPosition(replay.trace!.structure.queueCapacity-1,issue.column!),top=scene.matrixPosition(0,issue.column!);
                     // 選択列は明るい細線として一続きに描き、列全体を見分けやすくする。
                     scene.line(lines,bottom,top,color,columnGlow*.85);
-                    for(const target of issue.targets)scene.point(points,scene.matrixPosition(target.row,issue.column),session.style.palette[byID.get(target.id).kind],8,columnGlow*.95);
+                    for(const target of issue.targets)scene.point(points,scene.matrixPosition(target.row!,issue.column!),session.style.palette[byID.get(target.id)!.kind],8,columnGlow*.95);
                 }
             }
         }
-        for(const event of activity.matrixState.broadcasts){
+        for(const event of activity.matrixState!.broadcasts){
             if(event.column!==null){
-                const top=scene.wakeColumnHead(event.column),bottom=scene.matrixPosition(replay.trace.structure.queueCapacity-1,event.column);
+                const top=scene.wakeColumnHead(event.column),bottom=scene.matrixPosition(replay.trace!.structure.queueCapacity-1,event.column);
                 const head=top.map((v,i)=>mix(v,bottom[i],smooth(event.progress)));
                 scene.line(lines,scene.wakeBusEntry(),top,session.style.palette.integer,(1-event.progress)*.8);
                 scene.line(lines,top,head,session.style.palette.integer,(1-event.progress)*.65);scene.point(points,head,session.style.palette.integer,15,(1-event.progress)*.8);
             }else for(const row of event.rows){
-                const p=scene.matrixPosition(row),entry=[p[0]-.13,p[1],p[2]],bus=scene.wakeBusEntry();
+                const p=scene.matrixPosition(row!),entry=[p[0]-.13,p[1],p[2]],bus=scene.wakeBusEntry();
                 scene.line(lines,bus,[bus[0],entry[1],entry[2]],session.style.palette.integer,(1-event.progress)*.5);
                 scene.line(lines,[bus[0],entry[1],entry[2]],entry,session.style.palette.integer,(1-event.progress)*.8);
             }
         }
     }
 
-    function drawCommit(lines,points){
+    function drawCommit(lines:number[],points:number[]){
         const group=replay.commitGroups.get(Math.floor(session.cycle))??[];
         for(const op of group){
             if(session.cycle<op.end)continue;
-            const slot=scene.commitSlot(op.commitSlot),color=session.style.palette[op.kind],phase=session.cycle-op.end;
+            const slot=scene.commitSlot(op.commitSlot!),color=session.style.palette[op.kind],phase=session.cycle-op.end;
             const strength=.42+.58*Math.sin(clamp(phase/.95)*Math.PI);
             scene.line(lines,slot.inlet,slot.outlet,color,strength);
             for(const side of [-1,1])scene.line(lines,[slot.inlet[0],slot.inlet[1],slot.inlet[2]+side*slot.depth*.4],
@@ -227,18 +264,18 @@ function createActivity({camera,clock,scene,gpu,paths,replay,session}) {
         }
     }
 
-    function drawRenameWords(tris,lines,points){
+    function drawRenameWords(tris:number[],lines:number[],points:number[]){
         activity.renameWords=[];
         if(!scene.renameNode()?.mapWords)return;
         const n=scene.renameNode();
-        activity.registerState.rows.forEach((row,index)=>{
+        activity.registerState!.rows.forEach((row,index)=>{
             const layout=scene.renameWordLayout(index),{start,end,halfWidth,bits}=layout;
             const [x,y,z0]=start,z1=end[2];
             const restoring=row.event?.type==="restore",color=restoring&&row.pulse>0?session.style.palette.red:session.style.matte&&row.pulse<=0?session.style.structure.ink:session.style.palette.blue;
             const previous=row.event?(restoring?row.event.physical:row.event.previous):row.physical;
             const progress=session.reducedMotion?1:row.event?smooth((session.cycle-row.event.cycle)/.8):1;
             const known=row.physical!==null,active=row.pulse>0&&!row.constant&&previous!==row.physical;
-            const sweep=mix(z0,z1,restoring?1-progress:progress),cells=[];
+            const sweep=mix(z0,z1,restoring?1-progress:progress),cells:RenameWord["cells"]=[];
             // バー 1 本が論理レジスタ 1 個を表す。番号のビットは内部の控えめな印とし、
             // 別のレジスタが増えたように見える独立した箱にはしない。
             const bar=[[x-halfWidth,y+.005,z0],[x+halfWidth,y+.005,z0],[x+halfWidth,y+.005,z1],[x-halfWidth,y+.005,z1]];
@@ -268,30 +305,30 @@ function createActivity({camera,clock,scene,gpu,paths,replay,session}) {
         });
     }
 
-    function registerReaders(physical){return activity.registerReads.filter(r=>r.sources.some(s=>s.physical===physical));}
+    function registerReaders(physical:number){return activity.registerReads.filter(r=>r.sources.some(s=>s.physical===physical));}
 
-    function registerCellColor(cell){
+    function registerCellColor(cell:RegisterCell){
         const readers=registerReaders(cell.physical);
         return readers.length?session.style.palette[readers[0].op.kind]:cell.event?.type==="restore"&&cell.pulse>0?session.style.palette.red:session.style.palette.blue;
     }
 
-    function registerCellAppearance(cell){
+    function registerCellAppearance(cell:RegisterCell){
         const reading=registerReaders(cell.physical).length>0,allocated=cell.allocation==="allocated";
         const presence=allocated?1:cell.allocation==="free"?cell.allocationPulse:0;
         return {fill:reading?.48:presence*.23,outline:reading?1:allocated?.62:cell.allocation==="free"?.16:.075,
             valueAlpha:reading?.95:presence*.6,unknown:cell.allocation==="unknown"};
     }
 
-    function drawRegisters(lines,points) {
-        const triangles=[];
-        if(!activity.registerState.available){gpu.upload(gpu.registerSurface,triangles);return;}
-        const n=scene.nodes.get("register-read");
+    function drawRegisters(lines:number[],points:number[]) {
+        const triangles:number[]=[];
+        if(!activity.registerState!.available){gpu.upload(gpu.registerSurface,triangles);return;}
+        const n=scene.nodes.get("register-read")!;
         const readIDs=new Set(activity.registerReads.flatMap(r=>r.sources.map(s=>s.physical)));
         // 明るい面では小さな点でも読めるため、活動の印が命令の駒を覆わないようにする。
         const signalScale=session.style.matte?.5:1;
         const halfWidth=n.w*.34/scene.physicalColumns(),halfDepth=n.d*.34/Math.ceil(replay.registerTags.length/scene.physicalColumns());
         drawRenameWords(triangles,lines,points);
-        for(const cell of activity.registerState.physical){
+        for(const cell of activity.registerState!.physical){
             const p=scene.physicalTagPosition(cell.physical),reading=readIDs.has(cell.physical),appearance=registerCellAppearance(cell);
             const color=session.style.matte&&!reading&&cell.pulse<=0?session.style.structure.ink:registerCellColor(cell);
             const corners=[[-1,-1],[1,-1],[1,1],[-1,1]].map(([x,z])=>[p[0]+x*halfWidth,p[1]-.025,p[2]+z*halfDepth]);
@@ -299,7 +336,7 @@ function createActivity({camera,clock,scene,gpu,paths,replay,session}) {
             for(let i=0;i<4;i++)scene.line(lines,corners[i],corners[(i+1)%4],color,appearance.outline);
             if(appearance.unknown)scene.line(lines,corners[0],corners[2],[.47,.52,.56],.16);
             if(cell.value!==null&&appearance.valueAlpha>0){
-                const bits=BigInt(cell.value),chunk=(replay.trace.evidence.registers.wordBits??32)/8,mask=(1n<<BigInt(chunk))-1n;
+                const bits=BigInt(cell.value),chunk=(replay.trace!.evidence!.registers!.wordBits??32)/8,mask=(1n<<BigInt(chunk))-1n;
                 for(let bit=0;bit<8;bit++){
                     const value=Number(bits>>BigInt((7-bit)*chunk)&mask),x=p[0]+(bit-3.5)*n.w*.072/scene.physicalColumns();
                     scene.line(lines,[x,p[1],p[2]+halfDepth*.12],[x,p[1],p[2]+halfDepth*.78],color,appearance.valueAlpha*(.1+value/Number(mask)*.8));
@@ -328,23 +365,23 @@ function createActivity({camera,clock,scene,gpu,paths,replay,session}) {
             const el=document.createElement("span");el.className="physical-register-id";el.textContent=`p${tag}`;
             $("register-readouts").append(el);activity.physicalElements.set(tag,el);
         }
-        $("register-writeback").hidden=!replay.trace.evidence?.registers;
+        $("register-writeback").hidden=!replay.trace!.evidence?.registers;
     }
 
     // 流入する命令列と squash 時の巻き戻し。
-    const stream={feedVisible:[],codeFragments:[],feedState:null};
-    function feedPath(u) {
+    const stream:StreamState={feedVisible:[],codeFragments:[],feedState:null};
+    function feedPath(u:number):Vector {
         const a=[-7.4,1.1,9.4],b=[-8.2,1.25,7.4],c=[-13.2,1.0,2.0],d=[-15.5,.8,0],q=1-u;
-        return a.map((v,i)=>q*q*q*v+3*q*q*u*b[i]+3*q*u*u*c[i]+u*u*u*d[i]);
+        return a.map((v,i)=>q*q*q*v+3*q*q*u*b[i]+3*q*u*u*c[i]+u*u*u*d[i]) as Vector;
     }
 
-    function drawInstructionStream(lines,points) {
+    function drawInstructionStream(lines:number[],points:number[]) {
         stream.feedVisible=[];stream.codeFragments=[];
-        stream.feedState=replay.feedReplay.stateAt(session.cycle,session.reducedMotion);
-        const type=[],unravel=[];
+        stream.feedState=replay.feedReplay!.stateAt(session.cycle,session.reducedMotion);
+        const type:number[]=[],unravel:number[]=[];
         if(!session.instructionStream){gpu.upload(gpu.feedType,type);gpu.upload(gpu.unravelType,unravel);return;}
         const right=normalize(cross([0,1,0],camera.eye)),up=normalize(cross(camera.eye,right));
-        const offset=(p,x,y)=>p.map((v,i)=>v+right[i]*x+up[i]*y);
+        const offset=(p:Vector,x:number,y:number)=>p.map((v,i)=>v+right[i]*x+up[i]*y) as Vector;
         const canceledIDs=new Set(stream.feedState.ids),layers=[];
         if(stream.feedState.cancelAlpha>0)layers.push({kind:"rewind",cursor:stream.feedState.cursor,alpha:stream.feedState.cancelAlpha,shift:0});
         if(stream.feedState.flowAlpha>0)layers.push({kind:"fetch",cursor:stream.feedState.normalCursor,alpha:stream.feedState.flowAlpha,shift:(1-stream.feedState.recovery)*.25});
@@ -358,7 +395,7 @@ function createActivity({camera,clock,scene,gpu,paths,replay,session}) {
             const p=feedPath(u),screen=camera.project(p);
             const worldPerPixel=2*screen[2]*Math.tan(.66/2)/gpu.cssHeight;
             const scale=smooth(distance/.30),alpha=smooth((1-distance)/.15)*(.32+.68*u)*layer.alpha;
-            const color=canceled?session.style.palette.red:paths.instructionColor(op,session.cycle),text=op.feedText,cell=.146*scale,height=.38*scale;
+            const color=canceled?session.style.palette.red:paths.instructionColor(op,session.cycle),text=op.feedText!,cell=.146*scale,height=.38*scale;
             // 先細りする帯の左端に、すべての命令の開始位置を揃える。
             const left=-3.0*scale,rightEdge=left+text.length*cell;
             for(let j=0;j<text.length;j++){
@@ -424,8 +461,9 @@ function createActivity({camera,clock,scene,gpu,paths,replay,session}) {
     }
 
     // Top-down の分類と表示補間。
-    const topDown={sceneTopDown:{available:false},topDownRegion:null,topDownRail:[]};
-    const boundStyles = {
+    const topDown:TopDownState={sceneTopDown:{available:false},topDownRegion:null,topDownRail:[],
+        boundDisplay:{trace:null,shares:null,weights:{},color:boundRGB("unavailable")}};
+    const boundStyles:Record<Bound,{label:string;context:string;region?:Bounds}> = {
         active: { label:"Pipeline active",context:"Recent allocations in flight or already committed",region:[-12.7,12.6,-6.1,6.8] },
         retiring: { label:"Retiring",context:"Allocation slots with commit already observed",region:[-12.7,12.6,-6.1,6.8] },
         inFlight: { label:"In flight",context:"Allocated work whose outcome is not yet known" },
@@ -436,29 +474,28 @@ function createActivity({camera,clock,scene,gpu,paths,replay,session}) {
         mixed: { label:"Mixed",context:"Several categories share the largest allocation share" },
         unavailable: { label:"Not classified",context:"Top-down classification is unavailable for this trace" }
     };
-    const boundKeys = ["retiring","inFlight","badSpeculation","frontend","backend","unresolved"];
-    const boundRGB = key => session.style.bounds[key].slice(1).match(/../g).map(v=>parseInt(v,16)/255);
+    const boundKeys:ShareKey[] = ["retiring","inFlight","badSpeculation","frontend","backend","unresolved"];
+    function boundRGB(key:Bound){return session.style.bounds[key].slice(1).match(/../g)!.map(v=>parseInt(v,16)/255) as Vector;}
 
-    topDown.boundDisplay={trace:null,shares:null,weights:{},color:boundRGB("unavailable")};
 
-    function drawTopDown(lines,dt) {
+    function drawTopDown(lines:number[],dt:number) {
         // 基板上の重ね描きで割り当ての集計を示す。命令の明るさ、ステージ時刻、
         // 個々のユニットの活動状態には影響させない。
-        topDown.sceneTopDown=sonataReplay.sampleTopDown(replay.trace.topDown,session.cycle);
-        const triangles=[];topDown.topDownRegion=null;topDown.topDownRail=[];
+        topDown.sceneTopDown=sonataReplay.sampleTopDown(replay.trace!.topDown,session.cycle);
+        const triangles:number[]=[];topDown.topDownRegion=null;topDown.topDownRail=[];
         const snap=!dt||session.reducedMotion||topDown.boundDisplay.trace!==replay.trace||!topDown.boundDisplay.shares;
         const follow=snap?1:1-Math.exp(-dt/0.11);
         const category=topDown.sceneTopDown.available?topDown.sceneTopDown.dominant:"unavailable";
-        const converge=(from,to)=>Math.abs(from-to)<1e-5?to:mix(from,to,follow);
-        const shares=Object.fromEntries(boundKeys.map(key=>[key,converge(topDown.boundDisplay.shares?.[key]??0,topDown.sceneTopDown.shares?.[key]??0)]));
+        const converge=(from:number,to:number)=>Math.abs(from-to)<1e-5?to:mix(from,to,follow);
+        const shares=Object.fromEntries(boundKeys.map(key=>[key,converge(topDown.boundDisplay.shares?.[key]??0,topDown.sceneTopDown.shares?.[key]??0)])) as Shares;
         if(topDown.sceneTopDown.available&&!snap){
             const total=Object.values(shares).reduce((sum,v)=>sum+v,0);
             for(const key of boundKeys)shares[key]/=total;
         }
-        const weights=Object.fromEntries(Object.keys(boundStyles).map(key=>[key,converge(topDown.boundDisplay.weights[key]??0,key===category?1:0)]));
-        const color=[0,1,2].map(i=>Object.keys(weights).reduce((sum,key)=>sum+boundRGB(key)[i]*weights[key],0));
+        const weights=Object.fromEntries((Object.keys(boundStyles) as Bound[]).map(key=>[key,converge(topDown.boundDisplay.weights[key]??0,key===category?1:0)]));
+        const color=[0,1,2].map(i=>(Object.keys(weights) as Bound[]).reduce((sum,key)=>sum+boundRGB(key)[i]*weights[key],0)) as Vector;
         topDown.boundDisplay={trace:replay.trace,shares,weights,color};
-        const quad=(x0,x1,z0,z1,y,color,alpha)=>{
+        const quad=(x0:number,x1:number,z0:number,z1:number,y:number,color:Vector,alpha:number)=>{
             const p=[[x0,y,z0],[x1,y,z0],[x1,y,z1],[x0,y,z1]];
             for(const i of [0,1,2,0,2,3])scene.vertex(triangles,p[i],color,alpha);
         };
@@ -466,7 +503,7 @@ function createActivity({camera,clock,scene,gpu,paths,replay,session}) {
             const {dominant,dominantShare}=topDown.sceneTopDown;
             const targetRegion=boundStyles[dominant].region;
             topDown.topDownRegion=targetRegion?{category:dominant,bounds:[...targetRegion]}:null;
-            for(const [key,weight] of Object.entries(weights)){
+            for(const [key,weight] of Object.entries(weights) as [Bound,number][]){
                 const boundStyle=boundStyles[key],color=boundRGB(key);
                 if(!boundStyle.region||weight<.001)continue;
                 const [x0,x1,z0,z1]=boundStyle.region,y=-.255,cut=.45;
@@ -497,12 +534,12 @@ function createActivity({camera,clock,scene,gpu,paths,replay,session}) {
         gpu.upload(gpu.analysisSurface,triangles);
     }
 
-    function updateTopDownUI(animateLabels) {
+    function updateTopDownUI(animateLabels:boolean) {
         const classification=topDown.sceneTopDown;
         const category=classification.available?classification.dominant:"unavailable",boundStyle=boundStyles[category];
-        const boundLabel=boundStyle.label,boundColor=rgb(topDown.boundDisplay.color),shares=topDown.boundDisplay.shares;
-        const dominantShare=category==="active"?shares.retiring+shares.inFlight:category==="mixed"?Math.max(shares.retiring+shares.inFlight,shares.badSpeculation,shares.frontend,shares.backend,shares.unresolved):shares[category];
-        const text=(id,value)=>{if($(id).textContent!==value)$(id).textContent=value;};
+        const boundLabel=boundStyle.label,boundColor=rgb(topDown.boundDisplay.color),shares=topDown.boundDisplay.shares!;
+        const dominantShare=category==="active"?shares.retiring+shares.inFlight:category==="mixed"?Math.max(shares.retiring+shares.inFlight,shares.badSpeculation,shares.frontend,shares.backend,shares.unresolved):shares[category as ShareKey];
+        const text=(id:string,value:string)=>{if($(id).textContent!==value)$(id).textContent=value;};
         for(const id of ["bound-scene-status"]){
             const el=$(id),changed=el.textContent!==boundLabel;
             if(changed||!animateLabels)el.getAnimations().forEach(a=>a.cancel());
@@ -512,20 +549,22 @@ function createActivity({camera,clock,scene,gpu,paths,replay,session}) {
             }
         }
         const sceneBound=$("bound-scene");sceneBound.dataset.bound=category;
-        sceneBound.title=classification.available?`${replay.trace.topDown.method} · cycles ${classification.firstCycle}–${classification.lastCycle} · ${classification.totalSlots} allocation slots`:"Stage evidence did not establish a Top-down classification.";
+        sceneBound.title=classification.available?`${replay.trace!.topDown!.method} · cycles ${classification.firstCycle}–${classification.lastCycle} · ${classification.totalSlots} allocation slots`:"Stage evidence did not establish a Top-down classification.";
         sceneBound.style.setProperty("--bound-color",boundColor);
         text("bound-scene-value",classification.available?(dominantShare*100).toFixed(1):"");
         $("bound-scene-share").hidden=!classification.available;
         $("bound-scene-window").textContent=classification.available?`PAST ${Number(classification.cycles.toFixed(1))} CYC → NOW · ESTIMATE`:"UNAVAILABLE";
         $("bound-scene-context").textContent=boundStyle.context;
         $("bound-scene-bar").hidden=$("bound-scene-key").hidden=!classification.available;
-        for(const el of $("bound-scene-bar").children)el.style.width=`${shares[el.dataset.bound]*100}%`;
-        for(const el of $("bound-scene-key").children){
-            el.querySelector("b").textContent=`${Math.round(shares[el.dataset.bound]*100)}%`;
+        for(const el of $("bound-scene-bar").children as HTMLCollectionOf<HTMLElement>)el.style.width=`${shares[el.dataset.bound as ShareKey]*100}%`;
+        for(const el of $("bound-scene-key").children as HTMLCollectionOf<HTMLElement>){
+            el.querySelector("b")!.textContent=`${Math.round(shares[el.dataset.bound as ShareKey]*100)}%`;
             if(el.dataset.bound==="unresolved")el.hidden=shares.unresolved<.0001;
             if(el.dataset.bound==="inFlight")el.hidden=shares.inFlight<.0001;
         }
     }
     return Object.assign(activity,{drawDynamic,reset,registerReaders,registerCellColor,registerCellAppearance,stream,topDown,feedPath,updateTopDownUI});
 }
-module.exports={createActivity,wakeFlightCycles};
+const activityModule={createActivity,wakeFlightCycles};
+namespace activityModule {export type Activity=ReturnType<typeof createActivity>}
+export = activityModule;
