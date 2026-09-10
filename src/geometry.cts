@@ -55,7 +55,7 @@ interface PathScene {
 }
 interface PathReplay<T extends PathOperation = PathOperation> {
     ops: T[];
-    trace: { firstCycle: number; fetchWidth: number } | null;
+    trace: { firstCycle: number; fetchWidth: number };
 }
 interface PathSession {
     style: { palette: Record<string, Vec3> };
@@ -497,7 +497,7 @@ function createPaths<T extends PathOperation>({
             return scene.renameInstructionPosition(stage.displaySlot ?? 0);
         } else {
             z +=
-                ((op.index % Math.max(2, replay.trace!.fetchWidth)) - (Math.max(2, replay.trace!.fetchWidth) - 1) / 2) *
+                ((op.index % Math.max(2, replay.trace.fetchWidth)) - (Math.max(2, replay.trace.fetchWidth) - 1) / 2) *
                 0.38;
         }
         return [x, y, z];
@@ -573,7 +573,7 @@ function createPaths<T extends PathOperation>({
         const active = replay.ops.filter((o) => o.fetch <= t && o.end > t);
         const issued = active.filter((o) => o.allocation != null && t >= o.allocation && t < (o.issue ?? o.end));
         const rob = active.filter((o) => o.allocation != null && t >= o.allocation);
-        const windowStart = Math.max(replay.trace!.firstCycle, t - 16),
+        const windowStart = Math.max(replay.trace.firstCycle, t - 16),
             elapsed = t - windowStart;
         const ipc =
             elapsed > 0 ? replay.ops.filter((o) => !o.flush && o.end > windowStart && o.end <= t).length / elapsed : 0;

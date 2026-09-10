@@ -192,15 +192,15 @@ function createScene({ gpu, replay, session }: SceneOptions) {
         const retiring = from === "commit" || to === "commit";
         const count =
             from === "issue" && to === "register-read"
-                ? replay.trace!.structure.executionNodes.reduce((sum, n) => sum + n.pipeCount, 0)
+                ? replay.trace.structure.executionNodes.reduce((sum, n) => sum + n.pipeCount, 0)
                 : (execution ??
                   (memoryPath
                       ? scene.nodes.get("exec-memory")!.pipeCount!
                       : retiring
-                        ? replay.trace!.retireWidth
+                        ? replay.trace.retireWidth
                         : to === "issue"
-                          ? replay.trace!.structure.allocationWidth
-                          : replay.trace!.fetchWidth));
+                          ? replay.trace.structure.allocationWidth
+                          : replay.trace.fetchWidth));
         const lanes = Array.from({ length: count }, (_, index) => {
             const source = linkPort(from, true, index, count),
                 target = linkPort(to, false, index, count);
@@ -239,11 +239,11 @@ function createScene({ gpu, replay, session }: SceneOptions) {
 
     function matrixPosition(row: number, column = -1): Vector {
         const n = scene.nodes.get("issue")!,
-            columns = replay.dependencyReplay!.columnCount;
+            columns = replay.dependencyReplay.columnCount;
         return [
             n.x + (column < 0 ? -0.44 * n.w + (row % 2) * 0.28 : (-0.28 + ((column + 0.5) * 0.68) / columns) * n.w),
             n.h + 0.23,
-            n.z - n.matrixDepth! / 2 + ((row + 0.5) * n.matrixDepth!) / replay.trace!.structure.queueCapacity
+            n.z - n.matrixDepth! / 2 + ((row + 0.5) * n.matrixDepth!) / replay.trace.structure.queueCapacity
         ];
     }
 
@@ -273,7 +273,7 @@ function createScene({ gpu, replay, session }: SceneOptions) {
 
     function renameInstructionPosition(slot: number): Vector {
         const n = renameNode()!,
-            rows = Math.max(2, replay.trace!.fetchWidth),
+            rows = Math.max(2, replay.trace.fetchWidth),
             columns = Math.ceil(n.instructionSlots! / rows);
         return [
             n.x + (Math.floor(slot / rows) - (columns - 1) / 2) * 0.32,
@@ -297,7 +297,7 @@ function createScene({ gpu, replay, session }: SceneOptions) {
             z = n.z - n.d * 0.42 + (bank + 0.5) * pitch;
         const bits = Math.max(
             1,
-            Math.ceil(Math.log2(replay.trace!.evidence!.registers!.capacity ?? replay.registerTags.at(-1)! + 1))
+            Math.ceil(Math.log2(replay.trace.evidence!.registers!.capacity ?? replay.registerTags.at(-1)! + 1))
         );
         const x = n.x + (column - 3.5) * n.w * 0.095,
             y = n.h + 0.23 + bank * 0.018;
@@ -330,8 +330,8 @@ function createScene({ gpu, replay, session }: SceneOptions) {
 
     function robCell(slot: number, lift = 0): Vector {
         const n = scene.nodes.get("rob")!,
-            columns = replay.trace!.structure.robCapacity > 96 ? 8 : 4,
-            rows = Math.ceil(replay.trace!.structure.robCapacity / columns);
+            columns = replay.trace.structure.robCapacity > 96 ? 8 : 4,
+            rows = Math.ceil(replay.trace.structure.robCapacity / columns);
         const column = Math.floor(slot / rows),
             offset = slot % rows;
         const row = column % 2 ? rows - 1 - offset : offset;
@@ -344,8 +344,8 @@ function createScene({ gpu, replay, session }: SceneOptions) {
 
     function commitSlot(index: number): { inlet: Vector; outlet: Vector; depth: number } {
         const n = scene.nodes.get("commit")!,
-            pitch = (n.d * 0.8) / replay.trace!.retireWidth,
-            z = n.z + (index - (replay.trace!.retireWidth - 1) / 2) * pitch,
+            pitch = (n.d * 0.8) / replay.trace.retireWidth,
+            z = n.z + (index - (replay.trace.retireWidth - 1) / 2) * pitch,
             y = n.h + 0.2;
         return { inlet: [n.x - n.w * 0.35, y, z], outlet: [n.x + n.w * 0.35, y, z], depth: pitch * 0.65 };
     }
@@ -406,13 +406,13 @@ function createScene({ gpu, replay, session }: SceneOptions) {
     function buildLayout() {
         scene.nodes = new Map();
         scene.connections = [];
-        const front = replay.trace!.structure.frontNodes;
+        const front = replay.trace.structure.frontNodes;
         scene.transferProfile = sonataReplay.measureTransfers(replay.ops, {
-            firstCycle: replay.trace!.firstCycle,
-            lastCycle: replay.trace!.lastCycle,
+            firstCycle: replay.trace.firstCycle,
+            lastCycle: replay.trace.lastCycle,
             frontNodes: front
         });
-        const hasRegisters = !!replay.trace!.evidence?.registers;
+        const hasRegisters = !!replay.trace.evidence?.registers;
         front.forEach((n, i) => {
             const node = makeNode(
                 n.id,
@@ -428,15 +428,15 @@ function createScene({ gpu, replay, session }: SceneOptions) {
             node.names = n.names;
         });
         const rn = renameNode();
-        if (rn && replay.trace!.evidence?.registers?.rows.length) {
-            rn.mapWords = replay.trace!.evidence.registers.rows.length;
+        if (rn && replay.trace.evidence?.registers?.rows.length) {
+            rn.mapWords = replay.trace.evidence.registers.rows.length;
             rn.d = 3.6;
             rn.color = session.style.palette.blue;
             rn.detail =
-                replay.trace!.evidence.registers.logicalNames?.[0] === "RAX"
+                replay.trace.evidence.registers.logicalNames?.[0] === "RAX"
                     ? "16 ARCH + 16 TEMP"
                     : `${rn.mapWords} LOGICAL REGS`;
-            if (replay.trace!.evidence.registers.kind === "configuration")
+            if (replay.trace.evidence.registers.kind === "configuration")
                 rn.detail = `${rn.mapWords} LOGICAL · MAP NOT LOGGED`;
         }
         if (rn)
@@ -455,12 +455,12 @@ function createScene({ gpu, replay, session }: SceneOptions) {
             hasRegisters ? 3.2 : 3.6,
             0.65,
             session.style.palette.blue,
-            `${replay.trace!.structure.queueCapacity} ROWS × ${replay.dependencyReplay!.columnCount} COLS · ${replay.trace!.evidence?.scheduling.kind === "recorded" ? "RECORDED" : "RAW ESTIMATE"}`
+            `${replay.trace.structure.queueCapacity} ROWS × ${replay.dependencyReplay.columnCount} COLS · ${replay.trace.evidence?.scheduling.kind === "recorded" ? "RECORDED" : "RAW ESTIMATE"}`
         );
         // 駒を縮めずに置けるよう、待機列の行間と筐体の奥行きを確保する。
-        scheduler.matrixDepth = Math.max(scheduler.w * 0.68, replay.trace!.structure.queueCapacity * 0.14);
+        scheduler.matrixDepth = Math.max(scheduler.w * 0.68, replay.trace.structure.queueCapacity * 0.14);
         scheduler.d = Math.max(scheduler.d, scheduler.matrixDepth / 0.84);
-        for (const n of replay.trace!.structure.executionNodes) {
+        for (const n of replay.trace.structure.executionNodes) {
             const z = { integer: -4.2, branch: 0, memory: 4.2 }[n.kind];
             const compact = n.kind !== "memory";
             const node = makeNode(
@@ -477,7 +477,7 @@ function createScene({ gpu, replay, session }: SceneOptions) {
             node.pipeCount = n.pipeCount;
             node.compact = compact;
         }
-        if (replay.trace!.structure.memoryWait)
+        if (replay.trace.structure.memoryWait)
             makeNode(
                 "memory-wait",
                 "MEMORY WAIT",
@@ -490,17 +490,17 @@ function createScene({ gpu, replay, session }: SceneOptions) {
                 "OBSERVED WAIT"
             );
         // 左端を保って右へ広げ、メモリ待ちからの接続線が逆向きになるのを避ける。
-        const robWidth = replay.trace!.structure.robCapacity > 96 ? 3.0 : 2.45;
+        const robWidth = replay.trace.structure.robCapacity > 96 ? 3.0 : 2.45;
         makeNode(
             "rob",
-            replay.trace!.machineOrder === "in-order" ? "COMPLETION FIFO" : "REORDER BUFFER",
+            replay.trace.machineOrder === "in-order" ? "COMPLETION FIFO" : "REORDER BUFFER",
             6.8 + (robWidth - 2.45) / 2,
             0,
             robWidth,
             8.0,
             0.65,
             session.style.palette.blue,
-            `${replay.trace!.structure.robCapacity} ENTRIES · HEAD → COMMIT`
+            `${replay.trace.structure.robCapacity} ENTRIES · HEAD → COMMIT`
         );
         makeNode(
             "commit",
@@ -511,7 +511,7 @@ function createScene({ gpu, replay, session }: SceneOptions) {
             3.0,
             0.65,
             session.style.palette.integer,
-            `${replay.trace!.retireWidth} SLOTS / CYCLE`
+            `${replay.trace.retireWidth} SLOTS / CYCLE`
         );
         if (hasRegisters)
             makeNode(
@@ -523,14 +523,14 @@ function createScene({ gpu, replay, session }: SceneOptions) {
                 11.3,
                 0.4,
                 session.style.palette.blue,
-                replay.trace!.evidence!.registers!.origin === "gem5"
-                    ? `${replay.registerTags.length} INT · ${replay.trace!.evidence!.registers!.kind === "configuration" ? "CONFIG ONLY" : "RECORDED ACCESSES"}`
+                replay.trace.evidence!.registers!.origin === "gem5"
+                    ? `${replay.registerTags.length} INT · ${replay.trace.evidence!.registers!.kind === "configuration" ? "CONFIG ONLY" : "RECORDED ACCESSES"}`
                     : `${replay.registerTags.length} OBSERVED · READ AT Rr`
             );
         front.slice(1).forEach((n, i) => addConnection(front[i].id, n.id, scene.nodes.get(front[i].id)!.color));
         addConnection(front.at(-1)!.id, "issue", session.style.palette.integer);
         if (hasRegisters) addConnection("issue", "register-read", session.style.palette.blue);
-        for (const n of replay.trace!.structure.executionNodes) {
+        for (const n of replay.trace.structure.executionNodes) {
             addConnection(hasRegisters ? "register-read" : "issue", n.id, session.style.palette[n.kind]);
             addConnection(n.id, "rob", session.style.palette[n.kind]);
         }
@@ -912,7 +912,7 @@ function createScene({ gpu, replay, session }: SceneOptions) {
             z1 = n.z + n.matrixDepth! / 2;
         n.grid = { rows: [], columns: [] };
         // 境界線ではなく、同じエントリの行・列を一本ずつ描く。交点を依存セルと揃える。
-        for (let r = 0; r < replay.trace!.structure.queueCapacity; r++) {
+        for (let r = 0; r < replay.trace.structure.queueCapacity; r++) {
             const p = matrixPosition(r),
                 segment: [Vector, Vector] = [
                     [p[0], y, p[2]],
@@ -926,7 +926,7 @@ function createScene({ gpu, replay, session }: SceneOptions) {
                 session.style.matte ? (r % 8 === 0 ? 0.42 : 0.27) : r % 8 === 0 ? 0.24 : 0.13
             );
         }
-        for (let c = 0; c < replay.dependencyReplay!.columnCount; c++) {
+        for (let c = 0; c < replay.dependencyReplay.columnCount; c++) {
             const x = matrixPosition(0, c)[0],
                 segment: [Vector, Vector] = [
                     [x, y, z0],
@@ -1085,7 +1085,7 @@ function createScene({ gpu, replay, session }: SceneOptions) {
             0.35,
             baseLevels.plinth
         );
-        for (let i = 0; i < replay.trace!.retireWidth; i++) {
+        for (let i = 0; i < replay.trace.retireWidth; i++) {
             const slot = commitSlot(i),
                 a = slot.inlet,
                 b = slot.outlet;
@@ -1224,10 +1224,10 @@ function createScene({ gpu, replay, session }: SceneOptions) {
             }
         }
         // 連続した物理スロットを蛇行させ、1 本の循環 FIFO を構成する。
-        for (let slot = 0; slot < replay.trace!.structure.robCapacity - 1; slot++)
+        for (let slot = 0; slot < replay.trace.structure.robCapacity - 1; slot++)
             line(lines, robCell(slot, -0.09), robCell(slot + 1, -0.09), session.style.palette.blue, 0.28);
         const first = robCell(0, -0.09),
-            last = robCell(replay.trace!.structure.robCapacity - 1, -0.09);
+            last = robCell(replay.trace.structure.robCapacity - 1, -0.09);
         const wrap = [
             last,
             [last[0] + 0.32, last[1], last[2] - 0.26],
@@ -1319,7 +1319,7 @@ function createScene({ gpu, replay, session }: SceneOptions) {
             if (n.mapWords!) {
                 el.classList.add("rename-label");
                 el.title =
-                    replay.trace!.evidence!.registers!.kind === "configuration"
+                    replay.trace.evidence!.registers!.kind === "configuration"
                         ? "Rename table is present; mappings were not recorded in this trace. All entries remain unobserved."
                         : "Rename map: one bar per logical register, perpendicular to instruction flow. Blue writes a new mapping; red restores an older mapping.";
             }
@@ -1331,7 +1331,7 @@ function createScene({ gpu, replay, session }: SceneOptions) {
                 allocation.id = "register-allocation";
                 allocation.className = "register-allocation";
                 allocation.title =
-                    replay.trace!.evidence!.registers!.allocation?.label ??
+                    replay.trace.evidence!.registers!.allocation?.label ??
                     "Allocation state not recorded in this trace.";
                 for (const state of ["allocated", "free", "unknown"]) {
                     const item = document.createElement("span");
@@ -1340,7 +1340,7 @@ function createScene({ gpu, replay, session }: SceneOptions) {
                     allocation.append(item);
                 }
                 el.append(allocation);
-                if (replay.trace!.evidence!.registers!.allocation?.kind === "inferred")
+                if (replay.trace.evidence!.registers!.allocation?.kind === "inferred")
                     detail.textContent = `${replay.registerTags.length} OBSERVED · RELEASE ≈`;
             }
             $("labels").append(el);

@@ -3,6 +3,9 @@ import geometry = require("../src/geometry.cts");
 import replay = require("../src/replay-model.cts");
 import renderer = require("../src/renderer.cts");
 import scene = require("../src/scene.cts");
+import camera = require("../src/camera.cts");
+import shaders = require("../src/shaders.cts");
+import browserTest = require("./browser-test.cts");
 
 const clamped: number = geometry.clamp(0.5);
 const rolling = geometry.createRollingTrack((time) => [time, 0, 0], [0, 1]);
@@ -10,7 +13,16 @@ const rotation: number[] = rolling.rotationAt(0.5);
 const rob = replay.createRobReplay([], 4);
 const head: number = rob.stateAt(0).head;
 const speed: number = replay.flushPlaybackRate(1, [0]);
-const pathReplay: geometry.Replay = replay.createReplay({ samples: [] });
+const source = replay.createReplay({ samples: [] });
+// @ts-expect-error 読込み元は準備済みの描画状態ではない。
+const unloaded: geometry.Replay = source;
+// @ts-expect-error current は初回の読込み前には null。
+const pending: replay.Replay = source.current;
+const ready = source.loadTrace("demo");
+const pathReplay: geometry.Replay = ready;
+const readyTrace: replay.Trace = ready.trace;
+const readyRob: number = ready.robReplay.stateAt(0).head;
+void [unloaded, pending, readyTrace, readyRob];
 
 // @ts-expect-error 座標・時刻へ文字列を渡せない。
 geometry.clamp(".5");
@@ -52,7 +64,7 @@ const names: string[] | undefined = paths.stageAt(operation, 0)?.names;
 const wait: replay.Stage = replay.memoryCompletions([operation])[0].wait;
 paths.setGround(null);
 const layout = scene.createScene({
-    replay: replay.createReplay({ samples: [] }),
+    replay: ready,
     session: { style: scene.styles.neon }
 });
 const placement: geometry.Scene = layout;
@@ -85,3 +97,37 @@ if (globalThis.sonata) {
     // @ts-expect-error WebGL未対応時には診断APIも未生成。
     globalThis.sonata.setPlaying(true);
 }
+
+// カメラとシェーダーは GPU 資源の全体を受け取らずに利用できる。
+const detachedCamera = camera.createCamera({
+    viewport: { canvas: document.createElement("canvas"), cssWidth: 100, cssHeight: 100, resize() {} },
+    world: document.createElement("div"),
+    autoCamera: document.createElement("button"),
+    onPick(x: number, y: number) {
+        void [x, y];
+    }
+});
+detachedCamera.setCamera("plan");
+// @ts-expect-error カメラ単独の入口でも未知のモードを拒否する。
+detachedCamera.setCamera("unknown");
+const sourcePrograms = shaders.createSurfaceShaders((vertex, fragment) => ({ vertex, fragment }));
+const fragment: string = sourcePrograms.solidProgram.fragment;
+void fragment;
+
+// Electron に渡す関数の本体・引数・戻り値も型を保つ。
+declare const browserWindow: import("electron").BrowserWindow;
+const { evaluate } = browserTest.createBrowserTest(browserWindow);
+const cameraRadius: Promise<number> = evaluate(({ sonata }) => sonata.camera.radius);
+evaluate(({ sonata, $ }, cycle: number) => {
+    sonata.captureAt(cycle);
+    $("license-panel").showModal();
+}, 1);
+// @ts-expect-error ページ内の検査からも誤った再生時刻を渡せない。
+evaluate(({ sonata }) => sonata.captureAt("1"));
+// @ts-expect-error ページ内の検査からも未知のカメラモードを指定できない。
+evaluate(({ sonata }) => sonata.setCamera("unknown"));
+// @ts-expect-error ブラウザへ渡す引数もコールバックの型と一致する必要がある。
+evaluate((_, cycle: number) => cycle, "1");
+// @ts-expect-error 戻り値の型は境界を通っても維持される。
+const wrongRadius: Promise<string> = evaluate(({ sonata }) => sonata.camera.radius);
+void [cameraRadius, wrongRadius];

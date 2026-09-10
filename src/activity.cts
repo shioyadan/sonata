@@ -11,8 +11,8 @@ const wakeFlightCycles = 1.2,
 const $ = (id: string) => document.getElementById(id)!;
 type Vector = geometry.Vector;
 type Operation = sonataReplay.Operation;
-type MatrixState = ReturnType<NonNullable<sonataReplay.Replay["dependencyReplay"]>["stateAt"]>;
-type RegisterState = ReturnType<NonNullable<sonataReplay.Replay["registerReplay"]>["stateAt"]>;
+type MatrixState = ReturnType<sonataReplay.Replay["dependencyReplay"]["stateAt"]>;
+type RegisterState = ReturnType<sonataReplay.Replay["registerReplay"]["stateAt"]>;
 type RegisterCell = Extract<RegisterState, { available: true }>["physical"][number];
 type RegisterRead = {
     op: Operation;
@@ -20,7 +20,7 @@ type RegisterRead = {
     sources: NonNullable<Operation["reads"][number]["sources"]> | Operation["sourceRegisters"];
     progress: number;
 };
-type FeedState = ReturnType<NonNullable<sonataReplay.Replay["feedReplay"]>["stateAt"]>;
+type FeedState = ReturnType<sonataReplay.Replay["feedReplay"]["stateAt"]>;
 type Classification = ReturnType<typeof sonataReplay.sampleTopDown>;
 type Shares = Extract<Classification, { available: true }>["shares"];
 type ShareKey = keyof Shares;
@@ -37,7 +37,13 @@ type RenameWord = {
     layout: ReturnType<sceneModule.Scene["renameWordLayout"]>;
     cells: { bit: number; value: number | null; position: Vector }[];
 };
+interface FrameState {
+    stats: ReturnType<geometry.Paths<Operation>["occupancy"]>;
+    matrix: MatrixState;
+    registers: RegisterState;
+}
 interface ActivityState {
+    readonly frame: FrameState;
     visiblePieces: geometry.Pose[];
     visibleParticles: {
         op: Operation;
@@ -48,11 +54,8 @@ interface ActivityState {
         brightness: number;
         color: Vector;
     }[];
-    currentStats: Partial<ReturnType<geometry.Paths<Operation>["occupancy"]>>;
     activeBranches: sonataReplay.Replay["branchRecoveries"];
     activeNotifications: sonataReplay.Replay["memoryEvents"];
-    matrixState: MatrixState | null;
-    registerState: RegisterState | null;
     registerReads: RegisterRead[];
     renameWords: RenameWord[];
     physicalElements: Map<number, HTMLSpanElement>;
@@ -108,14 +111,16 @@ interface ActivityOptions {
 }
 // drawDynamic が各時刻の状態を更新し、その後で DOM と診断 API が参照する。
 function createActivity({ camera, clock, scene, gpu, paths, replay, session }: ActivityOptions) {
+    let frame: FrameState | null = null;
     const activity: ActivityState = {
+        get frame() {
+            if (!frame) throw new Error("Activity has not been drawn yet");
+            return frame;
+        },
         visiblePieces: [],
         visibleParticles: [],
-        currentStats: {},
         activeBranches: [],
         activeNotifications: [],
-        matrixState: null,
-        registerState: null,
         registerReads: [],
         renameWords: [],
         physicalElements: new Map()
@@ -126,15 +131,17 @@ function createActivity({ camera, clock, scene, gpu, paths, replay, session }: A
             pieces: number[] = [];
         drawTopDown(lines, dt);
         drawInstructionStream(lines, points);
-        activity.currentStats = paths.occupancy(session.cycle);
+        frame = {
+            stats: paths.occupancy(session.cycle),
+            matrix: replay.dependencyReplay.stateAt(session.cycle),
+            registers: replay.registerReplay.stateAt(session.cycle)
+        };
         activity.visibleParticles = [];
         activity.visiblePieces = [];
         activity.activeBranches = replay.branchRecoveries.filter(
             (e) => session.cycle >= e.cycle && session.cycle < e.until && paths.positionAt(e.op, session.cycle)
         );
-        activity.matrixState = replay.dependencyReplay!.stateAt(session.cycle);
-        activity.registerState = replay.registerReplay!.stateAt(session.cycle);
-        activity.registerReads = activity.registerState.available
+        activity.registerReads = activity.frame.registers.available
             ? replay.ops.flatMap((op) =>
                   op.reads
                       .filter((r) => session.cycle >= r.start && session.cycle < Math.min(r.end, op.end))
@@ -151,7 +158,7 @@ function createActivity({ camera, clock, scene, gpu, paths, replay, session }: A
         drawCommit(lines, points);
         const activeNodes = new Map<string, number>(),
             activeLanes = new Map<string, number>();
-        for (const op of activity.currentStats.active!) {
+        for (const op of activity.frame.stats.active) {
             const s = paths.stageAt(op, session.cycle);
             if (!s) continue;
             activeNodes.set(s.node, (activeNodes.get(s.node) || 0) + 1);
@@ -218,9 +225,9 @@ function createActivity({ camera, clock, scene, gpu, paths, replay, session }: A
             }
         }
         // 完了しても物理スロットは動かさず、末尾で割り当て、先頭でコミットする。
-        const fifo = replay.robReplay!.stateAt(session.cycle),
+        const fifo = replay.robReplay.stateAt(session.cycle),
             occupied = new Map(fifo.entries.map((entry) => [entry.slot, entry.op]));
-        for (let slot = 0; slot < replay.trace!.structure.robCapacity; slot++) {
+        for (let slot = 0; slot < replay.trace.structure.robCapacity; slot++) {
             const p = scene.robCell(slot),
                 op = occupied.get(slot);
             const col = op
@@ -305,7 +312,7 @@ function createActivity({ camera, clock, scene, gpu, paths, replay, session }: A
             } else {
                 const arrival = (age - wakeFlightCycles) / (wakeEffectCycles - wakeFlightCycles),
                     p = scene.wakeBusEntry();
-                const column = replay.dependencyReplay!.columnAt(event.id, session.cycle);
+                const column = replay.dependencyReplay.columnAt(event.id, session.cycle);
                 scene.ring(
                     lines,
                     p[0],
@@ -450,9 +457,9 @@ function createActivity({ camera, clock, scene, gpu, paths, replay, session }: A
     function drawDependencyMatrix(lines: number[], points: number[]) {
         const n = scene.nodes.get("issue")!,
             byID = new Map(replay.ops.map((op) => [op.id, op]));
-        for (const row of activity.matrixState!.rows) {
+        for (const row of activity.frame.matrix.rows) {
             const p = scene.matrixPosition(row.slot!),
-                right = scene.matrixPosition(row.slot!, replay.dependencyReplay!.columnCount - 1);
+                right = scene.matrixPosition(row.slot!, replay.dependencyReplay.columnCount - 1);
             const color = byID.get(row.id) ? session.style.palette[byID.get(row.id)!.kind] : session.style.palette.blue;
             scene.line(lines, p, right, color, row.ready ? 0.15 : 0.075);
             scene.point(
@@ -463,14 +470,14 @@ function createActivity({ camera, clock, scene, gpu, paths, replay, session }: A
                 row.ready ? 0.85 : 0.25
             );
         }
-        for (const cell of activity.matrixState!.cells) {
+        for (const cell of activity.frame.matrix.cells) {
             const p = scene.matrixPosition(cell.row!, cell.column!),
                 color = session.style.palette[byID.get(cell.consumer)!.kind];
             scene.point(points, p, color, cell.waiting ? 7 : 11, cell.alpha * (cell.waiting ? 0.8 : 1.2));
-            const dx = Math.min(0.045, (n.w * 0.24) / replay.dependencyReplay!.columnCount);
+            const dx = Math.min(0.045, (n.w * 0.24) / replay.dependencyReplay.columnCount);
             scene.line(lines, [p[0] - dx, p[1], p[2]], [p[0] + dx, p[1], p[2]], color, cell.alpha);
         }
-        for (const dep of activity.matrixState!.external) {
+        for (const dep of activity.frame.matrix.external) {
             const p = scene.matrixPosition(dep.row!),
                 color = session.style.palette[byID.get(dep.consumer)!.kind];
             scene.point(
@@ -481,7 +488,7 @@ function createActivity({ camera, clock, scene, gpu, paths, replay, session }: A
                 dep.alpha * (dep.waiting ? 0.65 : 1.15)
             );
         }
-        for (const issue of activity.matrixState!.issues) {
+        for (const issue of activity.frame.matrix.issues) {
             const op = byID.get(issue.id)!,
                 color = session.style.palette[op.kind],
                 fade = 1 - issue.progress;
@@ -524,7 +531,7 @@ function createActivity({ camera, clock, scene, gpu, paths, replay, session }: A
                     scene.point(points, end, color, inColumn ? 8 : 10, inColumn ? columnGlow * 0.85 : fade * 0.75);
                 }
                 if (columnGlow > 0) {
-                    const bottom = scene.matrixPosition(replay.trace!.structure.queueCapacity - 1, issue.column!),
+                    const bottom = scene.matrixPosition(replay.trace.structure.queueCapacity - 1, issue.column!),
                         top = scene.matrixPosition(0, issue.column!);
                     // 選択列は明るい細線として一続きに描き、列全体を見分けやすくする。
                     scene.line(lines, bottom, top, color, columnGlow * 0.85);
@@ -539,10 +546,10 @@ function createActivity({ camera, clock, scene, gpu, paths, replay, session }: A
                 }
             }
         }
-        for (const event of activity.matrixState!.broadcasts) {
+        for (const event of activity.frame.matrix.broadcasts) {
             if (event.column !== null) {
                 const top = scene.wakeColumnHead(event.column),
-                    bottom = scene.matrixPosition(replay.trace!.structure.queueCapacity - 1, event.column);
+                    bottom = scene.matrixPosition(replay.trace.structure.queueCapacity - 1, event.column);
                 const head = top.map((v, i) => mix(v, bottom[i], smooth(event.progress)));
                 scene.line(lines, scene.wakeBusEntry(), top, session.style.palette.integer, (1 - event.progress) * 0.8);
                 scene.line(lines, top, head, session.style.palette.integer, (1 - event.progress) * 0.65);
@@ -595,7 +602,7 @@ function createActivity({ camera, clock, scene, gpu, paths, replay, session }: A
         activity.renameWords = [];
         if (!scene.renameNode()?.mapWords) return;
         const n = scene.renameNode();
-        activity.registerState!.rows.forEach((row, index) => {
+        activity.frame.registers.rows.forEach((row, index) => {
             const layout = scene.renameWordLayout(index),
                 { start, end, halfWidth, bits } = layout;
             const [x, y, z0] = start,
@@ -707,7 +714,7 @@ function createActivity({ camera, clock, scene, gpu, paths, replay, session }: A
 
     function drawRegisters(lines: number[], points: number[]) {
         const triangles: number[] = [];
-        if (!activity.registerState!.available) {
+        if (!activity.frame.registers.available) {
             gpu.upload(gpu.registerSurface, triangles);
             return;
         }
@@ -718,7 +725,7 @@ function createActivity({ camera, clock, scene, gpu, paths, replay, session }: A
         const halfWidth = (n.w * 0.34) / scene.physicalColumns(),
             halfDepth = (n.d * 0.34) / Math.ceil(replay.registerTags.length / scene.physicalColumns());
         drawRenameWords(triangles, lines, points);
-        for (const cell of activity.registerState!.physical) {
+        for (const cell of activity.frame.registers.physical) {
             const p = scene.physicalTagPosition(cell.physical),
                 reading = readIDs.has(cell.physical),
                 appearance = registerCellAppearance(cell);
@@ -737,7 +744,7 @@ function createActivity({ camera, clock, scene, gpu, paths, replay, session }: A
             if (appearance.unknown) scene.line(lines, corners[0], corners[2], [0.47, 0.52, 0.56], 0.16);
             if (cell.value !== null && appearance.valueAlpha > 0) {
                 const bits = BigInt(cell.value),
-                    chunk = (replay.trace!.evidence!.registers!.wordBits ?? 32) / 8,
+                    chunk = (replay.trace.evidence!.registers!.wordBits ?? 32) / 8,
                     mask = (1n << BigInt(chunk)) - 1n;
                 for (let bit = 0; bit < 8; bit++) {
                     const value = Number((bits >> BigInt((7 - bit) * chunk)) & mask),
@@ -792,7 +799,7 @@ function createActivity({ camera, clock, scene, gpu, paths, replay, session }: A
             $("register-readouts").append(el);
             activity.physicalElements.set(tag, el);
         }
-        $("register-writeback").hidden = !replay.trace!.evidence?.registers;
+        $("register-writeback").hidden = !replay.trace.evidence?.registers;
     }
 
     // 流入する命令列と squash 時の巻き戻し。
@@ -811,7 +818,7 @@ function createActivity({ camera, clock, scene, gpu, paths, replay, session }: A
     function drawInstructionStream(lines: number[], points: number[]) {
         stream.feedVisible = [];
         stream.codeFragments = [];
-        stream.feedState = replay.feedReplay!.stateAt(session.cycle, session.reducedMotion);
+        stream.feedState = replay.feedReplay.stateAt(session.cycle, session.reducedMotion);
         const type: number[] = [],
             unravel: number[] = [];
         if (!session.instructionStream) {
@@ -1058,7 +1065,7 @@ function createActivity({ camera, clock, scene, gpu, paths, replay, session }: A
     function drawTopDown(lines: number[], dt: number) {
         // 基板上の重ね描きで割り当ての集計を示す。命令の明るさ、ステージ時刻、
         // 個々のユニットの活動状態には影響させない。
-        topDown.sceneTopDown = sonataReplay.sampleTopDown(replay.trace!.topDown, session.cycle);
+        topDown.sceneTopDown = sonataReplay.sampleTopDown(replay.trace.topDown, session.cycle);
         const triangles: number[] = [];
         topDown.topDownRegion = null;
         topDown.topDownRail = [];
@@ -1200,7 +1207,7 @@ function createActivity({ camera, clock, scene, gpu, paths, replay, session }: A
         const sceneBound = $("bound-scene");
         sceneBound.dataset.bound = category;
         sceneBound.title = classification.available
-            ? `${replay.trace!.topDown!.method} · cycles ${classification.firstCycle}–${classification.lastCycle} · ${classification.totalSlots} allocation slots`
+            ? `${replay.trace.topDown!.method} · cycles ${classification.firstCycle}–${classification.lastCycle} · ${classification.totalSlots} allocation slots`
             : "Stage evidence did not establish a Top-down classification.";
         sceneBound.style.setProperty("--bound-color", boundColor);
         text("bound-scene-value", classification.available ? (dominantShare * 100).toFixed(1) : "");

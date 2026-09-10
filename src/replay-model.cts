@@ -712,24 +712,27 @@ function createRegisterReplay(input: RegisterEvidence | null | undefined) {
     return { stateAt };
 }
 
-// デモの選択と、命令・表示スロットの準備。
+// 未読込みの管理部分から、描画に渡せる準備済みの状態を作る。
 function createReplay({ samples }: { samples: readonly TraceData[] }) {
-    const replay: ReplayState = {
-        trace: null,
-        ops: [],
-        flushEvents: [],
-        activity: [],
-        commitGroups: new Map(),
-        robReplay: null,
-        memoryEvents: [],
-        branchRecoveries: [],
-        dependencyReplay: null,
-        registerReplay: null,
-        registerTags: [],
-        feedOps: [],
-        fetchGroups: [],
-        feedReplay: null
+    let current: ReplayState | null = null;
+    return {
+        get current() {
+            return current;
+        },
+        loadTrace(key: string): ReplayState {
+            const trace = samples.find((sample) => sample.key === key) ?? samples[0];
+            if (!trace) throw new Error("No traces available");
+            const prepared = prepareTrace(trace);
+            // 利用側が持つ参照を保ち、準備中や失敗時の状態を公開しない。
+            if (current) Object.assign(current, prepared);
+            else current = prepared;
+            return current;
+        }
     };
+}
+
+// 命令と表示スロットはこの読込み専用の状態に組み立てる。
+function prepareTrace(trace: TraceData): ReplayState {
     function instructionKind(label: string): Instruction["kind"] {
         const mnemonic = label
             .replace(/^(?:0x)?[0-9a-f]+:\s*/i, "")
@@ -748,7 +751,7 @@ function createReplay({ samples }: { samples: readonly TraceData[] }) {
         field: "issueSlot" | "memorySlot"
     ) {
         const ends: (number | undefined)[] = [];
-        for (const op of [...replay.ops]
+        for (const op of [...ops]
             .filter((o) => start(o) != null)
             .sort((a, b) => start(a)! - start(b)! || a.id - b.id)) {
             let slot = ends.findIndex((e) => e! <= start(op)!);
@@ -760,7 +763,7 @@ function createReplay({ samples }: { samples: readonly TraceData[] }) {
 
     function allocateRenameSlots() {
         const ends: number[] = [];
-        const entries = replay.ops.flatMap((op) =>
+        const entries = ops.flatMap((op) =>
             op.stages.flatMap((stage, index) =>
                 stage.names.includes("Rn") ? [{ op, stage, next: op.stages[index + 1] }] : []
             )
@@ -774,166 +777,151 @@ function createReplay({ samples }: { samples: readonly TraceData[] }) {
         }
     }
 
-    function loadTrace(key: string) {
-        const trace = samples.find((s) => s.key === key) || samples[0];
-        replay.trace = trace;
-        replay.ops = trace.ops.map((t, index) => {
-            const [
-                id,
-                rid,
-                fetch,
-                retired,
-                flush,
-                label,
-                source,
-                allocation,
-                issue,
-                completion,
-                execution,
-                flushCycle
-            ] = t;
-            const end = flush ? (flushCycle ?? retired) : retired;
-            const stages: StageRange[] = [];
-            for (const [name, node, start, finish] of source) {
-                if (stages.at(-1)?.node === node) {
-                    stages.at(-1)!.end = Math.max(finish, stages.at(-1)!.end);
-                    stages.at(-1)!.names.push(name);
-                } else stages.push({ names: [name], node, start, end: finish });
-            }
-            if (stages.length && end > stages.at(-1)!.end) stages.at(-1)!.end = end;
-            return {
-                id,
-                rid,
-                index,
-                fetch,
-                end,
-                flush: !!flush,
-                label,
-                stages,
-                allocation,
-                issue,
-                completion,
-                execution,
-                kind: instructionKind(label),
-                reads:
-                    trace.evidence?.registers?.origin === "gem5"
-                        ? [
-                              ...new Set(
-                                  (trace.evidence.registers.reads ?? []).filter((r) => r.id === id).map((r) => r.cycle)
-                              )
-                          ].map((time) => ({
-                              start: time,
-                              end: time + 0.7,
-                              sources: (trace.evidence!.registers!.reads ?? [])
-                                  .filter((r) => r.id === id && r.cycle === time)
-                                  .map((r) => ({ physical: r.physical, hex: r.hex }))
-                          }))
-                        : source.filter((s) => s[0] === "Rr").map((s) => ({ start: s[2], end: s[3] })),
-                sourceRegisters: trace.evidence?.scheduling.ops.find((o) => o.id === id)?.sources ?? []
-            };
-        });
-        allocateRenameSlots();
-        replay.commitGroups = new Map();
-        for (const op of replay.ops
-            .filter((o) => !o.flush)
-            .sort((a, b) => a.end - b.end || a.rid - b.rid || a.id - b.id)) {
-            const time = Math.floor(op.end),
-                group = replay.commitGroups.get(time) ?? [];
-            op.commitSlot = group.length;
-            group.push(op);
-            replay.commitGroups.set(time, group);
+    const ops: Instruction[] = trace.ops.map((t, index) => {
+        const [id, rid, fetch, retired, flush, label, source, allocation, issue, completion, execution, flushCycle] = t;
+        const end = flush ? (flushCycle ?? retired) : retired;
+        const stages: StageRange[] = [];
+        for (const [name, node, start, finish] of source) {
+            if (stages.at(-1)?.node === node) {
+                stages.at(-1)!.end = Math.max(finish, stages.at(-1)!.end);
+                stages.at(-1)!.names.push(name);
+            } else stages.push({ names: [name], node, start, end: finish });
         }
-        replay.feedOps = [...replay.ops].sort((a, b) => a.fetch - b.fetch || a.id - b.id);
-        replay.fetchGroups = [];
-        replay.feedOps.forEach((op, index) => {
-            op.feedText = `${String(op.id).padStart(6, "0")}  ${op.label.trim().replace(/\s+/g, " ")}`.slice(0, 42);
-            if (replay.fetchGroups.at(-1)?.time === op.fetch) replay.fetchGroups.at(-1)!.count++;
-            else replay.fetchGroups.push({ time: op.fetch, start: index, count: 1 });
-        });
-        replay.feedReplay = createFeedReplay(replay.feedOps, {
-            firstCycle: trace.firstCycle,
-            lastCycle: trace.lastCycle,
-            rows: feedRows,
-            lead: feedLead
-        });
-        allocateSlots(
-            (o) => o.allocation,
-            (o) => o.issue ?? o.end,
-            "issueSlot"
-        );
-        replay.dependencyReplay = createDependencyReplay(
-            replay.ops,
-            trace.evidence?.scheduling,
-            trace.structure.queueCapacity
-        );
-        replay.registerReplay = createRegisterReplay(trace.evidence?.registers);
-        const regs = trace.evidence?.registers;
-        replay.registerTags = regs
-            ? [
-                  ...new Set([
-                      ...regs.initial.owners.map(([p]) => p),
-                      ...regs.initial.mapping.map(([, p]) => p),
-                      ...(regs.allocation?.initial ?? []).map(([p]) => p),
-                      ...(regs.allocation?.events ?? []).map((e) => e.physical),
-                      ...regs.events.flatMap((e) => [e.physical, ...(e.previous === undefined ? [] : [e.previous])])
-                  ])
-              ].sort((a, b) => a - b)
-            : [];
-        replay.robReplay = createRobReplay(replay.ops, trace.structure.robCapacity);
-        for (const op of replay.ops) op.robSlot = replay.robReplay.slots.get(op.id);
-        allocateSlots(
-            (o) => o.stages.find((s) => s.node === "memory-wait")?.start,
-            (o) => o.stages.find((s) => s.node === "memory-wait")?.end,
-            "memorySlot"
-        );
-        replay.memoryEvents = memoryCompletions(replay.ops);
-        replay.flushEvents = [
-            ...new Set(
-                replay.ops
-                    .filter((o) => o.flush && o.end >= trace.firstCycle && o.end <= trace.lastCycle)
-                    .map((o) => o.end)
-            )
-        ].sort((a, b) => a - b);
-        replay.branchRecoveries = findRecoveryBranches(
-            replay.ops,
-            trace.demo.events,
-            replay.flushEvents,
-            trace.parser.startsWith("gem5")
-        );
-
-        replay.activity = Array.from({ length: trace.lastCycle - trace.firstCycle + 1 }, (_, i) => {
-            const t = trace.firstCycle + i;
-            return {
-                active: replay.ops.filter((o) => o.fetch <= t && o.end > t).length,
-                retired: replay.ops.filter((o) => !o.flush && o.end >= t && o.end < t + 1).length
-            };
-        });
+        if (stages.length && end > stages.at(-1)!.end) stages.at(-1)!.end = end;
+        return {
+            id,
+            rid,
+            index,
+            fetch,
+            end,
+            flush: !!flush,
+            label,
+            stages,
+            allocation,
+            issue,
+            completion,
+            execution,
+            kind: instructionKind(label),
+            reads:
+                trace.evidence?.registers?.origin === "gem5"
+                    ? [
+                          ...new Set(
+                              (trace.evidence.registers.reads ?? []).filter((r) => r.id === id).map((r) => r.cycle)
+                          )
+                      ].map((time) => ({
+                          start: time,
+                          end: time + 0.7,
+                          sources: (trace.evidence!.registers!.reads ?? [])
+                              .filter((r) => r.id === id && r.cycle === time)
+                              .map((r) => ({ physical: r.physical, hex: r.hex }))
+                      }))
+                    : source.filter((s) => s[0] === "Rr").map((s) => ({ start: s[2], end: s[3] })),
+            sourceRegisters: trace.evidence?.scheduling.ops.find((o) => o.id === id)?.sources ?? []
+        };
+    });
+    allocateRenameSlots();
+    const commitGroups = new Map();
+    for (const op of ops.filter((o) => !o.flush).sort((a, b) => a.end - b.end || a.rid - b.rid || a.id - b.id)) {
+        const time = Math.floor(op.end),
+            group = commitGroups.get(time) ?? [];
+        op.commitSlot = group.length;
+        group.push(op);
+        commitGroups.set(time, group);
     }
-    return Object.assign(replay, { loadTrace });
+    const feedOps = [...ops].sort((a, b) => a.fetch - b.fetch || a.id - b.id);
+    const fetchGroups: FeedGroup[] = [];
+    feedOps.forEach((op, index) => {
+        op.feedText = `${String(op.id).padStart(6, "0")}  ${op.label.trim().replace(/\s+/g, " ")}`.slice(0, 42);
+        if (fetchGroups.at(-1)?.time === op.fetch) fetchGroups.at(-1)!.count++;
+        else fetchGroups.push({ time: op.fetch, start: index, count: 1 });
+    });
+    const feedReplay = createFeedReplay(feedOps, {
+        firstCycle: trace.firstCycle,
+        lastCycle: trace.lastCycle,
+        rows: feedRows,
+        lead: feedLead
+    });
+    allocateSlots(
+        (o) => o.allocation,
+        (o) => o.issue ?? o.end,
+        "issueSlot"
+    );
+    const dependencyReplay = createDependencyReplay(ops, trace.evidence?.scheduling, trace.structure.queueCapacity);
+    const registerReplay = createRegisterReplay(trace.evidence?.registers);
+    const regs = trace.evidence?.registers;
+    const registerTags = regs
+        ? [
+              ...new Set([
+                  ...regs.initial.owners.map(([p]) => p),
+                  ...regs.initial.mapping.map(([, p]) => p),
+                  ...(regs.allocation?.initial ?? []).map(([p]) => p),
+                  ...(regs.allocation?.events ?? []).map((e) => e.physical),
+                  ...regs.events.flatMap((e) => [e.physical, ...(e.previous === undefined ? [] : [e.previous])])
+              ])
+          ].sort((a, b) => a - b)
+        : [];
+    const robReplay = createRobReplay(ops, trace.structure.robCapacity);
+    for (const op of ops) op.robSlot = robReplay.slots.get(op.id);
+    allocateSlots(
+        (o) => o.stages.find((s) => s.node === "memory-wait")?.start,
+        (o) => o.stages.find((s) => s.node === "memory-wait")?.end,
+        "memorySlot"
+    );
+    const memoryEvents = memoryCompletions(ops);
+    const flushEvents = [
+        ...new Set(
+            ops.filter((o) => o.flush && o.end >= trace.firstCycle && o.end <= trace.lastCycle).map((o) => o.end)
+        )
+    ].sort((a, b) => a - b);
+    const branchRecoveries = findRecoveryBranches(ops, trace.demo.events, flushEvents, trace.parser.startsWith("gem5"));
+
+    const activity = Array.from({ length: trace.lastCycle - trace.firstCycle + 1 }, (_, i) => {
+        const t = trace.firstCycle + i;
+        return {
+            active: ops.filter((o) => o.fetch <= t && o.end > t).length,
+            retired: ops.filter((o) => !o.flush && o.end >= t && o.end < t + 1).length
+        };
+    });
+    return {
+        trace,
+        ops,
+        commitGroups,
+        feedOps,
+        fetchGroups,
+        feedReplay,
+        dependencyReplay,
+        registerReplay,
+        registerTags,
+        robReplay,
+        memoryEvents,
+        flushEvents,
+        branchRecoveries,
+        activity
+    };
 }
 
 interface ReplayState {
-    trace: TraceData | null;
+    trace: TraceData;
     ops: Instruction[];
     flushEvents: number[];
     activity: { active: number; retired: number }[];
     commitGroups: Map<number, Instruction[]>;
-    robReplay: ReturnType<typeof createRobReplay<Instruction>> | null;
+    robReplay: ReturnType<typeof createRobReplay<Instruction>>;
     memoryEvents: ReturnType<typeof memoryCompletions<Instruction>>;
     branchRecoveries: ReturnType<typeof findRecoveryBranches<Instruction>>;
-    dependencyReplay: ReturnType<typeof createDependencyReplay> | null;
-    registerReplay: ReturnType<typeof createRegisterReplay> | null;
+    dependencyReplay: ReturnType<typeof createDependencyReplay>;
+    registerReplay: ReturnType<typeof createRegisterReplay>;
     registerTags: number[];
     feedOps: Instruction[];
     fetchGroups: FeedGroup[];
-    feedReplay: ReturnType<typeof createFeedReplay> | null;
+    feedReplay: ReturnType<typeof createFeedReplay>;
 }
 
 namespace replayModel {
     export type Operation = Instruction;
     export type Stage = StageRange;
     export type Trace = TraceData;
-    export type Replay = ReturnType<typeof createReplay>;
+    export type Replay = ReplayState;
     export type Registers = RegisterEvidence;
     export type Scheduling = SchedulingEvidence;
     export type TopDown = TopDownData;

@@ -88,7 +88,7 @@ function start(gl: WebGL2RenderingContext) {
 
     function setCycle(value: number) {
         if (!Number.isFinite(value)) return;
-        session.cycle = clamp(value, replay.trace!.firstCycle, replay.trace!.lastCycle);
+        session.cycle = clamp(value, replay.trace.firstCycle, replay.trace.lastCycle);
         render();
         updateUI();
         // シーク時はフラッシュ通知も含め、移動先のサイクルを即座に表示する。
@@ -105,7 +105,7 @@ function start(gl: WebGL2RenderingContext) {
     function nextFlush() {
         if (!replay.flushEvents.length) return;
         const t = replay.flushEvents.find((t) => t > session.cycle + 0.1) ?? replay.flushEvents[0];
-        setCycle(Math.max(replay.trace!.firstCycle, t - 0.65));
+        setCycle(Math.max(replay.trace.firstCycle, t - 0.65));
         setPlaying(true);
     }
 
@@ -126,7 +126,7 @@ function start(gl: WebGL2RenderingContext) {
                     cycles: next - session.cycle,
                     rate: dt > 0 ? (next - session.cycle) / (dt * session.speed) : 1
                 };
-                session.cycle = next > replay.trace!.lastCycle ? replay.trace!.firstCycle : next;
+                session.cycle = next > replay.trace.lastCycle ? replay.trace.firstCycle : next;
             }
             render(dt);
             if (now >= clock.nextUI) {
@@ -147,7 +147,8 @@ function start(gl: WebGL2RenderingContext) {
 
     const samples = globalThis.embeddedFlowTraces;
     const gpu = createGpu({ gl, canvas, onResize: drawTimeline });
-    const replay = sonataReplay.createReplay({ samples });
+    const replaySource = sonataReplay.createReplay({ samples });
+    const replay = replaySource.loadTrace(samples.find((sample) => sample.key === "rename-rush")?.key ?? "");
     const scene = createScene({ gpu, replay, session });
     const paths = createPaths<sonataReplay.Operation>({ scene, replay, session });
     const camera = createCamera({
@@ -177,12 +178,15 @@ function start(gl: WebGL2RenderingContext) {
         renderer.buildMaterialShadow();
     }
     function loadTrace(key: string) {
-        replay.loadTrace(key);
+        replaySource.loadTrace(key);
+        applyTrace();
+    }
+    function applyTrace() {
         paths.resetTrace();
-        $("trace-select").value = replay.trace!.key;
+        $("trace-select").value = replay.trace.key;
         session.selectedID = null;
         rebuildWorld();
-        session.cycle = replay.trace!.initialCycle;
+        session.cycle = replay.trace.initialCycle;
         showTrace();
     }
     function setVisualStyle(key: sceneModel.StyleKey) {
@@ -233,7 +237,7 @@ function start(gl: WebGL2RenderingContext) {
     $("next").addEventListener("click", () => step(1));
     $("reset").addEventListener("click", () => {
         session.selectedID = null;
-        setCycle(replay.trace!.firstCycle);
+        setCycle(replay.trace.firstCycle);
     });
     $("timeline").addEventListener("input", () => {
         setPlaying(false);
@@ -245,7 +249,7 @@ function start(gl: WebGL2RenderingContext) {
     });
     $("next-flush").addEventListener("click", nextFlush);
     $("show-highlight").addEventListener("click", () => {
-        const bookmarks = replay.trace!.demo.bookmarks;
+        const bookmarks = replay.trace.demo.bookmarks;
         const bookmark = bookmarks.find((b) => b.cycle > session.cycle + 1) ?? bookmarks[0];
         if (bookmark) {
             setCycle(bookmark.cycle - 2);
@@ -386,7 +390,7 @@ function start(gl: WebGL2RenderingContext) {
         if (!gpu.contextLost) gpu.resize();
     }).observe($("world"));
     window.addEventListener("resize", drawTimeline);
-    loadTrace(samples.find((s) => s.key === "rename-rush")?.key ?? samples[0].key);
+    applyTrace();
     camera.toggleAuto(camera.autoOrbit);
     setPlaying(session.playing);
     render();
@@ -417,9 +421,9 @@ function start(gl: WebGL2RenderingContext) {
             (op) => session.cycle >= op.end
         ).length;
         scene.nodes.get("commit")!.element!.querySelector("small")!.textContent =
-            `${committed} / ${replay.trace!.retireWidth} THIS CYCLE`;
-        if (activity.registerState!.available) {
-            for (const cell of activity.registerState!.physical) {
+            `${committed} / ${replay.trace.retireWidth} THIS CYCLE`;
+        if (activity.frame.registers.available) {
+            for (const cell of activity.frame.registers.physical) {
                 const p = scene.physicalTagPosition(cell.physical),
                     screen = camera.project([p[0], p[1] + 0.06, p[2] - 0.02]),
                     el = activity.physicalElements.get(cell.physical)!;
@@ -432,7 +436,7 @@ function start(gl: WebGL2RenderingContext) {
                 );
                 el.dataset.allocation = cell.allocation;
             }
-            for (const [state, count] of Object.entries(activity.registerState!.allocationCounts)) {
+            for (const [state, count] of Object.entries(activity.frame.registers.allocationCounts)) {
                 const item = $("register-allocation").querySelector<HTMLElement>(`[data-state="${state}"]`)!;
                 item.lastElementChild!.textContent = `${state === "allocated" ? "ALLOC" : state === "free" ? "FREE" : "?"} ${count}`;
                 item.title =
@@ -443,13 +447,13 @@ function start(gl: WebGL2RenderingContext) {
                           : "Free physical registers";
             }
             const n = scene.nodes.get("register-read")!,
-                write = activity.registerState!.lastWrite,
+                write = activity.frame.registers.lastWrite,
                 screen = camera.project([n.x, n.h + 0.35, n.z + n.d * 0.53]);
             const label = $("register-writeback");
             label.style.transform = `translate(${screen[0]}px,${screen[1] + 12}px) translateX(-50%)`;
             label.textContent = write
                 ? `WB p${write.physical} ← ${write.hex}`
-                : replay.trace!.evidence!.registers!.kind === "configuration"
+                : replay.trace.evidence!.registers!.kind === "configuration"
                   ? "VALUES NOT LOGGED"
                   : "WRITEBACK · —";
         }
@@ -476,7 +480,7 @@ function start(gl: WebGL2RenderingContext) {
                 ? "Candidate: branch immediately before the squashed instruction sequence; cause inferred from O3PipeView."
                 : "Recorded branch misprediction. Only younger wrong-path instructions are squashed.";
         }
-        const fifo = replay.robReplay!.stateAt(session.cycle),
+        const fifo = replay.robReplay.stateAt(session.cycle),
             oldest = fifo.entries[0]?.op;
         const headPoint = camera.project(scene.robCell(fifo.head, 0.72)),
             tailPoint = camera.project(scene.robCell(fifo.tail, 0.62));
@@ -485,7 +489,7 @@ function start(gl: WebGL2RenderingContext) {
         const ready = oldest?.completion != null && session.cycle >= oldest.completion;
         headLabel.textContent = oldest ? `HEAD #${oldest.id} · ${ready ? "READY" : "WAIT"}` : "HEAD · EMPTY";
         headLabel.style.color = rgb(ready ? session.style.palette.integer : session.style.palette.memory);
-        tailLabel.textContent = `TAIL ${fifo.entries.length === replay.trace!.structure.robCapacity ? "· FULL" : `→ ${fifo.tail}`}`;
+        tailLabel.textContent = `TAIL ${fifo.entries.length === replay.trace.structure.robCapacity ? "· FULL" : `→ ${fifo.tail}`}`;
         headLabel.style.transform = `translate(${headPoint[0] + 13}px,${headPoint[1]}px)`;
         const separation = Math.abs(tailPoint[1] - headPoint[1]) < 23 ? 24 : 0;
         tailLabel.style.transform = `translate(${tailPoint[0] + 13}px,${tailPoint[1] + separation}px)`;
@@ -565,10 +569,10 @@ function start(gl: WebGL2RenderingContext) {
         $("mobile-cycle-value").textContent = `${integer.toLocaleString("en-US")}.${String(fraction).padStart(2, "0")}`;
         $("timeline").value = String(session.cycle);
         $("playhead").style.left =
-            `${clamp((session.cycle - replay.trace!.firstCycle) / (replay.trace!.lastCycle - replay.trace!.firstCycle)) * 100}%`;
-        $("active-count").textContent = String(activity.currentStats.active!.length);
-        $("ipc-value").textContent = activity.currentStats.ipc!.toFixed(2);
-        const traceEvents = (replay.trace!.demo.events ?? []).filter(
+            `${clamp((session.cycle - replay.trace.firstCycle) / (replay.trace.lastCycle - replay.trace.firstCycle)) * 100}%`;
+        $("active-count").textContent = String(activity.frame.stats.active.length);
+        $("ipc-value").textContent = activity.frame.stats.ipc.toFixed(2);
+        const traceEvents = (replay.trace.demo.events ?? []).filter(
             (e) => session.cycle >= e.cycle && session.cycle < e.endCycle!
         );
         const notice = $("trace-event-notice"),
@@ -628,8 +632,8 @@ function start(gl: WebGL2RenderingContext) {
                 : `${activity.activeNotifications.length} completions → scheduler`;
         $("ipc-value").title = "Committed instructions / elapsed cycle over the previous 16 cycles in this excerpt";
         for (const [name, count, capacity] of [
-            ["issue", activity.currentStats.issued!.length, replay.trace!.structure.queueCapacity],
-            ["rob", activity.currentStats.rob!.length, replay.trace!.structure.robCapacity]
+            ["issue", activity.frame.stats.issued.length, replay.trace.structure.queueCapacity],
+            ["rob", activity.frame.stats.rob.length, replay.trace.structure.robCapacity]
         ] as const) {
             $(`${name}-count`).textContent = `${count} / ${capacity}`;
             [...$(`${name}-meter`).children].forEach((el, i) =>
@@ -640,15 +644,15 @@ function start(gl: WebGL2RenderingContext) {
         $("flush-alert").classList.toggle("visible", currentEvent !== undefined);
         if (currentEvent !== undefined)
             $("flush-detail").textContent =
-                `${replay.ops.filter((o) => o.flush && o.end === currentEvent).length} instructions squashed · ${replay.trace!.parser.startsWith("gem5") ? "≈ " : ""}cycle ${currentEvent.toLocaleString()}`;
+                `${replay.ops.filter((o) => o.flush && o.end === currentEvent).length} instructions squashed · ${replay.trace.parser.startsWith("gem5") ? "≈ " : ""}cycle ${currentEvent.toLocaleString()}`;
         const selected = session.selectedID !== null ? replay.ops.find((o) => o.id === session.selectedID) : null;
-        const candidates = activity.currentStats.active!.filter((o) =>
+        const candidates = activity.frame.stats.active.filter((o) =>
             paths.stageAt(o, session.cycle)?.node.startsWith("exec")
         );
         const op =
             selected ||
             candidates[Math.floor(session.cycle / 5) % Math.max(1, candidates.length)] ||
-            activity.currentStats.active!.at(-1);
+            activity.frame.stats.active.at(-1);
         $("unpin").hidden = session.selectedID === null;
         if (op) {
             const stage = paths.stageAt(op, session.cycle),
@@ -688,11 +692,11 @@ function start(gl: WebGL2RenderingContext) {
     }
 
     function showTrace() {
-        $("timeline").min = String(replay.trace!.firstCycle);
-        $("timeline").max = String(replay.trace!.lastCycle);
-        const provenance = replay.trace!.demo.provenance;
+        $("timeline").min = String(replay.trace.firstCycle);
+        $("timeline").max = String(replay.trace.lastCycle);
+        const provenance = replay.trace.demo.provenance;
         $("run-simulator").textContent = provenance.simulator;
-        $("mobile-demo").textContent = replay.trace!.label;
+        $("mobile-demo").textContent = replay.trace.label;
         $("mobile-simulator").textContent = provenance.simulator;
         $("mobile-workload").textContent = provenance.workload;
         $("run-workload").textContent = provenance.workload;
@@ -701,42 +705,42 @@ function start(gl: WebGL2RenderingContext) {
         $("run-configuration").textContent = provenance.configuration;
         $("run-note").textContent = provenance.note;
         $("matrix-source").textContent =
-            replay.trace!.evidence?.scheduling.kind === "recorded" ? "MATRIX · RECORDED DEPS" : "MATRIX · RAW ESTIMATE";
+            replay.trace.evidence?.scheduling.kind === "recorded" ? "MATRIX · RECORDED DEPS" : "MATRIX · RAW ESTIMATE";
         $("matrix-source").title =
-            `${replay.trace!.evidence?.scheduling.label ?? "Dependency information unavailable"}. Rows and columns are the same scheduler entries. Dependencies on issued instructions remain on the external wake-up bus. Cell colors follow the consumer row; brightness marks dependency release. Register map / values: ${replay.trace!.evidence?.registers ? "recorded RSD annotations" : "not recorded in this trace"}.`;
-        $("run-file").textContent = replay.trace!.fileName;
+            `${replay.trace.evidence?.scheduling.label ?? "Dependency information unavailable"}. Rows and columns are the same scheduler entries. Dependencies on issued instructions remain on the external wake-up bus. Cell colors follow the consumer row; brightness marks dependency release. Register map / values: ${replay.trace.evidence?.registers ? "recorded RSD annotations" : "not recorded in this trace"}.`;
+        $("run-file").textContent = replay.trace.fileName;
         $("run-excerpt").textContent =
-            `${replay.ops.length.toLocaleString()} excerpt ops · cycles ${replay.trace!.firstCycle.toLocaleString()}–${replay.trace!.lastCycle.toLocaleString()}`;
+            `${replay.ops.length.toLocaleString()} excerpt ops · cycles ${replay.trace.firstCycle.toLocaleString()}–${replay.trace.lastCycle.toLocaleString()}`;
         $("cinema-source").textContent = `${provenance.simulator} / ${provenance.workload}`;
-        $("scene-theme").textContent = replay.trace!.demo.theme;
-        $("show-highlight").disabled = replay.trace!.demo.bookmarks.length === 0;
+        $("scene-theme").textContent = replay.trace.demo.theme;
+        $("show-highlight").disabled = replay.trace.demo.bookmarks.length === 0;
         $("show-highlight").title = replay
             .trace!.demo.bookmarks.map((b) => `${b.label} · cycle ${b.cycle.toLocaleString()}`)
             .join("\n");
-        $("architecture").textContent = replay.trace!.machineOrder.toUpperCase();
-        $("width-value").textContent = `${replay.trace!.fetchWidth}-WIDE FETCH`;
-        $("queue-label").textContent = replay.trace!.machineOrder === "in-order" ? "Schedule queue" : "Scheduler";
-        $("rob-label").textContent = replay.trace!.machineOrder === "in-order" ? "Completion buffer" : "Reorder buffer";
+        $("architecture").textContent = replay.trace.machineOrder.toUpperCase();
+        $("width-value").textContent = `${replay.trace.fetchWidth}-WIDE FETCH`;
+        $("queue-label").textContent = replay.trace.machineOrder === "in-order" ? "Schedule queue" : "Scheduler";
+        $("rob-label").textContent = replay.trace.machineOrder === "in-order" ? "Completion buffer" : "Reorder buffer";
         $("next-flush").disabled = replay.flushEvents.length === 0;
         $("next-flush").title = replay.flushEvents.length
-            ? `Jump to the next squash event (F) · timing ${replay.trace!.parser.startsWith("gem5") ? "inferred" : "recorded"}`
+            ? `Jump to the next squash event (F) · timing ${replay.trace.parser.startsWith("gem5") ? "inferred" : "recorded"}`
             : "This excerpt contains no flush events";
-        $("range-label").textContent = `${replay.trace!.lastCycle - replay.trace!.firstCycle + 1} CYCLES`;
-        $("first-cycle").textContent = replay.trace!.firstCycle.toLocaleString();
-        $("last-cycle").textContent = replay.trace!.lastCycle.toLocaleString();
+        $("range-label").textContent = `${replay.trace.lastCycle - replay.trace.firstCycle + 1} CYCLES`;
+        $("first-cycle").textContent = replay.trace.firstCycle.toLocaleString();
+        $("last-cycle").textContent = replay.trace.lastCycle.toLocaleString();
         for (const id of ["issue-meter", "rob-meter"]) {
             $(id).replaceChildren(...Array.from({ length: 24 }, () => document.createElement("i")));
         }
         const markers = replay.flushEvents.map((t) => {
             const marker = document.createElement("span");
             marker.className = "event-marker";
-            marker.style.left = `${((t - replay.trace!.firstCycle) / (replay.trace!.lastCycle - replay.trace!.firstCycle)) * 100}%`;
+            marker.style.left = `${((t - replay.trace.firstCycle) / (replay.trace.lastCycle - replay.trace.firstCycle)) * 100}%`;
             return marker;
         });
-        for (const bookmark of replay.trace!.demo.bookmarks.filter((b) => b.type !== "flush")) {
+        for (const bookmark of replay.trace.demo.bookmarks.filter((b) => b.type !== "flush")) {
             const marker = document.createElement("span");
             marker.className = "event-marker highlight-marker";
-            marker.style.left = `${((bookmark.cycle - replay.trace!.firstCycle) / (replay.trace!.lastCycle - replay.trace!.firstCycle)) * 100}%`;
+            marker.style.left = `${((bookmark.cycle - replay.trace.firstCycle) / (replay.trace.lastCycle - replay.trace.firstCycle)) * 100}%`;
             markers.push(marker);
         }
         $("event-markers").replaceChildren(...markers);
@@ -769,7 +773,7 @@ function start(gl: WebGL2RenderingContext) {
                 };
             },
             get trace() {
-                return replay.trace!;
+                return replay.trace;
             },
             get cycle() {
                 return session.cycle;
@@ -785,14 +789,14 @@ function start(gl: WebGL2RenderingContext) {
             },
             get stats() {
                 return {
-                    active: activity.currentStats.active!.length,
-                    issue: activity.currentStats.issued!.length,
-                    rob: activity.currentStats.rob!.length,
-                    ipc: activity.currentStats.ipc!
+                    active: activity.frame.stats.active.length,
+                    issue: activity.frame.stats.issued.length,
+                    rob: activity.frame.stats.rob.length,
+                    ipc: activity.frame.stats.ipc
                 };
             },
             get topDown() {
-                return sonataReplay.sampleTopDown(replay.trace!.topDown, session.cycle);
+                return sonataReplay.sampleTopDown(replay.trace.topDown, session.cycle);
             },
             get topDownVisual() {
                 return {
@@ -829,10 +833,10 @@ function start(gl: WebGL2RenderingContext) {
             get instructionLayout() {
                 return {
                     radius: instructionRadius,
-                    scheduler: Array.from({ length: replay.trace!.structure.queueCapacity }, (_, row) =>
+                    scheduler: Array.from({ length: replay.trace.structure.queueCapacity }, (_, row) =>
                         scene.matrixPosition(row)
                     ),
-                    rob: Array.from({ length: replay.trace!.structure.robCapacity }, (_, slot) =>
+                    rob: Array.from({ length: replay.trace.structure.robCapacity }, (_, slot) =>
                         scene.robCell(slot, 0.19)
                     ),
                     rename: Array.from({ length: scene.renameNode()?.instructionSlots ?? 0 }, (_, slot) =>
@@ -864,7 +868,7 @@ function start(gl: WebGL2RenderingContext) {
                 return { ...clock.lastPlayback };
             },
             get dependencyMatrix() {
-                return replay.dependencyReplay!.stateAt(session.cycle);
+                return replay.dependencyReplay.stateAt(session.cycle);
             },
             get schedulerGrid() {
                 const grid = scene.nodes.get("issue")!.grid!;
@@ -876,14 +880,14 @@ function start(gl: WebGL2RenderingContext) {
                 );
             },
             get issuePaths() {
-                return activity.matrixState!.issues.map(scene.issuePath);
+                return activity.frame.matrix.issues.map(scene.issuePath);
             },
             get registers() {
-                return replay.registerReplay!.stateAt(session.cycle);
+                return replay.registerReplay.stateAt(session.cycle);
             },
             get commitSlots() {
                 const group = replay.commitGroups.get(Math.floor(session.cycle)) ?? [];
-                return Array.from({ length: replay.trace!.retireWidth }, (_, index) => {
+                return Array.from({ length: replay.trace.retireWidth }, (_, index) => {
                     const op = group[index];
                     return { index, ...scene.commitSlot(index), id: op && session.cycle >= op.end ? op.id : null };
                 });
@@ -898,9 +902,9 @@ function start(gl: WebGL2RenderingContext) {
                 }));
             },
             get registerReadCells() {
-                return activity.registerState!.available
-                    ? activity
-                          .registerState!.physical.filter((c) => activity.registerReaders(c.physical).length)
+                return activity.frame.registers.available
+                    ? activity.frame.registers.physical
+                          .filter((c) => activity.registerReaders(c.physical).length)
                           .map((c) => ({
                               physical: c.physical,
                               color: [...activity.registerCellColor(c)],
@@ -909,8 +913,8 @@ function start(gl: WebGL2RenderingContext) {
                     : [];
             },
             get registerAllocationCells() {
-                return activity.registerState!.available
-                    ? activity.registerState!.physical.map((c) => ({
+                return activity.frame.registers.available
+                    ? activity.frame.registers.physical.map((c) => ({
                           physical: c.physical,
                           state: c.allocation,
                           ...activity.registerCellAppearance(c)
@@ -921,7 +925,7 @@ function start(gl: WebGL2RenderingContext) {
                 return activity.renameWords;
             },
             get registerLayout() {
-                return activity.registerState!.available
+                return activity.frame.registers.available
                     ? {
                           renameNode: scene.renameNode()!.id,
                           renamePosition: [scene.renameNode()!.x, scene.renameNode()!.z],
@@ -959,11 +963,11 @@ function start(gl: WebGL2RenderingContext) {
                 return { ...stream.feedState!, ids: [...stream.feedState!.ids], visible: session.instructionStream };
             },
             get rob() {
-                const s = replay.robReplay!.stateAt(session.cycle);
+                const s = replay.robReplay.stateAt(session.cycle);
                 return {
                     head: s.head,
                     tail: s.tail,
-                    capacity: replay.robReplay!.capacity,
+                    capacity: replay.robReplay.capacity,
                     entries: s.entries.map((e) => ({
                         id: e.op.id,
                         slot: e.slot,
@@ -980,7 +984,7 @@ function start(gl: WebGL2RenderingContext) {
                     time: e.time,
                     phase: session.cycle - e.time < wakeFlightCycles ? "flight" : "arrived",
                     target: scene.wakeBusEntry(),
-                    column: replay.dependencyReplay!.columnAt(e.id, session.cycle)
+                    column: replay.dependencyReplay.columnAt(e.id, session.cycle)
                 }));
             },
             get renderer() {
@@ -1007,7 +1011,7 @@ function start(gl: WebGL2RenderingContext) {
             captureAt(t: number) {
                 clock.setPlaying(false);
                 clock.setCycle(t);
-                return { cycle: session.cycle, active: activity.currentStats.active!.length };
+                return { cycle: session.cycle, active: activity.frame.stats.active.length };
             }
         };
     }

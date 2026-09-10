@@ -11,9 +11,35 @@ const data = {};
 vm.runInNewContext(fs.readFileSync(path.join(__dirname, "../data/traces.js"), "utf8"), data);
 const samples = data.embeddedFlowTraces,
     original = JSON.stringify(samples);
+// 未読込みの状態は描画へ渡さず、準備が成功したときだけ公開する。
+const empty = createReplay({ samples: [] });
+assert.equal(empty.current, null);
+assert.throws(() => empty.loadTrace("missing"), /No traces available/);
+assert.equal(empty.current, null);
+const broken = {
+    ...samples[0],
+    key: "broken",
+    get lastCycle() {
+        throw new Error("Trace preparation interrupted");
+    }
+};
+const source = createReplay({ samples: [...samples, broken] });
+assert.equal(source.current, null);
+const ready = source.loadTrace(samples[0].key);
+assert.equal(source.current, ready);
+const preparedOps = ready.ops;
+assert.throws(() => source.loadTrace("broken"), /Trace preparation interrupted/);
+assert.equal(source.current, ready);
+assert.equal(ready.trace, samples[0]);
+assert.equal(ready.ops, preparedOps, "A failed load exposed partially prepared instructions");
+assert.equal(source.loadTrace("unknown").trace, samples[0], "An unknown key should use the first demo");
+const unobserved = createReplay({ samples: [{ ...samples[0], evidence: undefined }] }).loadTrace("");
+assert.equal(unobserved.registerReplay.stateAt(unobserved.trace.firstCycle).available, false);
+
 function createFixture() {
     const session = { style: styles.neon },
-        replay = createReplay({ samples });
+        source = createReplay({ samples }),
+        replay = source.loadTrace(samples[0].key);
     const placement = createScene({ replay, session }),
         paths = createPaths({ scene: placement, replay, session });
     return {
@@ -22,7 +48,7 @@ function createFixture() {
         placement,
         paths,
         load(key) {
-            replay.loadTrace(key);
+            assert.equal(source.loadTrace(key), replay, "Loading replaced the state held by scene / paths");
             placement.buildLayout();
         }
     };
