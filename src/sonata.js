@@ -94,6 +94,7 @@ function start(){
         for(const button of document.querySelectorAll("[data-style-choice]"))button.setAttribute("aria-pressed",String(button.dataset.styleChoice===key));
         $("bloom").disabled=session.style.matte;
         $("bloom-value").textContent=session.style.matte?"Not used":`${Math.round(session.bloom*100)}%`;
+        $("trails").title=session.style.matte?"Show the selected instruction's trail":"Show instruction trails";
         // 時計・選択・カメラを保持し、描画用の資源だけを更新する。
         rebuildWorld();drawTimeline();render();updateUI();
     }

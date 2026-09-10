@@ -106,7 +106,8 @@ function createActivity({camera,clock,scene,gpu,paths,replay,session}) {
             if(recoveryBranch){light.brightness=Math.max(light.brightness,1.1);light.size=Math.max(light.size,32);}
             const piece=session.style.matte?paths.groundedPiece(op,session.cycle,path):null,p=piece?.position??path;
             const overMatrix=scene.crossesDependencyGrid(path)||scene.crossesMapWords(path);
-            if(session.trails){
+            // Blocks の過去位置にも接地計算が必要なため、軌跡は追跡中の命令に絞る。
+            if(session.trails&&(!session.style.matte||selected)){
                 let previous=p;
                 const count=session.style.matte?5:15;
                 for(let k=1;k<=count;k++){
