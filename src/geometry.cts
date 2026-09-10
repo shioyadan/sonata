@@ -415,7 +415,7 @@ function createPaths<T extends PathOperation>({scene,replay,session}: {scene: Pa
     }
 
     function resetTrace(){poses.pieceTracks=new WeakMap();}
-    function setGround(ground: ReturnType<typeof createGround>){poses.pieceGround=ground;poses.piecePoseCache=new WeakMap();}
+    function setGround(ground: ReturnType<typeof createGround> | null){poses.pieceGround=ground;poses.piecePoseCache=new WeakMap();}
     return {stageAt,stageTransition,location,positionAt,occupancy,instructionLight,instructionColor,groundedPiece,resetTrace,setGround};
 }
 

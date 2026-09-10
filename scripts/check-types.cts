@@ -2,6 +2,7 @@
 import geometry = require("../src/geometry.cts");
 import replay = require("../src/replay-model.cts");
 import renderer = require("../src/renderer.cts");
+import scene = require("../src/scene.cts");
 
 const clamped: number=geometry.clamp(.5);
 const rolling=geometry.createRollingTrack(time=>[time,0,0],[0,1]);
@@ -49,6 +50,10 @@ declare const paths: geometry.Paths<replay.Operation>;
 const operation: replay.Operation=paths.occupancy(0).active[0];
 const names: string[]|undefined=paths.stageAt(operation,0)?.names;
 const wait: replay.Stage=replay.memoryCompletions([operation])[0].wait;
+paths.setGround(null);
+const layout=scene.createScene({replay:replay.createReplay({samples:[]}),session:{style:scene.styles.neon}});
+const placement: geometry.Scene=layout;
+void placement;
 void [names,wait];
 
 declare const gpu: renderer.Gpu;
