@@ -15,7 +15,7 @@
   "scripts": {
     "build": "node scripts/build.cjs",
     "start": "node scripts/serve.cjs",
-    "test": "node scripts/check-model.cjs && node scripts/check-piece-motion.cjs && node scripts/check-piece-grounding.cjs && node scripts/check-build.cjs",
+    "test": "node scripts/check-model.cjs && node scripts/check-piece-motion.cjs && node scripts/check-piece-grounding.cjs && node scripts/check-scene.cjs && node scripts/check-bundle.cjs && node scripts/check-build.cjs",
     "test:server": "node scripts/check-server.cjs",
     "test:render": "electron --no-sandbox scripts/render.cjs",
     "test:mobile": "electron --no-sandbox scripts/render.cjs --mobile",

@@ -3,6 +3,7 @@
 const fs=require("node:fs");
 const path=require("node:path");
 const root=path.resolve(__dirname,"..");
+const {bundle}=require("./bundle.cjs");
 const read=file=>fs.readFileSync(path.join(root,file),"utf8");
 
 function formatTraceScript(source) {
@@ -35,14 +36,18 @@ function build() {
     const noticeMarker="<!-- SONATA_LICENSE_NOTICES -->";
     if(!html.includes(noticeMarker))throw new Error("Missing license notice placeholder");
     html=html.replace(noticeMarker,()=>notices.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;"));
-    const css=read("src/sonata.css").replace(/<\/style/gi,"<\\/style");
-    html=html.replace('<link rel="stylesheet" href="sonata.css">',()=>`<style>\n${css}\n</style>`);
-    for(const [url,file] of [["../data/traces.js","data/traces.js"],["replay-model.js","src/replay-model.js"],["visual-styles.js","src/visual-styles.js"],["piece-motion.js","src/piece-motion.js"],["piece-grounding.js","src/piece-grounding.js"],["sonata.js","src/sonata.js"]]){
-        const source=read(file);
-        const code=(file==="data/traces.js"?formatTraceScript(source):source).replace(/<\/script/gi,"<\\/script");
+    html=html.replace(/<link rel="stylesheet" href="([^"\n]+)">/g,(_tag,url)=>{
+        const css=read(`src/${url}`).replace(/<\/style/gi,"<\\/style");
+        return `<style>\n${css}\n</style>`;
+    });
+    const scripts=[
+        ["../data/traces.js",formatTraceScript(read("data/traces.js"))],
+        ["sonata.js",bundle(path.join(root,"src"),"sonata.js")]
+    ];
+    for(const [url,source] of scripts){
         const tag=`<script src="${url}"></script>`;
         if(!html.includes(tag))throw new Error(`Missing source script: ${url}`);
-        html=html.replace(tag,()=>`<script>\n${code}\n</script>`);
+        html=html.replace(tag,()=>`<script>\n${source.replace(/<\/script/gi,"<\\/script")}\n</script>`);
     }
     if(/<script\b[^>]*\bsrc\s*=|<link\b[^>]*rel="stylesheet"|(?:src|href)="(?:\.\.\/|sonata-)/i.test(html))throw new Error("The deliverable still depends on another file.");
     const output=path.join(root,"dist/sonata.html");

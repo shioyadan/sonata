@@ -7,6 +7,7 @@
 - [README.md](README.md): 起動、操作、構成。
 - [docs/development.md](docs/development.md): ビルド、検証、コミット、公開の手順。
 - [docs/maintenance.md](docs/maintenance.md): 作業履歴から抽出した設計判断と保守上の注意。
+- 構造を変更する場合は [docs/architecture.md](docs/architecture.md)。
 - 表示を変更する場合は [docs/visualization.md](docs/visualization.md)。
 - ローカルに `work/` があれば、`WORKLOG.md` の最新項目と `STATE.json`、必要に応じて `HANDOFF.md` を読む。`work/` は Git 対象外なので、新しいチェックアウトには存在しなくてよい。
 
@@ -22,7 +23,9 @@
 ## 実装で維持すること
 
 - 通常のビルドは Node の標準機能だけで完結させる。`dist/sonata.html` は、スタイル・コード・全デモ・ライセンスを含むオフラインで動く単一 HTML。
-- 再生モデルは `src/replay-model.js`、描画・DOM・操作は `src/sonata.js` に分ける。
+- `src/` は HTML・CSS を含む10ファイルを基本とする。`src/sonata.js` は起動・操作・カメラ・DOM 表示をまとめ、再生モデル、空間計算、固定シーン、動的表示、GPU は [構造の指針](docs/architecture.md) に沿って分ける。
+- 共有状態の巨大な箱や汎用プラグイン基盤を追加せず、必要な依存を明示して渡す。分割は責務を基準にし、行数だけの細分化や無関係な処理の集約を避ける。
+- 一緒に変更する処理と状態の所有者を近くに置く。100〜250行などの小さな上限を分割理由にせず、一つの変更を少数のファイルで理解・完結できるかを優先する。
 - 記録値、推定値、未観測、表示上の演出を区別する。未観測のレジスタ値や依存関係を補完せず、commit / squash の結果を時刻より前に反映しない。
 - デモ抽出時だけ `inputs/` または `SONATA_TRACE_ROOT` を使う。表示だけの変更ではデモを再生成しない。
 - 第三者の出典・ライセンス原文を保持する。vendor 更新時は固定リビジョン、変更内容、ハッシュも更新する。

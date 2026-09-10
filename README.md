@@ -80,7 +80,17 @@ README とソースコードの説明コメントは日本語で記述します�
 ## 構成
 
 ```text
-src/                    HTML・CSS・WebGL 描画・再生モデル
+src/                    編集用の10ファイル
+  sonata.js             起動・操作・カメラ・DOM 表示
+  replay-model.js       デモ準備・時刻に対応する再生状態
+  geometry.js           座標・経路・回転・接地
+  scene.js              配置・固定部品・外観プリセット
+  activity.js           命令・待機列・レジスタ等の動的表示
+  renderer.js           GPU 資源・描画順・シェーダー
+  index.html            画面の骨格
+  sonata.css            共通 UI・情報パネル
+  scene.css             シーン上の表示
+  appearance.css        画面サイズ対応・配色
 data/                   Git に含める5本の実トレース抜粋と出自
 scripts/                ビルド・検証・デモ抽出
 vendor/konata-core/      抽出に使う Konata 解析コードの固定スナップショット
@@ -91,7 +101,7 @@ inputs/                 再抽出用の元ログ（Git 対象外）
 work/                   ローカル作業メモ・引き継ぎ資料（Git 対象外）
 ```
 
-通常のビルド・検証には Konata のチェックアウトや元ログは不要です。デモを再抽出する場合だけ、[再生成の手順](data/README.md#再生成) に沿って元ログを用意してください。
+ソースの分割と編集先は [構造の説明](docs/architecture.md) を参照してください。配布時には単一 HTML に結合します。通常のビルド・検証には Konata のチェックアウトや元ログは不要です。デモを再抽出する場合だけ、[再生成の手順](data/README.md#再生成) に沿って元ログを用意してください。
 
 ## ライセンス
 

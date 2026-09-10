@@ -14,11 +14,12 @@ README は日本語で、機能・操作・開発手順を説明します。プ�
 
 ## 境界
 
-- `src/sonata.js`: WebGL 2 の描画、DOM、カメラ・タッチ操作、再生時計。
-- `src/replay-model.js`: FIFO、依存行列、レジスタ状態、命令列の巻き戻し、Top-down の時刻サンプリング。DOM や WebGL に依存しない再生モデル。
-- `src/piece-motion.js`: 表示用の経路から時刻に対応する命令の回転を求める。再生モデルから独立した演出の計算。
-- `src/piece-grounding.js`: 描画する支持面と駒の形状・姿勢から、Blocks の接地高さを求める。
-- `src/index.html` / `src/sonata.css`: 画面とレスポンシブレイアウト。
+`src/` は JavaScript 6個・CSS 3個・HTML 1個にまとめます。各ファイルの責務と状態の所有者は [ソースの構造](architecture.md) を参照してください。
+
+- `src/sonata.js`: 起動、再生時計、入力・カメラ、DOM と診断 API。
+- `src/replay-model.js` / `src/geometry.js`: トレース準備と再生状態、経路・回転・接地。DOM / GPU から独立して検査可能。
+- `src/scene.js` / `src/activity.js` / `src/renderer.js`: 固定シーン、動的表示、WebGL 資源・影・シェーダーと描画。
+- `src/index.html` / `src/sonata.css` / `src/scene.css` / `src/appearance.css`: 画面の骨格、共通 UI、シーン、画面サイズと配色の上書き。CSS の適用順は HTML の link 順。
 - `scripts/import-trace.ts` と関連モジュール: 元ログからデモ用の小さなデータを抽出。
 - `vendor/konata-core/`: 抽出にだけ使う解析器の固定スナップショット。
 
@@ -27,6 +28,8 @@ README は日本語で、機能・操作・開発手順を説明します。プ�
 ## ビルド
 
 `npm run build` は Node の標準ライブラリだけで、`src/index.html` にスタイル・スクリプト・デモを埋め込みます。出力は `dist/sonata.html`。ライセンス表示も HTML 内に保持します。埋め込み JSON の文字列内を変更せず、長すぎる行を改行します。
+
+ブラウザ用の相対 CommonJS は `scripts/bundle.cjs` で結合します。新しいモジュールは拡張子付きの相対パスで参照し、実行時の外部読み込みを追加しません。ソースを直接開かず、ビルドした HTML または `npm start` で確認します。
 
 `npm start` はビルドした HTML だけを配信します。ソースディレクトリや元ログを公開するサーバーではありません。環境変数 `SONATA_HOST` / `SONATA_PORT` で待ち受け先を変更できます。スマートフォンから同じネットワーク経由で確認する場合の例:
 
@@ -39,6 +42,8 @@ SONATA_HOST=0.0.0.0 npm start
 ## 検証
 
 `npm test` は再生モデルの整合性、命令の回転計算、命令の接地、ビルドの独立性を検査します。回転の検査は `scripts/check-piece-motion.cjs` にあり、方向・距離・曲がり角・待機・逆戻りと、再生の細かさやシーク順によらず同じ姿勢になることを確認します。ビルド検査は、必要なソースだけを別の一時ディレクトリにコピーし、`node_modules` や Konata のチェックアウトなしで同一 HTML を作れることを確認します。デモの内容、UTF-8、外部スクリプトの不在、vendor のハッシュも確認します。
+
+`scripts/check-scene.cjs` は全5デモの配置と命令経路を DOM / GPU なしで準備し、別のインスタンスへの状態混入と元データの変更を検出します。`scripts/check-bundle.cjs` は独立した JavaScript 環境で相対パス、変数スコープ、一度だけの実行、循環参照、不正な参照の拒否を確認します。どちらも `npm test` に含まれます。
 
 Node の推奨バージョンは `.nvmrc` に固定し、セキュリティ修正版へ更新します。`npm run test:server` はローカルでサーバーを起動し、GET / HEAD、ソースの非公開、未対応メソッドと不正な URL の拒否、異常なリクエスト後も配信が継続することを確認します。
 

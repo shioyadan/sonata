@@ -32,7 +32,7 @@ for(const file of ["LICENSE.md","THIRD_PARTY_NOTICES.md","licenses/COREMARK-LICE
     assert.ok(notices.includes(read(file).trim()),`Standalone HTML lost third-party notice: ${file}`);
 }
 const scripts=[...html.matchAll(/<script>([\s\S]*?)<\/script>/g)].map(m=>m[1]);
-assert.equal(scripts.length,6);
+assert.equal(scripts.length,2);
 assert.deepEqual(readTrace(scripts[0]),expected,"HTML changed the recorded demo data");
 assert.equal(new Set(expected.map(t=>t.key)).size,5);
 for(const script of scripts)new vm.Script(script);
@@ -42,7 +42,7 @@ try{
         fs.cpSync(path.join(root,entry),path.join(temp,entry),{recursive:true});
     }
     fs.mkdirSync(path.join(temp,"scripts"));
-    fs.copyFileSync(path.join(root,"scripts/build.cjs"),path.join(temp,"scripts/build.cjs"));
+    for(const file of ["build.cjs","bundle.cjs"])fs.copyFileSync(path.join(root,"scripts",file),path.join(temp,"scripts",file));
     const result=spawnSync(process.execPath,[path.join(temp,"scripts/build.cjs")],{cwd:os.tmpdir(),encoding:"utf8"});
     assert.equal(result.status,0,result.stderr);
     assert.deepEqual(fs.readFileSync(path.join(temp,"dist/sonata.html")),bytes,"Build depends on checkout location or installed packages");
