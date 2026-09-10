@@ -18,7 +18,7 @@ type CompactStage=[name:string,node:string,start:number,end:number];
 type CompactOperation=[id:number,rid:number,fetch:number,retired:number,flush:number,label:string,
     stages:CompactStage[],allocation:number|null,issue:number|null,completion:number|null,execution:string,flushCycle?:number|null];
 type Dependency={id:number;ready:number|null;register?:string};
-interface SchedulingEvidence { kind:string; ops:{id:number;dependencies:Dependency[];sources?:RegisterSource[]}[] }
+interface SchedulingEvidence { kind:string; label?:string; ops:{id:number;dependencies:Dependency[];sources?:RegisterSource[]}[] }
 type RegisterEventBase={cycle:number;physical:number;previous?:number};
 type RegisterEvent=RegisterEventBase & (
     {type:"map";logical:number}|{type:"observe";hex:string}|
@@ -29,18 +29,25 @@ type AllocationState="allocated"|"free"|"unknown";
 type AllocationEvent={cycle:number;physical:number;state:Exclude<AllocationState,"unknown">;reason:string};
 interface RegisterEvidence {
     origin?:string; rows:number[]; constantRows?:number[];
+    kind?:string;label?:string;capacity?:number;logicalNames?:Record<number,string>;logicalPrefix?:string;wordBits?:number;
     initial:{mapping:[number,number][];values:[number,string][];owners:[number,number][]};
-    allocation?:{initial:[number,Exclude<AllocationState,"unknown">][];events:AllocationEvent[]};
+    allocation?:{initial:[number,Exclude<AllocationState,"unknown">][];events:AllocationEvent[];kind?:string;label?:string};
     events:RegisterEvent[]; reads?:{id:number;cycle:number;physical:number;hex:string}[];
 }
 interface TopDownData {
     firstCycle:number;windowCycles:number;slots:number[][];
+    method?:string;
     observationTimes?:{outcomes:[allocated:number,observed:number,outcome:0|1][];recoveryNotices:([time:number,category:3|4]|null)[]};
 }
-type DemoEvent={kind:string;id:number;cycle:number};
+type DemoEvent={kind:"branch-mispredict"|"dcache-miss"|"icache-miss";id:number;cycle:number;endCycle?:number};
 interface TraceData {
     key:string;firstCycle:number;lastCycle:number;fetchWidth:number;parser:string;ops:CompactOperation[];
-    structure:{queueCapacity:number;robCapacity:number};demo:{events?:DemoEvent[]};
+    label:string;initialCycle:number;retireWidth:number;machineOrder:string;
+    structure:{queueCapacity:number;robCapacity:number;allocationWidth:number;
+        frontNodes:{id:string;names:string[]}[];executionNodes:{id:string;kind:Instruction["kind"];names:string[];pipeCount:number}[];
+        memoryWait:{id:string;waitStageNames:string[];completionStageNames:string[];observedOps:number;baseLatency:number|null}|null};
+    demo:{events?:DemoEvent[];bookmarks:{cycle:number;label:string;type:string}[];screenshotCycle:number;
+        provenance:{simulator:string;workload:string;processor:string;configuration:string;note:string;workloadKnown:boolean}};
     evidence?:{scheduling:SchedulingEvidence;registers?:RegisterEvidence|null};topDown?:TopDownData|null;
 }
 type RobOperation=Pick<Instruction,"id"|"end"|"flush"> & {allocation?:number|null};
