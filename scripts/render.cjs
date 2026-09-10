@@ -41,6 +41,24 @@ app.whenReady()
         const browserTest = createBrowserTest(window);
         const settle = () => browserTest.settle({ finish: true });
         const waitFor = (source, message) => waitUntil(() => js(source), message, { timeout: 5000, interval: 60 });
+        // 全時刻の検査は1フレームずつ進め、長い同期処理と未完了の描画を溜めない。
+        const scanCycles = async (sample) => {
+            const { firstCycle, lastCycle } = await browserTest.evaluate(({ sonata }) => ({
+                firstCycle: sonata.trace.firstCycle,
+                lastCycle: sonata.trace.lastCycle
+            }));
+            const samples = [];
+            for (let cycle = firstCycle; cycle <= lastCycle; cycle++) {
+                await waitUntil(async () => {
+                    samples.push(await sample(cycle));
+                    await browserTest.evaluate(
+                        () => new Promise((resolve) => requestAnimationFrame(() => resolve(true)))
+                    );
+                    return true;
+                }, `Trace scan frame did not settle at cycle ${cycle}`);
+            }
+            return { firstCycle, samples };
+        };
         await window.loadFile(entry);
         if (process.argv.includes("--styles")) {
             const styles = await require("./check-styles.cjs")(window, entry, screenshots);
@@ -545,18 +563,39 @@ app.whenReady()
             path.join(screenshots, "sonata-branch-preserved.png"),
             (await window.webContents.capturePage()).toPNG()
         );
-        const matrixReview = await js(`(()=>{
-        const t=sonata.trace;let best={cycle:t.firstCycle,cells:0,internal:0},issueBest={cycle:t.firstCycle,score:0};
-        for(let c=t.firstCycle;c<=t.lastCycle;c++){
-            sonata.captureAt(c+.2);const m=sonata.dependencyMatrix;
-            if(m.cells.length+m.external.length>best.cells)best={cycle:c+.2,cells:m.cells.length+m.external.length,internal:m.cells.length};
-            const columns=m.issues.filter(i=>i.column!==null).length,score=m.cells.length+columns*2;
-            if(columns&&score>issueBest.score)issueBest={cycle:c+.42,score};
+        const matrixScan = await scanCycles((cycle) =>
+            browserTest.evaluate(({ sonata }, cycle) => {
+                sonata.captureAt(cycle + 0.2);
+                const matrix = sonata.dependencyMatrix;
+                const columns = matrix.issues.filter((issue) => issue.column !== null).length;
+                return {
+                    cycle,
+                    cells: matrix.cells.length + matrix.external.length,
+                    internal: matrix.cells.length,
+                    columns,
+                    score: matrix.cells.length + columns * 2
+                };
+            }, cycle)
+        );
+        let bestMatrix = { cycle: matrixScan.firstCycle, cells: 0, internal: 0 };
+        let bestIssue = { cycle: matrixScan.firstCycle, score: 0 };
+        for (const sample of matrixScan.samples) {
+            if (sample.cells > bestMatrix.cells)
+                bestMatrix = { cycle: sample.cycle + 0.2, cells: sample.cells, internal: sample.internal };
+            if (sample.columns && sample.score > bestIssue.score)
+                bestIssue = { cycle: sample.cycle + 0.42, score: sample.score };
         }
-        sonata.captureAt(best.cycle);const before=JSON.stringify(sonata.dependencyMatrix);
-        sonata.captureAt(t.lastCycle);sonata.captureAt(best.cycle);
-        return {...best,issueCycle:issueBest.cycle,restored:before===JSON.stringify(sonata.dependencyMatrix)};
-    })()`);
+        const matrixReview = await browserTest.evaluate(
+            ({ sonata }, best, issueCycle) => {
+                sonata.captureAt(best.cycle);
+                const before = JSON.stringify(sonata.dependencyMatrix);
+                sonata.captureAt(sonata.trace.lastCycle);
+                sonata.captureAt(best.cycle);
+                return { ...best, issueCycle, restored: before === JSON.stringify(sonata.dependencyMatrix) };
+            },
+            bestMatrix,
+            bestIssue.cycle
+        );
         assert.ok(matrixReview.cells > 5);
         assert.equal(matrixReview.restored, true);
         assert.equal(
@@ -757,16 +796,23 @@ app.whenReady()
                 );
             }
         }
-        const bounds = await js(`(()=>{
-        sonata.loadTrace('branch-storm');const t=sonata.trace,states=[];
-        for(let c=t.firstCycle;c<=t.lastCycle;c++){
-            sonata.captureAt(c);const s=sonata.topDown;
-            if(!states.some(e=>e.dominant===s.dominant))states.push({cycle:c,dominant:s.dominant,label:document.getElementById('bound-scene-status').textContent});
-        }
-        const first=states[0];sonata.captureAt(first.cycle);const before=JSON.stringify([sonata.topDown,sonata.topDownVisual]);
-        sonata.captureAt(t.lastCycle);sonata.captureAt(first.cycle);
-        return {states,restored:before===JSON.stringify([sonata.topDown,sonata.topDownVisual])};
-    })()`);
+        await js("sonata.loadTrace('branch-storm')");
+        const boundScan = await scanCycles((cycle) =>
+            browserTest.evaluate(({ sonata, $ }, cycle) => {
+                sonata.captureAt(cycle);
+                return { cycle, dominant: sonata.topDown.dominant, label: $("bound-scene-status").textContent };
+            }, cycle)
+        );
+        const boundStates = boundScan.samples.filter(
+            (sample, index, samples) => samples.findIndex((other) => other.dominant === sample.dominant) === index
+        );
+        const bounds = await browserTest.evaluate(({ sonata }, states) => {
+            sonata.captureAt(states[0].cycle);
+            const before = JSON.stringify([sonata.topDown, sonata.topDownVisual]);
+            sonata.captureAt(sonata.trace.lastCycle);
+            sonata.captureAt(states[0].cycle);
+            return { states, restored: before === JSON.stringify([sonata.topDown, sonata.topDownVisual]) };
+        }, boundStates);
         for (const key of ["backend", "frontend", "badSpeculation", "active"])
             assert.ok(bounds.states.some((s) => s.dominant === key));
         assert.equal(bounds.restored, true, "Top-down analysis changed after seeking backwards");
