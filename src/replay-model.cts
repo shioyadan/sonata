@@ -42,11 +42,11 @@ interface TopDownData {
 type DemoEvent={kind:"branch-mispredict"|"dcache-miss"|"icache-miss";id:number;cycle:number;endCycle?:number};
 interface TraceData {
     key:string;firstCycle:number;lastCycle:number;fetchWidth:number;parser:string;ops:CompactOperation[];
-    label:string;initialCycle:number;retireWidth:number;machineOrder:string;
+    label:string;fileName:string;initialCycle:number;retireWidth:number;machineOrder:string;
     structure:{queueCapacity:number;robCapacity:number;allocationWidth:number;
         frontNodes:{id:string;names:string[]}[];executionNodes:{id:string;kind:Instruction["kind"];names:string[];pipeCount:number}[];
         memoryWait:{id:string;waitStageNames:string[];completionStageNames:string[];observedOps:number;baseLatency:number|null}|null};
-    demo:{events?:DemoEvent[];bookmarks:{cycle:number;label:string;type:string}[];screenshotCycle:number;
+    demo:{events?:DemoEvent[];bookmarks:{cycle:number;label:string;type:string}[];screenshotCycle:number;theme:string;
         provenance:{simulator:string;workload:string;processor:string;configuration:string;note:string;workloadKnown:boolean}};
     evidence?:{scheduling:SchedulingEvidence;registers?:RegisterEvidence|null};topDown?:TopDownData|null;
 }
@@ -57,6 +57,7 @@ type FeedGroup={time:number;start:number;count:number};
 type FeedState={phase:"flow"|"notice"|"rewind"|"discard"|"refill";time:number|null;count:number;age:number;
     cursor:number;normalCursor:number;cancelAlpha:number;flowAlpha:number;dissolve:number;recovery:number;ids:number[]};
 type PlaybackOptions={duration?:number;reducedMotion?:boolean};
+type BoundCategory="active"|"badSpeculation"|"frontend"|"backend"|"unresolved";
 type DependencyOperation=Pick<Instruction,"id"|"end"|"allocation"|"issue"|"issueSlot">;
 type DependencyCell={consumer:number;producer:number;row:number|undefined;column:number|null;waiting:boolean;unknown:boolean;alpha:number;register:string|null};
 type Broadcast={producer:number;column:number|null;rows:(number|undefined)[];progress:number};
@@ -108,7 +109,7 @@ function createRobReplay<T extends RobOperation>(ops:readonly T[], capacity:numb
 function memoryCompletions<T extends Pick<Instruction,"id"|"flush"|"completion"|"end"> & {stages:{node:string;start:number}[]}>(ops:readonly T[]) {
     return ops.flatMap(op => {
         if (op.flush || op.completion == null || op.completion > op.end) return [];
-        const wait = op.stages.find(stage => stage.node === "memory-wait" && stage.start < op.completion!);
+        const wait = op.stages.find(stage => stage.node === "memory-wait" && stage.start < op.completion!) as T["stages"][number] | undefined;
         return wait ? [{id: op.id, time: op.completion, op, wait}] : [];
     }).sort((a,b) => a.time-b.time || a.id-b.id);
 }
@@ -240,7 +241,7 @@ function sampleTopDown(data:TopDownData|null|undefined,time:number) {
     // 主表示が未確定・不明のままにならないようにする。
     const ranked=Object.entries({active:shares.retiring+shares.inFlight,badSpeculation:shares.badSpeculation,
         frontend:shares.frontend,backend:shares.backend,unresolved:shares.unresolved}).sort((a,b)=>b[1]-a[1]);
-    const dominant=Math.abs(ranked[0][1]-ranked[1][1])<1e-9?"mixed":ranked[0][0];
+    const dominant=Math.abs(ranked[0][1]-ranked[1][1])<1e-9?"mixed":ranked[0][0] as BoundCategory;
     return {available:true as const,firstCycle:data.firstCycle+first,lastCycle:data.firstCycle+end,
         cycles:end-first,totalSlots:total,counts,shares,dominant,dominantShare:ranked[0][1]};
 }
@@ -445,6 +446,7 @@ namespace replayModel {
     export type Registers=RegisterEvidence;
     export type Scheduling=SchedulingEvidence;
     export type TopDown=TopDownData;
+    export type Bound=BoundCategory|"mixed"|"unavailable";
 }
 declare global { var sonataReplay:typeof replayModel }
 

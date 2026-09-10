@@ -7,11 +7,11 @@ type Quat = [number, number, number, number];
 type Triangle = [Vec3, Vec3, Vec3];
 interface PathStage { node: string; start: number; end: number; displaySlot?: number }
 interface PathOperation {
-    id: number; index: number; kind: string; fetch: number; end: number; stages: PathStage[];
+    id: number; index: number; kind: string; execution: string; fetch: number; end: number; stages: PathStage[];
     flush?: boolean; allocation?: number | null; issue?: number | null; completion?: number | null;
     issueSlot?: number; robSlot?: number; memorySlot?: number; commitSlot?: number;
 }
-interface PathNode { id: string; x: number; h: number; z: number; w: number; pipeCount?: number; names?: string[] }
+interface PathNode { id: string; x: number; h: number; z: number; w: number; d: number; pipeCount?: number; names?: string[] }
 interface Lane { inlet: Vec3; outlet: Vec3 }
 interface PathScene {
     nodes: Map<string, PathNode>;
@@ -24,7 +24,7 @@ interface PathScene {
     commitSlot(index: number | undefined): Lane;
     issueRowExit(index: number): Vec3;
 }
-interface PathReplay { ops: PathOperation[]; trace: { firstCycle: number; fetchWidth: number } | null }
+interface PathReplay<T extends PathOperation=PathOperation> { ops: T[]; trace: { firstCycle: number; fetchWidth: number } | null }
 interface PathSession { style: { palette: Record<string, Vec3> }; reducedMotion?: boolean }
 interface Seat { position: Vec3; contact: Vec3 }
 type InstructionState = "squashed" | "retiring" | "reading" | "waiting" | "ready" | "executing" | "flowing";
@@ -236,7 +236,7 @@ function createGround(triangles: Iterable<Triangle>,floor=-.87){
 
 // 命令の経路・ステージ補間と姿勢キャッシュ。
 const instructionRadius=.12;
-function stageAt(op: PathOperation,t: number){
+function stageAt<T extends PathOperation>(op: T,t: number): T["stages"][number] | null {
     if(t<op.fetch||t>=op.end)return null;
     let last=null;
     for(const stage of op.stages){if(stage.start>t)break;last=stage;if(t<stage.end)return stage;}
@@ -247,7 +247,7 @@ function stageTransition(stage: Pick<PathStage,"node" | "start" | "end">) {
     return stage.node.startsWith("exec")?Math.min(.35,duration*.22):Math.min(.82,Math.max(.08,duration));
 }
 // 生成は loadTrace 前でもよい。経路の参照前にトレースと配置、接地計算前に setGround を準備する。
-function createPaths({scene,replay,session}: {scene: PathScene; replay: PathReplay; session: PathSession}) {
+function createPaths<T extends PathOperation>({scene,replay,session}: {scene: PathScene; replay: PathReplay<T>; session: PathSession}) {
 
     function location(op: PathOperation,stage: PathStage,t: number): Vec3 {
         const n=scene.nodes.get(stage.node)||scene.nodes.get("issue")!;
@@ -430,10 +430,11 @@ namespace geometry {
     export type GroundSeat = Seat;
     export type GroundTriangle = Triangle;
     export type RollingTrack = ReturnType<typeof createRollingTrack>;
-    export type Paths = ReturnType<typeof createPaths>;
+    export type Paths<T extends PathOperation=PathOperation> = ReturnType<typeof createPaths<T>>;
     export type Stage = PathStage;
     export type Operation = PathOperation;
     export type Scene = PathScene;
+    export type Node = PathNode;
     export type Replay = PathReplay;
     export type Session = PathSession;
     export type Pose = PiecePose;
