@@ -15,10 +15,11 @@
   "scripts": {
     "build": "node scripts/build.cjs",
     "start": "node scripts/serve.cjs",
-    "test": "node scripts/check-model.cjs && node scripts/check-build.cjs",
+    "test": "node scripts/check-model.cjs && node scripts/check-piece-motion.cjs && node scripts/check-piece-grounding.cjs && node scripts/check-build.cjs",
     "test:server": "node scripts/check-server.cjs",
     "test:render": "electron --no-sandbox scripts/render.cjs",
     "test:mobile": "electron --no-sandbox scripts/render.cjs --mobile",
+    "test:styles": "electron --no-sandbox scripts/render.cjs --styles",
     "test:browser": "electron --no-sandbox scripts/render.cjs --browser",
     "capture:flush": "electron --no-sandbox scripts/capture-flush.cjs",
     "demos:generate": "node --import tsx scripts/generate-demos.ts",

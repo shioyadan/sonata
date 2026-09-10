@@ -37,7 +37,7 @@ function build() {
     html=html.replace(noticeMarker,()=>notices.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;"));
     const css=read("src/sonata.css").replace(/<\/style/gi,"<\\/style");
     html=html.replace('<link rel="stylesheet" href="sonata.css">',()=>`<style>\n${css}\n</style>`);
-    for(const [url,file] of [["../data/traces.js","data/traces.js"],["replay-model.js","src/replay-model.js"],["sonata.js","src/sonata.js"]]){
+    for(const [url,file] of [["../data/traces.js","data/traces.js"],["replay-model.js","src/replay-model.js"],["visual-styles.js","src/visual-styles.js"],["piece-motion.js","src/piece-motion.js"],["piece-grounding.js","src/piece-grounding.js"],["sonata.js","src/sonata.js"]]){
         const source=read(file);
         const code=(file==="data/traces.js"?formatTraceScript(source):source).replace(/<\/script/gi,"<\\/script");
         const tag=`<script src="${url}"></script>`;

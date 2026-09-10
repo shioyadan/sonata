@@ -13,27 +13,32 @@
     const gl = canvas.getContext("webgl2", { alpha: false, antialias: false, powerPreference: "high-performance" });
     if (!gl) {
         $("fallback").hidden = false;
+        document.querySelectorAll("[data-style-choice]").forEach(button=>button.disabled=true);
         $("renderer-status").textContent = "WebGL 2 unavailable";
         return;
     }
     const colorSamples=gl.getInternalformatParameter(gl.RENDERBUFFER,gl.RGBA8,gl.SAMPLES);
-    const depthSamples=gl.getInternalformatParameter(gl.RENDERBUFFER,gl.DEPTH_COMPONENT16,gl.SAMPLES);
+    const depthSamples=gl.getInternalformatParameter(gl.RENDERBUFFER,gl.DEPTH_COMPONENT24,gl.SAMPLES);
     const msaaSamples=Math.max(0,...Array.from(colorSamples).filter(n=>n<=4&&depthSamples.includes(n)));
     const maxRenderSide=Math.min(8192,gl.getParameter(gl.MAX_TEXTURE_SIZE),gl.getParameter(gl.MAX_RENDERBUFFER_SIZE));
-    const C = { integer: [0.29, 1, 0.81], memory: [1, 0.60, 0.22], branch: [0.62, 0.43, 1], red: [1, 0.19, 0.36], blue: [0.30, 0.64, 1], floor: [0.08, 0.19, 0.24] };
+    let visualStyle = "neon", style = sonataStyles[visualStyle];
+    const crystalTransmission = .40;
+    const instructionRadius=.12;
+    let pieceTracks=new WeakMap(),visiblePieces=[],pieceGround=null,piecePoseCache=new WeakMap();
+    let C = style.palette;
     const boundStyles = {
-        active: { label:"Pipeline active",color:"#71f5db",context:"Recent allocations in flight or already committed",region:[-12.7,12.6,-6.1,6.8] },
-        retiring: { label:"Retiring",color:"#71f5db",context:"Allocation slots with commit already observed",region:[-12.7,12.6,-6.1,6.8] },
-        inFlight: { label:"In flight",color:"#53b7af",context:"Allocated work whose outcome is not yet known" },
-        badSpeculation: { label:"Bad speculation",color:"#ff6277",context:"Wrong-path allocation + recovery bubbles",region:[-12.7,8.5,-6.1,6.8] },
-        frontend: { label:"Frontend bound",color:"#80b7ff",context:"Frontend delivery limits allocation",region:[-12.7,-5.5,-2.2,2.2] },
-        backend: { label:"Backend bound",color:"#ffbb65",context:"Backend capacity limits allocation",region:[-5.5,8.5,-6.1,6.8] },
-        unresolved: { label:"Unresolved",color:"#8aa9b9",context:"Allocation slots with incomplete trace evidence" },
-        mixed: { label:"Mixed",color:"#b0bfc8",context:"Several categories share the largest allocation share" },
-        unavailable: { label:"Not classified",color:"#76838f",context:"Top-down classification is unavailable for this trace" }
+        active: { label:"Pipeline active",context:"Recent allocations in flight or already committed",region:[-12.7,12.6,-6.1,6.8] },
+        retiring: { label:"Retiring",context:"Allocation slots with commit already observed",region:[-12.7,12.6,-6.1,6.8] },
+        inFlight: { label:"In flight",context:"Allocated work whose outcome is not yet known" },
+        badSpeculation: { label:"Bad speculation",context:"Wrong-path allocation + recovery bubbles",region:[-12.7,8.5,-6.1,6.8] },
+        frontend: { label:"Frontend bound",context:"Frontend delivery limits allocation",region:[-12.7,-5.5,-2.2,2.2] },
+        backend: { label:"Backend bound",context:"Backend capacity limits allocation",region:[-5.5,8.5,-6.1,6.8] },
+        unresolved: { label:"Unresolved",context:"Allocation slots with incomplete trace evidence" },
+        mixed: { label:"Mixed",context:"Several categories share the largest allocation share" },
+        unavailable: { label:"Not classified",context:"Top-down classification is unavailable for this trace" }
     };
     const boundKeys = ["retiring","inFlight","badSpeculation","frontend","backend","unresolved"];
-    const boundRGB = key => boundStyles[key].color.slice(1).match(/../g).map(v=>parseInt(v,16)/255);
+    const boundRGB = key => style.bounds[key].slice(1).match(/../g).map(v=>parseInt(v,16)/255);
     const TAU = Math.PI * 2;
     const clamp = (n, lo = 0, hi = 1) => Math.max(lo, Math.min(hi, n));
     const mix = (a, b, t) => a + (b - a) * t;
@@ -60,7 +65,8 @@
     const compactMedia=matchMedia("(max-width:760px), (max-width:1000px) and (max-height:600px)");
     let lastTime = performance.now(), artTime = 0, frameCount = 0, fpsTime = lastTime, fps = 0, nextUI = 0;
     let viewProjection = new Float32Array(16), eye = [0, 20, 30];
-    let sceneTarget, sceneMultisample, bloomA, bloomB, staticTriangles, staticLines, staticStars;
+    let sceneTarget, sceneMultisample, bloomA, bloomB, staticTriangles, staticLines, staticStars, staticShadows, staticMaterials;
+    let materialShadow,lightProjection,pieceShadow,pieceShadowKey="",pieceShadowUpdates=0;
     let animationID;
     let sceneTopDown={available:false},topDownRegion=null,topDownRail=[];
     let boundDisplay={trace:null,shares:null,weights:{},color:boundRGB("unavailable")};
@@ -76,8 +82,9 @@
         }
         return out;
     }
-    function perspective(aspect) {
-        const f = 1 / Math.tan(0.66 / 2), near = 0.1, far = 600;
+    function perspective(aspect, distance) {
+        // 遠い俯瞰でも薄い面が干渉しないよう、24 bit depth と距離に応じた near を使う。
+        const f = 1 / Math.tan(0.66 / 2), near = Math.max(.1,distance*.01), far = 600;
         return new Float32Array([f / aspect, 0, 0, 0, 0, f, 0, 0, 0, 0, (far + near) / (near - far), -1, 0, 0, 2 * far * near / (near - far), 0]);
     }
     function lookAt(from, target) {
@@ -116,6 +123,207 @@
         precision highp float;
         in vec4 vColor;out vec4 frag;
         void main(){frag=vColor;}`);
+    // 塗装面とガラスで色空間と光源の影を共有する。
+    const surfaceLighting = `
+        uniform vec3 uEye;uniform vec3 uLight;
+        uniform highp sampler2DShadow uShadow;uniform float uShadowTexel;
+        uniform sampler2D uSurfaceTexture;
+        vec3 toLinear(vec3 c){return mix(pow((c+.055)/1.055,vec3(2.4)),c/12.92,lessThanEqual(c,vec3(.04045)));}
+        vec3 toSRGB(vec3 c){return mix(1.055*pow(c,vec3(1./2.4))-.055,c*12.92,lessThanEqual(c,vec3(.0031308)));}
+        float visibility(vec4 shadow,float diffuse){
+            vec3 p=shadow.xyz/shadow.w*.5+.5;
+            if(any(lessThan(p,vec3(0.)))||any(greaterThan(p,vec3(1.))))return 1.;
+            p.z-=.00006+.00012*(1.-diffuse);
+            vec2 d=vec2(uShadowTexel*1.6);
+            return (texture(uShadow,p+vec3(-d.x,-d.y,0.))+texture(uShadow,p+vec3(d.x,-d.y,0.))
+                +texture(uShadow,p+vec3(-d.x,d.y,0.))+texture(uShadow,p+vec3(d.x,d.y,0.)))*.25;
+        }`;
+    // 動く駒の影は奥行きと被覆率を分けて保存し、重なっても暗さを加算しない。
+    const pieceLighting=`
+        uniform highp sampler2DShadow uPieceDepth;uniform sampler2D uPieceCoverage;
+        uniform float uPieceStrength;
+        float pieceVisibility(vec4 shadow){
+            if(uPieceStrength<=0.)return 1.;
+            vec3 p=shadow.xyz/shadow.w*.5+.5;
+            if(any(lessThan(p,vec3(0.)))||any(greaterThan(p,vec3(1.))))return 1.;
+            p.z-=.00004;
+            // depth の比較フィルターと被覆率の補間で境界を和らげ、参照を2回に抑える。
+            return 1.-uPieceStrength*(1.-texture(uPieceDepth,p))*texture(uPieceCoverage,p.xy).r;
+        }`;
+    const pieceReceiverProgram=program(`#version 300 es
+        layout(location=0) in vec3 aPosition;layout(location=1) in vec4 aColor;
+        uniform mat4 uMatrix;uniform mat4 uLightMatrix;
+        out vec4 vColor;out vec4 vShadow;
+        void main(){gl_Position=uMatrix*vec4(aPosition,1.);vShadow=uLightMatrix*vec4(aPosition,1.);vColor=aColor;}`,`#version 300 es
+        precision highp float;in vec4 vColor;in vec4 vShadow;out vec4 frag;
+        ${surfaceLighting}
+        ${pieceLighting}
+        void main(){frag=vec4(toSRGB(toLinear(vColor.rgb)*pieceVisibility(vShadow)),vColor.a);}`);
+    // 角の丸い形状を共有し、部品は位置・寸法・塗料だけをインスタンスごとに送る。
+    const materialProgram = program(`#version 300 es
+        layout(location=0) in vec3 aAnchor;layout(location=1) in vec3 aNormal;
+        layout(location=2) in vec3 aCenter;layout(location=3) in vec3 aHalfSize;
+        layout(location=4) in vec4 aColor;layout(location=5) in vec2 aSurface;
+        uniform mat4 uMatrix;uniform mat4 uLightMatrix;
+        out vec3 vPosition;out vec3 vNormal;out vec3 vLocal;out vec4 vColor;
+        out float vSeat;flat out float vMaterial;out vec4 vShadow;
+        void main(){
+            vLocal=aAnchor*(aHalfSize-vec3(aSurface.x))+aNormal*aSurface.x;
+            vPosition=aCenter+vLocal;vNormal=aNormal;vColor=aColor;vMaterial=aSurface.y;
+            vSeat=clamp((vLocal.y/aHalfSize.y+1.)*.5,0.,1.);
+            gl_Position=uMatrix*vec4(vPosition,1.);vShadow=uLightMatrix*vec4(vPosition,1.);
+        }`, `#version 300 es
+        precision highp float;
+        in vec3 vPosition;in vec3 vNormal;in vec3 vLocal;in vec4 vColor;
+        in float vSeat;flat in float vMaterial;in vec4 vShadow;
+        uniform float uRoughness;uniform float uGrain;
+        out vec4 frag;
+        // sRGB の区分関数で塗料を線形化し、照明計算後に表示用の値へ戻す。
+        ${surfaceLighting}
+        ${pieceLighting}
+        void main(){
+            vec3 n=normalize(vNormal),view=normalize(uEye-vPosition),light=normalize(uLight*26.-vPosition);
+            vec3 color=vColor.rgb;float rough=uRoughness;
+            if(vMaterial>.5){
+                // 長手方向へうねる木目。細い筋の縮小はテクスチャの mipmap に任せる。
+                vec2 uv=vec2(vLocal.x,mix(vLocal.z,vLocal.y*2.,abs(n.z)));
+                vec2 grain=texture(uSurfaceTexture,uv*vec2(.07,.25)).rg-.5;
+                color*=1.+grain.x*uGrain+grain.y*.024;rough+=.10;
+            }else{
+                // 微細な塗膜のむらは物体の座標に固定し、動く駒でも模様を滑らせない。
+                vec2 uv=abs(n.y)>.5?vLocal.xz:abs(n.x)>.5?vLocal.zy:vLocal.xy;
+                float pores=texture(uSurfaceTexture,uv*2.).b-.5;
+                color*=1.+pores*.028;rough+=pores*.08;
+            }
+            float diffuse=max(dot(n,light),0.),fill=max(dot(n,normalize(vec3(.65,.35,.6))),0.);
+            float lit=visibility(vShadow,diffuse);
+            float seat=.84+.16*smoothstep(0.,.65,vSeat);
+            vec3 illumination=vec3(.66,.68,.70)+vec3(1.,.99,.97)*diffuse*lit*.68+fill*.15;
+            vec3 halfway=normalize(light+view);
+            float sheen=pow(max(dot(n,halfway),0.),mix(100.,22.,rough));
+            float fresnel=.04+.35*pow(1.-max(dot(n,view),0.),5.);
+            vec3 linear=toLinear(max(color,vec3(0.)))*illumination*seat;
+            linear+=vec3(1.,.96,.89)*sheen*(.14+fresnel)*diffuse*lit*seat;
+            // 明るい反射だけを緩やかに圧縮し、通常の塗料の色と暗部は保つ。
+            float peak=max(linear.r,max(linear.g,linear.b));
+            if(peak>.8)linear*= (.8+.2*(1.-exp(-(peak-.8)/.2)))/peak;
+            frag=vec4(toSRGB(max(linear,vec3(0.))*pieceVisibility(vShadow)),vColor.a);
+        }`);
+    // 命令は六頂点の外接領域内で視線とカット面の交点を求め、輪郭と深度を描く。
+    const pieceVertex=`#version 300 es
+        layout(location=0) in vec4 aSphere;layout(location=1) in vec4 aColor;
+        layout(location=2) in vec4 aRotation;
+        uniform mat4 uMatrix;uniform vec3 uEye;uniform float uScale;
+        out vec3 vPlane;flat out vec4 vSphere;flat out vec4 vColor;
+        flat out float vPixelRadius;
+        flat out vec4 vRotation;
+        void main(){
+            vec2 corners[6]=vec2[6](vec2(-1.,-1.),vec2(1.,-1.),vec2(1.,1.),vec2(-1.,-1.),vec2(1.,1.),vec2(-1.,1.));
+            vec3 facing=normalize(uEye-aSphere.xyz),right=normalize(cross(vec3(0.,1.,0.),facing)),up=cross(facing,right);
+            float distance=length(uEye-aSphere.xyz),bound=aSphere.w*distance/sqrt(max(distance*distance-aSphere.w*aSphere.w,.0001));
+            vec2 corner=corners[gl_VertexID];
+            vPlane=aSphere.xyz+(right*corner.x+up*corner.y)*bound;
+            vSphere=aSphere;vColor=aColor;vRotation=aRotation;
+            vec4 center=uMatrix*vec4(aSphere.xyz,1.);
+            vPixelRadius=aSphere.w*uScale/center.w;
+            gl_Position=uMatrix*vec4(vPlane,1.);
+        }`;
+    const pieceFragment=`#version 300 es
+        precision highp float;
+        in vec3 vPlane;flat in vec4 vSphere;flat in vec4 vColor;
+        flat in float vPixelRadius;
+        flat in vec4 vRotation;
+        uniform mat4 uMatrix;uniform mat4 uLightMatrix;
+        uniform sampler2D uBackground;
+        out vec4 frag;
+        ${surfaceLighting}
+        vec3 background(vec2 uv){return toLinear(texture(uBackground,uv).rgb);}
+        // 外部画像を使わず、卓上と窓のある室内の映り込みを方向から作る。
+        vec3 glassEnvironment(vec3 direction,float footprint){
+            vec3 room=mix(vec3(.075,.065,.055),vec3(.63,.73,.84),smoothstep(-.15,.65,direction.y));
+            float horizon=(direction.y+.02)/.12;
+            room*=1.-.55*exp(-horizon*horizon);
+            vec3 windowDirection=normalize(vec3(-.55,.85,-.4));
+            vec3 right=normalize(cross(vec3(0.,1.,0.),windowDirection)),up=cross(windowDirection,right);
+            float front=dot(direction,windowDirection),soft=.025+footprint*2.;
+            vec2 p=vec2(dot(direction,right),dot(direction,up))/max(front,.001);
+            float window=(1.-smoothstep(.29-soft,.29+soft,abs(p.x)))*(1.-smoothstep(.43-soft,.43+soft,abs(p.y)));
+            room+=vec3(8.,7.8,7.3)*window*smoothstep(0.,.1,front);
+            float strip=pow(max(dot(direction,normalize(vec3(.7,.25,.6))),0.),24.);
+            return room+vec3(.42,.58,.75)*strip;
+        }
+        vec3 pieceLocal(vec3 v){
+            vec4 q=vec4(-vRotation.xyz,vRotation.w);
+            return v+2.*cross(q.xyz,cross(q.xyz,v)+q.w*v);
+        }
+        vec3 pieceWorld(vec3 v){return v+2.*cross(vRotation.xyz,cross(vRotation.xyz,v)+vRotation.w*v);}
+        void clipPiece(vec3 start,vec3 direction,vec3 normal,float limit,inout vec2 interval,inout vec3 face){
+            float slope=dot(direction,normal),gap=limit-dot(start,normal);
+            if(abs(slope)<.000001){if(gap<0.)interval=vec2(1.,-1.);return;}
+            float t=gap/slope;
+            if(slope<0.){if(t>interval.x){interval.x=t;face=normalize(normal);}}
+            else interval.y=min(interval.y,t);
+        }
+        // Cut crystal の軸に垂直な6面と、角を切る8面で視線を切り詰める。
+        float pieceIntersection(vec3 start,vec3 direction,out vec3 normal,out float coverage){
+            normal=vec3(0.,1.,0.);
+            vec2 interval=vec2(-100.,100.);
+            for(int x=-1;x<=1;x++)for(int y=-1;y<=1;y++)for(int z=-1;z<=1;z++){
+                int axes=abs(x)+abs(y)+abs(z);if(axes==0||axes==2)continue;
+                float limit=axes==1?.88:1.20;
+                clipPiece(start,direction,vec3(float(x),float(y),float(z)),limit,interval,normal);
+            }
+            float span=interval.y-interval.x;
+            coverage=smoothstep(0.,max(fwidth(span),.00001),span);
+            return span>0.&&interval.x>=0.?interval.x:-1.;
+        }
+        void main(){
+            vec3 ray=normalize(vPlane-uEye),offset=uEye-vSphere.xyz,perpendicular=cross(offset,ray);
+            // 大きな距離の二乗同士を引かず、遠い俯瞰の小さな球でも交点の精度を保つ。
+            float hit=vSphere.w*vSphere.w-dot(perpendicular,perpendicular);
+            float edge=smoothstep(0.,max(fwidth(hit),.00000001),hit);
+            if(hit<=0.)discard;
+            float distance=-dot(offset,ray)-sqrt(hit);
+            if(distance<=0.)discard;
+            vec3 position=uEye+ray*distance,n=normalize(position-vSphere.xyz),view=-ray;
+            vec3 start=pieceLocal(n)*1.0001,direction=pieceLocal(ray),localNormal;
+            float coverage,t=pieceIntersection(start,direction,localNormal,coverage);
+            if(t<0.)discard;
+            vec3 localPosition=start+direction*t;
+            position=vSphere.xyz+pieceWorld(localPosition)*vSphere.w;n=pieceWorld(localNormal);edge=coverage;
+            vec4 clip=uMatrix*vec4(position,1.);float depth=clip.z/clip.w*.5+.5;
+            if(depth<0.||depth>1.)discard;
+            gl_FragDepth=depth;
+            #ifdef SHADOW_PASS
+            frag=vec4(clamp(vColor.a,0.,1.)*edge);return;
+            #else
+            vec3 light=normalize(uLight*26.-position);
+            float diffuse=max(dot(n,light),0.),lit=visibility(uLightMatrix*vec4(position,1.),diffuse);
+            float facing=max(dot(n,view),0.);
+            // 色相を保った顔料と、面ごとの屈折・反射で Cut crystal を描く。
+            float peak=max(vColor.r,max(vColor.g,vColor.b));
+            vec3 pigment=pow(clamp(vColor.rgb*.98/max(peak,.001),0.,1.),vec3(1.15));
+            vec3 tint=toLinear(pigment);
+            float footprint=1./max(vPixelRadius,1.);
+            vec3 reflected=glassEnvironment(reflect(ray,n),footprint);
+            vec4 projected=uMatrix*vec4(position+refract(ray,n,1./1.5)*vSphere.w*2.,1.);
+            vec2 uv=clamp(projected.xy/max(projected.w,.001)*.5+.5,vec2(0.),vec2(1.));
+            vec3 through=background(uv)*mix(vec3(1.),tint,.65);
+            vec3 linear=mix(tint*(.24+.85*diffuse*lit),through,${crystalTransmission});
+            linear+=reflected*(.10+.45*pow(1.-facing,4.));
+            frag=vec4(toSRGB(clamp(linear,vec3(0.),vec3(1.))),vColor.a*edge);
+            #endif
+        }`;
+    const pieceProgram=program(pieceVertex,pieceFragment);
+    // 同じ交点・姿勢の計算を光源からも使い、影だけ別の形になるのを防ぐ。
+    const pieceShadowProgram=program(pieceVertex,pieceFragment.replace("#version 300 es","#version 300 es\n#define SHADOW_PASS"));
+    const shadowProgram=program(`#version 300 es
+        layout(location=0) in vec3 aAnchor;layout(location=1) in vec3 aNormal;
+        layout(location=2) in vec3 aCenter;layout(location=3) in vec3 aHalfSize;
+        layout(location=5) in vec2 aSurface;uniform mat4 uMatrix;
+        void main(){vec3 local=aAnchor*(aHalfSize-vec3(aSurface.x))+aNormal*aSurface.x;
+            gl_Position=uMatrix*vec4(aCenter+local,1.);}`, `#version 300 es
+        precision highp float;out vec4 frag;void main(){frag=vec4(0.);}`);
     const pointProgram = program(`#version 300 es
         layout(location=0) in vec3 aPosition;
         layout(location=1) in vec4 aColor;
@@ -124,9 +332,10 @@
         out vec4 vColor;out float vSize;
         void main(){gl_Position=uMatrix*vec4(aPosition,1.);vSize=clamp(aSize*uScale/gl_Position.w,2.,256.);gl_PointSize=vSize;vColor=aColor;}`, `#version 300 es
         precision highp float;
-        in vec4 vColor;in float vSize;out vec4 frag;
+        in vec4 vColor;in float vSize;out vec4 frag;uniform bool uMatte;
         void main(){vec2 p=gl_PointCoord*2.-1.;float d=length(p);
             float footprint=2./vSize,k=48./(1.+48.*footprint*footprint/6.);
+            if(uMatte){float edge=1.-smoothstep(.42,.42+footprint,d);frag=vec4(vColor.rgb,edge*min(1.,vColor.a));return;}
             float glow=exp(-d*d*6.)*.30,core=exp(-d*d*k)*k/48.;
             float edge=1.-smoothstep(1.-footprint,1.,d);
             frag=vec4(vColor.rgb+core*.35,(glow+core*.85)*vColor.a*edge);}`);
@@ -150,9 +359,9 @@
     const compositeProgram = program(screenVertex, `#version 300 es
         precision highp float;in vec2 vUV;out vec4 frag;
         uniform sampler2D uScene;uniform sampler2D uBloom;uniform float uBloomAmount;
-        uniform float uTime;uniform float uShock;uniform vec2 uResolution;uniform float uPixelRatio;
+        uniform bool uMatte;uniform float uTime;uniform float uShock;uniform vec2 uResolution;uniform float uPixelRatio;
         float noise(vec2 p){return fract(sin(dot(p,vec2(12.9898,78.233)))*43758.5453);}
-        void main(){vec2 uv=vUV;vec2 q=uv-.5;float r=length(q);
+        void main(){if(uMatte){frag=vec4(texture(uScene,vUV).rgb,1.);return;}vec2 uv=vUV;vec2 q=uv-.5;float r=length(q);
             float wave=sin(r*65.-uShock*15.)*.0016*uShock;
             uv+=normalize(q+vec2(.0001))*wave;
             vec2 aberration=q*uShock*1.4*uPixelRatio/uResolution;
@@ -184,8 +393,119 @@
         b.count = data.length / b.stride;
     }
     function deleteBuffer(b) { if (b) { gl.deleteBuffer(b.vbo); gl.deleteVertexArray(b.vao); } }
+    // 六面の輪郭を内側の直方体と丸みの法線へ分解する。寸法が変わっても丸みはつぶさない。
+    const roundedGeometry=[];
+    for(let axis=0;axis<3;axis++)for(const sign of [-1,1]){
+        const u=(axis+1)%3,v=(axis+2)%3,grid=[-1,-.5,.5,1];
+        for(let i=0;i<3;i++)for(let j=0;j<3;j++){
+            const corners=[[i,j],[i+1,j],[i+1,j+1],[i,j+1]].map(([a,b])=>{
+                const p=[0,0,0];p[axis]=sign;p[u]=grid[a];p[v]=grid[b];
+                return [...p.map(Math.sign),...normalize(p.map(c=>Math.abs(c)>.75?Math.sign(c):0))];
+            });
+            for(const k of [0,1,2,0,2,3])roundedGeometry.push(...corners[k]);
+        }
+    }
+    const roundedVBO=gl.createBuffer();gl.bindBuffer(gl.ARRAY_BUFFER,roundedVBO);
+    gl.bufferData(gl.ARRAY_BUFFER,new Float32Array(roundedGeometry),gl.STATIC_DRAW);
+    function materialBuffer(data,dynamic=false){
+        const vao=gl.createVertexArray(),vbo=gl.createBuffer(),stride=12;
+        gl.bindVertexArray(vao);gl.bindBuffer(gl.ARRAY_BUFFER,roundedVBO);
+        for(let i=0;i<2;i++){gl.enableVertexAttribArray(i);gl.vertexAttribPointer(i,3,gl.FLOAT,false,24,i*12);}
+        gl.bindBuffer(gl.ARRAY_BUFFER,vbo);gl.bufferData(gl.ARRAY_BUFFER,new Float32Array(data),dynamic?gl.DYNAMIC_DRAW:gl.STATIC_DRAW);
+        for(const [location,size,offset] of [[2,3,0],[3,3,12],[4,4,24],[5,2,40]]){
+            gl.enableVertexAttribArray(location);gl.vertexAttribPointer(location,size,gl.FLOAT,false,stride*4,offset);gl.vertexAttribDivisor(location,1);
+        }
+        return {vao,vbo,stride,count:data.length/stride,instances:true,vertices:roundedGeometry.length/6};
+    }
+    function pieceBuffer(){
+        const vao=gl.createVertexArray(),vbo=gl.createBuffer();
+        gl.bindVertexArray(vao);gl.bindBuffer(gl.ARRAY_BUFFER,vbo);gl.bufferData(gl.ARRAY_BUFFER,0,gl.DYNAMIC_DRAW);
+        for(let i=0;i<3;i++){
+            gl.enableVertexAttribArray(i);gl.vertexAttribPointer(i,4,gl.FLOAT,false,48,i*16);gl.vertexAttribDivisor(i,1);
+        }
+        return {vao,vbo,stride:12,count:0,instances:true,vertices:6};
+    }
+    function createSurfaceTexture(){
+        // 木目2層と塗膜の粒を初期化時に生成し、毎画素でのノイズ計算を省く。
+        // 周期的な格子を使い、繰り返し境界と縮小表示の継ぎ目をなくす。
+        const width=256,height=512,data=new Uint8Array(width*height*4);
+        const grid=(columns,rows,seed)=>{
+            const values=Array.from({length:columns*rows},(_,i)=>hash(i+seed));
+            return (x,y)=>{
+                const ix=Math.floor(x),iy=Math.floor(y),fx=smooth(x-ix),fy=smooth(y-iy);
+                const sample=(a,b)=>values[((b%rows+rows)%rows)*columns+(a%columns+columns)%columns];
+                return mix(mix(sample(ix,iy),sample(ix+1,iy),fx),mix(sample(ix,iy+1),sample(ix+1,iy+1),fx),fy);
+            };
+        };
+        const grain=grid(4,28,310),fiber=grid(8,192,520),paint=grid(64,64,730);
+        for(let y=0;y<height;y++)for(let x=0;x<width;x++){
+            const u=x/width,v=y/height,warp=Math.sin(u*TAU)*.15+Math.sin(u*TAU*3+v*TAU)*.035,i=(y*width+x)*4;
+            data[i]=Math.round(grain(u*4,(v+warp)*28)*255);
+            data[i+1]=Math.round(fiber(u*8,(v+warp)*192)*255);
+            data[i+2]=Math.round(paint(u*64,v*64)*255);data[i+3]=255;
+        }
+        const texture=gl.createTexture();gl.bindTexture(gl.TEXTURE_2D,texture);
+        gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA8,width,height,0,gl.RGBA,gl.UNSIGNED_BYTE,data);gl.generateMipmap(gl.TEXTURE_2D);
+        gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,gl.LINEAR_MIPMAP_LINEAR);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAG_FILTER,gl.LINEAR);
+        for(const axis of [gl.TEXTURE_WRAP_S,gl.TEXTURE_WRAP_T])gl.texParameteri(gl.TEXTURE_2D,axis,gl.REPEAT);
+        return texture;
+    }
+    let surfaceTexture;
+    function shadowTarget(withCoverage=false){
+        const size=Math.min(2048,maxRenderSide),texture=gl.createTexture(),fbo=gl.createFramebuffer();
+        gl.bindTexture(gl.TEXTURE_2D,texture);
+        gl.texImage2D(gl.TEXTURE_2D,0,gl.DEPTH_COMPONENT24,size,size,0,gl.DEPTH_COMPONENT,gl.UNSIGNED_INT,null);
+        for(const axis of [gl.TEXTURE_WRAP_S,gl.TEXTURE_WRAP_T])gl.texParameteri(gl.TEXTURE_2D,axis,gl.CLAMP_TO_EDGE);
+        for(const filter of [gl.TEXTURE_MIN_FILTER,gl.TEXTURE_MAG_FILTER])gl.texParameteri(gl.TEXTURE_2D,filter,gl.LINEAR);
+        gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_COMPARE_MODE,gl.COMPARE_REF_TO_TEXTURE);
+        gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_COMPARE_FUNC,gl.LEQUAL);
+        gl.bindFramebuffer(gl.FRAMEBUFFER,fbo);gl.framebufferTexture2D(gl.FRAMEBUFFER,gl.DEPTH_ATTACHMENT,gl.TEXTURE_2D,texture,0);
+        let coverage;
+        if(withCoverage){
+            coverage=gl.createTexture();gl.bindTexture(gl.TEXTURE_2D,coverage);
+            gl.texImage2D(gl.TEXTURE_2D,0,gl.R8,size,size,0,gl.RED,gl.UNSIGNED_BYTE,null);
+            for(const axis of [gl.TEXTURE_WRAP_S,gl.TEXTURE_WRAP_T])gl.texParameteri(gl.TEXTURE_2D,axis,gl.CLAMP_TO_EDGE);
+            for(const filter of [gl.TEXTURE_MIN_FILTER,gl.TEXTURE_MAG_FILTER])gl.texParameteri(gl.TEXTURE_2D,filter,gl.LINEAR);
+            gl.framebufferTexture2D(gl.FRAMEBUFFER,gl.COLOR_ATTACHMENT0,gl.TEXTURE_2D,coverage,0);
+        }
+        gl.drawBuffers([withCoverage?gl.COLOR_ATTACHMENT0:gl.NONE]);gl.readBuffer(withCoverage?gl.COLOR_ATTACHMENT0:gl.NONE);
+        if(gl.checkFramebufferStatus(gl.FRAMEBUFFER)!==gl.FRAMEBUFFER_COMPLETE)throw new Error("Unable to allocate material shadows.");
+        return {texture,coverage,fbo,w:size,h:size};
+    }
+    function buildMaterialShadow(){
+        pieceShadowKey="";
+        if(!style.matte){destroyTarget(materialShadow);destroyTarget(pieceShadow);materialShadow=pieceShadow=null;return;}
+        surfaceTexture??=createSurfaceTexture();
+        materialShadow??=shadowTarget();
+        // 固定した部品の影は組み立て時だけ描く。カメラ操作や毎フレームの再生で再生成しない。
+        const f=1/Math.tan(.85),near=1,far=70;
+        const projection=new Float32Array([f,0,0,0,0,f,0,0,0,0,(far+near)/(near-far),-1,0,0,2*far*near/(near-far),0]);
+        lightProjection=multiply(projection,lookAt(style.surface.light.map(v=>v*26),[0,0,0]));
+        gl.bindFramebuffer(gl.FRAMEBUFFER,materialShadow.fbo);gl.viewport(0,0,materialShadow.w,materialShadow.h);
+        gl.enable(gl.DEPTH_TEST);gl.depthMask(true);gl.depthFunc(gl.LESS);gl.disable(gl.BLEND);gl.clear(gl.DEPTH_BUFFER_BIT);
+        gl.enable(gl.POLYGON_OFFSET_FILL);gl.polygonOffset(1.2,2);
+        gl.useProgram(shadowProgram.p);gl.uniformMatrix4fv(shadowProgram.u("uMatrix"),false,lightProjection);
+        gl.bindVertexArray(staticMaterials.vao);gl.drawArraysInstanced(gl.TRIANGLES,0,roundedGeometry.length/6,staticMaterials.count);
+        gl.disable(gl.POLYGON_OFFSET_FILL);gl.bindFramebuffer(gl.FRAMEBUFFER,null);
+    }
     const movingLines = buffer([], false, true), particles = buffer([], true, true);
     const analysisSurface = buffer([], false, true),registerSurface = buffer([], false, true);
+    const instructionPieces = pieceBuffer();
+    function updatePieceShadow(){
+        // カメラ操作と一時停止中は再利用。シーク・外観・演出の変更時だけ描き直す。
+        const key=`${cycle}/${reducedMotion}`;
+        if(pieceShadowKey===key)return;
+        pieceShadow??=shadowTarget(true);
+        gl.bindFramebuffer(gl.FRAMEBUFFER,pieceShadow.fbo);gl.viewport(0,0,pieceShadow.w,pieceShadow.h);
+        gl.enable(gl.DEPTH_TEST);gl.depthMask(true);gl.depthFunc(gl.LESS);gl.disable(gl.BLEND);
+        gl.clearColor(0,0,0,0);gl.clear(gl.COLOR_BUFFER_BIT|gl.DEPTH_BUFFER_BIT);
+        gl.useProgram(pieceShadowProgram.p);
+        gl.uniformMatrix4fv(pieceShadowProgram.u("uMatrix"),false,lightProjection);
+        gl.uniform3fv(pieceShadowProgram.u("uEye"),style.surface.light.map(v=>v*26));
+        gl.bindVertexArray(instructionPieces.vao);
+        gl.drawArraysInstanced(gl.TRIANGLES,0,instructionPieces.vertices,instructionPieces.count);
+        pieceShadowKey=key;pieceShadowUpdates++;
+    }
     // 高解像度アトラスと mipmap により、命令列の縮小時も文字の輪郭を保つ。
     const glyphCanvas=document.createElement("canvas");glyphCanvas.width=1536;glyphCanvas.height=960;
     const glyphContext=glyphCanvas.getContext("2d");
@@ -216,7 +536,7 @@
         let depthBuffer;
         if (depth) {
             depthBuffer = gl.createRenderbuffer(); gl.bindRenderbuffer(gl.RENDERBUFFER, depthBuffer);
-            gl.renderbufferStorage(gl.RENDERBUFFER, gl.DEPTH_COMPONENT16, w, h);
+            gl.renderbufferStorage(gl.RENDERBUFFER, gl.DEPTH_COMPONENT24, w, h);
             gl.framebufferRenderbuffer(gl.FRAMEBUFFER, gl.DEPTH_ATTACHMENT, gl.RENDERBUFFER, depthBuffer);
         }
         if (gl.checkFramebufferStatus(gl.FRAMEBUFFER) !== gl.FRAMEBUFFER_COMPLETE) throw new Error("Unable to allocate render target.");
@@ -225,6 +545,7 @@
     function destroyTarget(t) {
         if (!t) return;
         if(t.texture)gl.deleteTexture(t.texture);gl.deleteFramebuffer(t.fbo);
+        if(t.coverage)gl.deleteTexture(t.coverage);
         if (t.depthBuffer) gl.deleteRenderbuffer(t.depthBuffer);
         if (t.colorBuffer) gl.deleteRenderbuffer(t.colorBuffer);
     }
@@ -234,7 +555,7 @@
         gl.renderbufferStorageMultisample(gl.RENDERBUFFER,msaaSamples,gl.RGBA8,w,h);
         gl.framebufferRenderbuffer(gl.FRAMEBUFFER,gl.COLOR_ATTACHMENT0,gl.RENDERBUFFER,colorBuffer);
         const depthBuffer=gl.createRenderbuffer();gl.bindRenderbuffer(gl.RENDERBUFFER,depthBuffer);
-        gl.renderbufferStorageMultisample(gl.RENDERBUFFER,msaaSamples,gl.DEPTH_COMPONENT16,w,h);
+        gl.renderbufferStorageMultisample(gl.RENDERBUFFER,msaaSamples,gl.DEPTH_COMPONENT24,w,h);
         gl.framebufferRenderbuffer(gl.FRAMEBUFFER,gl.DEPTH_ATTACHMENT,gl.RENDERBUFFER,depthBuffer);
         if(gl.checkFramebufferStatus(gl.FRAMEBUFFER)!==gl.FRAMEBUFFER_COMPLETE)throw new Error("Unable to allocate multisample render target.");
         return {fbo,colorBuffer,depthBuffer,w,h};
@@ -253,16 +574,53 @@
         drawTimeline();
     }
 
-    function vertex(out, p, color, alpha = 1) { out.push(...p, ...color, alpha); }
+    function vertex(out, p, color, alpha = 1) { (out.triangles??out).push(...p, ...color, alpha); }
     function line(out, a, b, color, alpha = 1) { vertex(out, a, color, alpha); vertex(out, b, color, alpha); }
     function point(out, p, color, size, alpha = 1) { out.push(...p, ...color, alpha, size); }
+    const baseLevels={table:-.87,lowerBoard:-.71,board:-.29,plinth:-.09};
+    // 通常の三角形と材質付きの部品を同じ組立処理から分ける。
+    function beveledBlock(out,x,y,z,w,h,d,color,alpha=1,material=0,supportY=y) {
+        const bevel=Math.min(.10,h*.18,w*.09,d*.09),bottom=Math.min(y,supportY),height=y+h-bottom;
+        // 天面と面取りを保ち、底面だけを支持面まで伸ばす。命令やポートの座標は動かさない。
+        (out.materials??out).push(x,bottom+height/2,z,w/2,height/2,d/2,...color,alpha,bevel,material);
+    }
+    function flatQuad(tris,x,y,z,w,d,color,alpha=1) {
+        const p=[[x-w/2,y,z-d/2],[x+w/2,y,z-d/2],[x+w/2,y,z+d/2],[x-w/2,y,z+d/2]];
+        for(const k of [0,1,2,0,2,3])vertex(tris,p[k],color,alpha);
+    }
+    function contactShadow(tris,x,y,z,w,d,spread,opacity=.22) {
+        // 重複した四角を重ねず、丸い輪郭から連続的に薄くなる影を作る。
+        const radius=Math.min(.18,w*.12,d*.12),color=[.24,.19,.13];
+        const rim=pad=>{
+            const points=[];
+            for(let corner=0;corner<4;corner++){
+                const sx=corner===0||corner===3?1:-1,sz=corner<2?1:-1;
+                for(let k=0;k<=4;k++){
+                    const angle=(corner+k/4)*Math.PI/2;
+                    points.push([x+sx*(w/2-radius)+Math.cos(angle)*(radius+pad),y,z+sz*(d/2-radius)+Math.sin(angle)*(radius+pad)]);
+                }
+            }
+            return points;
+        };
+        let inner=rim(0),alpha=opacity;
+        for(let i=0;i<inner.length;i++)for(const p of [[x,y,z],inner[i],inner[(i+1)%inner.length]])vertex(tris,p,color,alpha);
+        for(let ring=1;ring<=6;ring++){
+            const t=ring/6,outer=rim(spread*t),next=opacity*(1-smooth(t))**2;
+            for(let i=0;i<inner.length;i++){
+                const j=(i+1)%inner.length,p=[inner[i],inner[j],outer[j],outer[i]];
+                for(const k of [0,1,2,0,2,3])vertex(tris,p[k],color,k<2?alpha:next);
+            }
+            inner=outer;alpha=next;
+        }
+    }
     function ring(out, x, y, z, radius, color, alpha = 1, start = 0, end = TAU, segments = 80) {
         for (let i = 0; i < segments; i++) {
             const a = mix(start, end, i / segments), b = mix(start, end, (i + 1) / segments);
             line(out, [x + Math.cos(a) * radius, y, z + Math.sin(a) * radius], [x + Math.cos(b) * radius, y, z + Math.sin(b) * radius], color, alpha);
         }
     }
-    function box(tris, lines, x, y, z, w, h, d, color, glow = .55) {
+    function box(tris, lines, x, y, z, w, h, d, color, glow = .55, supportY=y) {
+        if(style.matte){housing(tris,lines,x,y,z,w,h,d,color,glow,supportY);return;}
         const p = [[x-w/2,y,z-d/2],[x+w/2,y,z-d/2],[x+w/2,y,z+d/2],[x-w/2,y,z+d/2],
             [x-w/2,y+h,z-d/2],[x+w/2,y+h,z-d/2],[x+w/2,y+h,z+d/2],[x-w/2,y+h,z+d/2]];
         const faces = [[0,1,5,4],[1,2,6,5],[2,3,7,6],[3,0,4,7],[4,5,6,7],[3,2,1,0]];
@@ -273,7 +631,15 @@
         });
         for (const [a,b] of [[0,1],[1,2],[2,3],[3,0],[4,5],[5,6],[6,7],[7,4],[0,4],[1,5],[2,6],[3,7]]) line(lines, p[a], p[b], color, glow);
     }
-    function housing(tris, lines, x, y, z, w, h, d, color, glow=.4) {
+    function housing(tris, lines, x, y, z, w, h, d, color, glow=.4, supportY=y) {
+        if(style.matte){
+            const floor=color===C.floor,base=y<-.1;
+            // 大きな構造面は中性色に揃え、意味を持つ色は命令と識別帯へ集める。
+            const paint=floor?style.surface.wood:base?style.structure.base:h<.10?style.structure.recess:h<.20?style.structure.rail:style.structure.body;
+            beveledBlock(tris,x,y,z,w,h,d,paint,1,floor||base?1:0,supportY);
+            if(tris.shadows&&y>=-.05&&w>.4&&d>.4&&h>.09)contactShadow(tris.shadows,x,Math.min(y,supportY)+.002,z,w,d,.10,.18);
+            return;
+        }
         const bevel=Math.min(.12,h*.3),cut=Math.min(.22,w*.13,d*.13);
         const rim=(inset,height)=>{
             const a=w/2-inset,b=d/2-inset,c=cut*.7;
@@ -344,17 +710,17 @@
     }
     function executionModule(tris,lines,node) {
         const {x,z,w,d,h,color}=node;
-        housing(tris,lines,x,-.25,z,w+.2,.16,d+.2,color,.2);
-        housing(tris,lines,x,-.05,z,w,h+.05,d,color,.23);
+        housing(tris,lines,x,-.25,z,w+.2,.16,d+.2,color,.2,baseLevels.board);
+        housing(tris,lines,x,-.05,z,w,h+.05,d,color,.23,baseLevels.plinth);
         // 並列の管路は上部を開いた溝として描き、内部を流れる光が見えるようにする。
         for(let k=0;k<node.pipeCount;k++){
             const {inlet:a,outlet:b,radius:r}=executionLane(node,k);
-            housing(tris,lines,x,h+.01,a[2],b[0]-a[0]+.16,.09,r*2.5,color,.16);
+            housing(tris,lines,x,h+.01,a[2],b[0]-a[0]+.16,.09,r*2.5,color,.16,h);
             for(let j=6;j<12;j++){
                 const u=j/12*TAU,v=(j+1)/12*TAU;
                 const p=[[a[0],a[1]+Math.sin(u)*r,a[2]+Math.cos(u)*r],[b[0],b[1]+Math.sin(u)*r,b[2]+Math.cos(u)*r],
                     [b[0],b[1]+Math.sin(v)*r,b[2]+Math.cos(v)*r],[a[0],a[1]+Math.sin(v)*r,a[2]+Math.cos(v)*r]];
-                for(const i of [0,1,2,0,2,3])vertex(tris,p[i],color.map((c,i)=>[.014,.025,.032][i]+c*.045));
+                for(const i of [0,1,2,0,2,3])vertex(tris,p[i],style.matte?style.structure.recess:color.map((c,i)=>[.014,.025,.032][i]+c*.045));
             }
             for(const side of [-1,1])line(lines,[a[0],a[1],a[2]+side*r],[b[0],b[1],b[2]+side*r],color,.12);
             line(lines,a,b,color,.05);
@@ -367,7 +733,7 @@
         }
         for(const side of [-1,1]){
             const railZ=z+side*(d/2-.13);
-            housing(tris,lines,x,h+.015,railZ,w-.7,.12,.12,color,.16);
+            housing(tris,lines,x,h+.015,railZ,w-.7,.12,.12,color,.16,h);
             for(const dx of [-w*.36,w*.36]){
                 line(lines,[x+dx,-.12,z+side*d/2],[x+dx,-.12,z+side*(d/2+.25)],color,.28);
                 flowChevron(lines,x+dx,h+.17,railZ,.2,color,.25);
@@ -387,11 +753,11 @@
     }
     function matrixPosition(row,column=-1) {
         const n=nodes.get("issue"),columns=dependencyReplay.columnCount;
-        return [n.x+(column<0?-.44:-.28+(column+.5)*.68/columns)*n.w,n.h+.23,
-            n.z-n.w*.34+(row+.5)*n.w*.68/trace.structure.queueCapacity];
+        return [n.x+(column<0?-.44*n.w+(row%2)*.28:(-.28+(column+.5)*.68/columns)*n.w),n.h+.23,
+            n.z-n.matrixDepth/2+(row+.5)*n.matrixDepth/trace.structure.queueCapacity];
     }
     function crossesDependencyGrid(a,b=a) {
-        const n=nodes.get("issue"),low=[n.x-n.w*.30,n.h+.06,n.z-n.w*.36],high=[n.x+n.w*.42,n.h+1.2,n.z+n.w*.36];
+        const n=nodes.get("issue"),low=[n.x-n.w*.30,n.h+.06,n.z-n.matrixDepth/2-.06],high=[n.x+n.w*.42,n.h+1.2,n.z+n.matrixDepth/2+.06];
         return crossesBox(a,b,low,high);
     }
     function crossesMapWords(a,b=a){
@@ -410,16 +776,18 @@
         return true;
     }
     function matrixModule(tris,lines,n) {
-        housing(tris,lines,n.x,-.25,n.z,n.w+.2,.16,n.d+.2,C.blue,.22);
-        housing(tris,lines,n.x,-.05,n.z,n.w,n.h+.05,n.d,C.blue,.3);
-        const y=n.h+.08,x0=n.x-n.w*.28,x1=n.x+n.w*.40,z0=n.z-n.w*.34,z1=n.z+n.w*.34;
-        for(let r=0;r<=trace.structure.queueCapacity;r++){
-            const z=mix(z0,z1,r/trace.structure.queueCapacity);
-            line(lines,[x0,y,z],[x1,y,z],C.blue,r%4===0?.15:.06);
+        housing(tris,lines,n.x,-.25,n.z,n.w+.2,.16,n.d+.2,C.blue,.22,baseLevels.board);
+        housing(tris,lines,n.x,-.05,n.z,n.w,n.h+.05,n.d,C.blue,.3,baseLevels.plinth);
+        const y=n.h+.08,x0=n.x-n.w*.28,x1=n.x+n.w*.40,z0=n.z-n.matrixDepth/2,z1=n.z+n.matrixDepth/2;
+        n.grid={rows:[],columns:[]};
+        // 境界線ではなく、同じエントリの行・列を一本ずつ描く。交点を依存セルと揃える。
+        for(let r=0;r<trace.structure.queueCapacity;r++){
+            const p=matrixPosition(r),segment=[[p[0],y,p[2]],[x1,y,p[2]]];
+            n.grid.rows.push(segment);line(lines,...segment,C.blue,style.matte?(r%8===0?.42:.27):(r%8===0?.24:.13));
         }
-        for(let c=0;c<=dependencyReplay.columnCount;c++){
-            const x=mix(x0,x1,c/dependencyReplay.columnCount);
-            line(lines,[x,y,z0],[x,y,z1],C.blue,c%4===0?.15:.06);
+        for(let c=0;c<dependencyReplay.columnCount;c++){
+            const x=matrixPosition(0,c)[0],segment=[[x,y,z0],[x,y,z1]];
+            n.grid.columns.push(segment);line(lines,...segment,C.blue,style.matte?(c%8===0?.32:.20):(c%8===0?.22:.11));
         }
         for(const x of [x0,x1])line(lines,[x,y,z0],[x,y,z1],C.blue,.5);
         for(const z of [z0,z1])line(lines,[x0,y,z],[x1,y,z],C.blue,.5);
@@ -486,6 +854,10 @@
     }
 
     function renameNode(){return [...nodes.values()].find(n=>n.names?.includes("Rn"));}
+    function renameInstructionPosition(slot){
+        const n=renameNode(),rows=Math.max(2,trace.fetchWidth),columns=Math.ceil(n.instructionSlots/rows);
+        return [n.x+(Math.floor(slot/rows)-(columns-1)/2)*.32,n.h+.34,n.z+(slot%rows-(rows-1)/2)*.38];
+    }
     function renameWordLayout(index){
         const n=renameNode(),banks=Math.ceil(n.mapWords/8),bank=Math.floor(index/8),column=index%8;
         const pitch=n.d*.84/banks,z=n.z-n.d*.42+(bank+.5)*pitch;
@@ -495,14 +867,14 @@
         return {bits,bank,start:[x,y,z-pitch*.32],end:[x,y,z+pitch*.32],halfWidth:n.w*.031};
     }
     function renameModule(tris,lines,n){
-        housing(tris,lines,n.x,-.25,n.z,n.w+.18,.16,n.d+.16,C.blue,.25);
-        housing(tris,lines,n.x,-.05,n.z,n.w,n.h+.05,n.d,C.blue,.35);
+        housing(tris,lines,n.x,-.25,n.z,n.w+.18,.16,n.d+.16,C.blue,.25,baseLevels.board);
+        housing(tris,lines,n.x,-.05,n.z,n.w,n.h+.05,n.d,C.blue,.35,baseLevels.plinth);
         const banks=Math.ceil(n.mapWords/8),pitch=n.d*.84/banks;
         // Rn 上に 8 本ずつ 4 組のバーを重ね、RAT の立体配列を構成する。
         // 内部の小さなセルは割り当て先の物理レジスタ番号を二進数で表す。
         for(let bank=0;bank<banks;bank++){
             const z=n.z-n.d*.42+(bank+.5)*pitch,y=n.h+.065+bank*.018;
-            housing(tris,lines,n.x,y,z,n.w*.87,.14,pitch*.87,C.blue,.22);
+            housing(tris,lines,n.x,y,z,n.w*.87,.14,pitch*.87,C.blue,.22,n.h);
             line(lines,[n.x-n.w*.40,y+.16,z-pitch*.40],[n.x+n.w*.40,y+.16,z-pitch*.40],C.blue,.3);
         }
         for(let index=0;index<n.mapWords;index++){
@@ -519,7 +891,7 @@
         registerState.rows.forEach((row,index)=>{
             const layout=renameWordLayout(index),{start,end,halfWidth,bits}=layout;
             const [x,y,z0]=start,z1=end[2];
-            const restoring=row.event?.type==="restore",color=restoring&&row.pulse>0?C.red:C.blue;
+            const restoring=row.event?.type==="restore",color=restoring&&row.pulse>0?C.red:style.matte&&row.pulse<=0?style.structure.ink:C.blue;
             const previous=row.event?(restoring?row.event.physical:row.event.previous):row.physical;
             const progress=reducedMotion?1:row.event?smooth((cycle-row.event.cycle)/.8):1;
             const known=row.physical!==null,active=row.pulse>0&&!row.constant&&previous!==row.physical;
@@ -573,12 +945,12 @@
             valueAlpha:reading?.95:presence*.6,unknown:cell.allocation==="unknown"};
     }
     function registerModule(tris,lines,n){
-        housing(tris,lines,n.x,-.25,n.z,n.w+.24,.16,n.d+.24,C.blue,.25);
-        housing(tris,lines,n.x,-.05,n.z,n.w,n.h+.05,n.d,C.blue,.35);
+        housing(tris,lines,n.x,-.25,n.z,n.w+.24,.16,n.d+.24,C.blue,.25,baseLevels.board);
+        housing(tris,lines,n.x,-.05,n.z,n.w,n.h+.05,n.d,C.blue,.35,baseLevels.plinth);
         const depth=n.d*.70/Math.ceil(registerTags.length/physicalColumns());
         for(const tag of registerTags){
             const p=physicalTagPosition(tag);
-            housing(tris,lines,p[0],n.h+.04,p[2],n.w*.70/physicalColumns(),.055,depth,C.blue.map(v=>v*.35),.14);
+            housing(tris,lines,p[0],n.h+.04,p[2],n.w*.70/physicalColumns(),.055,depth,C.blue.map(v=>v*.35),.14,n.h);
         }
         for(const execution of [...nodes.values()].filter(n=>n.pipeCount))for(let lane=0;lane<execution.pipeCount;lane++){
             const p=executionLane(execution,lane).inlet;
@@ -590,10 +962,13 @@
         if(!registerState.available){upload(registerSurface,triangles);return;}
         const n=nodes.get("register-read");
         const readIDs=new Set(registerReads.flatMap(r=>r.sources.map(s=>s.physical)));
+        // 明るい面では小さな点でも読めるため、活動の印が命令の駒を覆わないようにする。
+        const signalScale=style.matte?.5:1;
         const halfWidth=n.w*.34/physicalColumns(),halfDepth=n.d*.34/Math.ceil(registerTags.length/physicalColumns());
         drawRenameWords(triangles,lines,points);
         for(const cell of registerState.physical){
-            const p=physicalTagPosition(cell.physical),reading=readIDs.has(cell.physical),color=registerCellColor(cell),appearance=registerCellAppearance(cell);
+            const p=physicalTagPosition(cell.physical),reading=readIDs.has(cell.physical),appearance=registerCellAppearance(cell);
+            const color=style.matte&&!reading&&cell.pulse<=0?style.structure.ink:registerCellColor(cell);
             const corners=[[-1,-1],[1,-1],[1,1],[-1,1]].map(([x,z])=>[p[0]+x*halfWidth,p[1]-.025,p[2]+z*halfDepth]);
             for(const i of [0,1,2,0,2,3])vertex(triangles,corners[i],color,appearance.fill);
             for(let i=0;i<4;i++)line(lines,corners[i],corners[(i+1)%4],color,appearance.outline);
@@ -605,8 +980,8 @@
                     line(lines,[x,p[1],p[2]+halfDepth*.12],[x,p[1],p[2]+halfDepth*.78],color,appearance.valueAlpha*(.1+value/Number(mask)*.8));
                 }
             }
-            if(reading||cell.pulse>0)point(points,p,color,reading?15:10,reading?.85:cell.pulse*.55);
-            registerReaders(cell.physical).slice(1).forEach((read,index)=>point(points,[p[0]+.06*(index+1),p[1]+.04,p[2]],C[read.op.kind],10,.9));
+            if(reading||cell.pulse>0)point(points,p,color,(reading?15:10)*signalScale,reading?.85:cell.pulse*.55);
+            registerReaders(cell.physical).slice(1).forEach((read,index)=>point(points,[p[0]+.06*(index+1),p[1]+.04,p[2]],C[read.op.kind],10*signalScale,.9));
         }
         for(const read of registerReads){
             const port=registerReadPort(read.op),color=C[read.op.kind];
@@ -614,28 +989,28 @@
                 if(!registerTags.includes(source.physical))continue;
                 const p=physicalTagPosition(source.physical);
                 for(let k=0;k<16;k++)line(lines,route(p,port,k/16),route(p,port,(k+1)/16),color,.7);
-                point(points,route(p,port,smooth(read.progress)),color,14,.9);
+                point(points,route(p,port,smooth(read.progress)),color,14*signalScale,.9);
             }
-            point(points,port,color,16,1);
+            point(points,port,color,16*signalScale,1);
         }
         upload(registerSurface,triangles);
     }
     function robCell(slot, lift = 0) {
-        const n=nodes.get("rob"), rows=Math.ceil(trace.structure.robCapacity/4);
+        const n=nodes.get("rob"),columns=trace.structure.robCapacity>96?8:4,rows=Math.ceil(trace.structure.robCapacity/columns);
         const column=Math.floor(slot/rows), offset=slot%rows;
         const row=column%2?rows-1-offset:offset;
-        return [n.x+(column-1.5)*.49,n.h+.15+lift,n.z+(row-(rows-1)/2)*6.65/Math.max(1,rows-1)];
+        return [n.x+(column-(columns-1)/2)*n.w*.8/columns,n.h+.15+lift,n.z+(row-(rows-1)/2)*6.65/Math.max(1,rows-1)];
     }
     function commitSlot(index){
         const n=nodes.get("commit"),pitch=n.d*.8/trace.retireWidth,z=n.z+(index-(trace.retireWidth-1)/2)*pitch,y=n.h+.20;
         return {inlet:[n.x-n.w*.35,y,z],outlet:[n.x+n.w*.35,y,z],depth:pitch*.65};
     }
     function commitModule(tris,lines,n){
-        housing(tris,lines,n.x,-.25,n.z,n.w+.24,.16,n.d+.24,C.blue,.25);
-        housing(tris,lines,n.x,-.05,n.z,n.w,n.h+.05,n.d,C.blue,.35);
+        housing(tris,lines,n.x,-.25,n.z,n.w+.24,.16,n.d+.24,C.blue,.25,baseLevels.board);
+        housing(tris,lines,n.x,-.05,n.z,n.w,n.h+.05,n.d,C.blue,.35,baseLevels.plinth);
         for(let i=0;i<trace.retireWidth;i++){
             const slot=commitSlot(i),a=slot.inlet,b=slot.outlet;
-            housing(tris,lines,n.x,n.h+.05,a[2],n.w*.74,.07,slot.depth,C.blue,.38);
+            housing(tris,lines,n.x,n.h+.05,a[2],n.w*.74,.07,slot.depth,C.blue,.38,n.h);
             line(lines,a,b,C.blue,.20);
             for(const p of [a,b])line(lines,[p[0],p[1],p[2]-slot.depth*.4],[p[0],p[1],p[2]+slot.depth*.4],C.blue,.45);
             line(lines,[b[0]-.14,b[1],b[2]-slot.depth*.25],b,C.blue,.4);
@@ -773,8 +1148,12 @@
             rn.detail=trace.evidence.registers.logicalNames?.[0]==="RAX"?"16 ARCH + 16 TEMP":`${rn.mapWords} LOGICAL REGS`;
             if(trace.evidence.registers.kind==="configuration")rn.detail=`${rn.mapWords} LOGICAL · MAP NOT LOGGED`;
         }
-        makeNode("issue", "SCHEDULER", hasRegisters?-5.2:-3.7, 0, hasRegisters?3.2:3.6, hasRegisters?3.2:3.6, .65, C.blue,
+        if(rn)rn.instructionSlots=Math.max(1,...ops.flatMap(op=>op.stages.filter(s=>s.names.includes("Rn")).map(s=>(s.displaySlot??0)+1)));
+        const scheduler=makeNode("issue", "SCHEDULER", hasRegisters?-5.2:-3.7, 0, hasRegisters?3.2:3.6, hasRegisters?3.2:3.6, .65, C.blue,
             `${trace.structure.queueCapacity} ROWS × ${dependencyReplay.columnCount} COLS · ${trace.evidence?.scheduling.kind==="recorded"?"RECORDED":"RAW ESTIMATE"}`);
+        // 駒を縮めずに置けるよう、待機列の行間と筐体の奥行きを確保する。
+        scheduler.matrixDepth=Math.max(scheduler.w*.68,trace.structure.queueCapacity*.14);
+        scheduler.d=Math.max(scheduler.d,scheduler.matrixDepth/.84);
         for (const n of trace.structure.executionNodes) {
             const z = { integer: -4.2, branch: 0, memory: 4.2 }[n.kind];
             const compact=n.kind!=="memory";
@@ -782,7 +1161,9 @@
             node.pipeCount=n.pipeCount;node.compact=compact;
         }
         if (trace.structure.memoryWait) makeNode("memory-wait", "MEMORY WAIT", hasRegisters?4.8:4.1, 5.5, hasRegisters?1.3:1.55, 1.6, .5, C.memory, "OBSERVED WAIT");
-        makeNode("rob", trace.machineOrder === "in-order" ? "COMPLETION FIFO" : "REORDER BUFFER", 6.8, 0, 2.45, 8.0, .65, C.blue, `${trace.structure.robCapacity} ENTRIES · HEAD → COMMIT`);
+        // 左端を保って右へ広げ、メモリ待ちからの接続線が逆向きになるのを避ける。
+        const robWidth=trace.structure.robCapacity>96?3.0:2.45;
+        makeNode("rob", trace.machineOrder === "in-order" ? "COMPLETION FIFO" : "REORDER BUFFER", 6.8+(robWidth-2.45)/2, 0, robWidth, 8.0, .65, C.blue, `${trace.structure.robCapacity} ENTRIES · HEAD → COMMIT`);
         makeNode("commit", "COMMIT", 11.1, 0, 2.15, 3.0, .65, C.integer, `${trace.retireWidth} SLOTS / CYCLE`);
         if(hasRegisters)makeNode("register-read","PHYSICAL REGISTERS",-1.65,0,2.2,11.3,.4,C.blue,trace.evidence.registers.origin==="gem5"?`${registerTags.length} INT · ${trace.evidence.registers.kind==="configuration"?"CONFIG ONLY":"RECORDED ACCESSES"}`:`${registerTags.length} OBSERVED · READ AT Rr`);
         front.slice(1).forEach((n, i) => addConnection(front[i].id,n.id,nodes.get(front[i].id).color));
@@ -795,28 +1176,40 @@
         const robNode=nodes.get("rob"),robInputs=connections.filter(c=>c.to==="rob").flatMap(c=>c.lanes);
         robInputs.sort((a,b)=>a.source[2]-b.source[2]);
         robInputs.forEach((lane,index)=>{lane.target[2]=robNode.z+(index-(robInputs.length-1)/2)*robNode.d*.82/Math.max(1,robInputs.length-1);});
-        const tris = [], lines = [], stars = [];
-        box(tris, lines, 0, -.65, .4, 28.8, .36, 14.4, C.floor, .5);
-        box(tris, lines, 0, -.81, .4, 29.4, .1, 15, C.floor, .22);
-        for (let x = -28; x <= 28; x += 1) line(lines, [x,-.84,-22], [x,-.84,22], C.floor, x % 4 === 0 ? .27 : .12);
-        for (let z = -22; z <= 22; z += 1) line(lines, [-28,-.84,z], [28,-.84,z], C.floor, z % 4 === 0 ? .27 : .12);
-        for (let i = 0; i < 130; i++) {
-            const x = -14 + hash(i+41) * 28, z = -6.2 + hash(i+77) * 13;
-            const y = -.26, len = .25 + hash(i) * 1.5, c = i % 8 === 0 ? C.integer : C.floor;
-            line(lines, [x,y,z], [x+len,y,z], c, i % 8 === 0 ? .28 : .38);
-            line(lines, [x+len,y,z], [x+len+.27,y,z+.27], c, .25);
-            if (i % 4 === 0) point(stars, [x,y,z], c, 3, .6);
+        const lines=[],stars=[],shadows=[],tris={triangles:[],materials:[],shadows};
+        if(style.matte){
+            flatQuad(tris,0,baseLevels.table,0,200,200,style.background);
+            contactShadow(shadows,0,baseLevels.table+.002,.4,29.4,15,.35);
         }
-        for (let i = 0; i < 310; i++) point(stars, [(hash(i+910)-.5)*70, hash(i+830)*17-3, (hash(i+920)-.5)*55], i%6 ? [.22,.42,.55] : C.integer, .8+hash(i+940)*2.1, .2+hash(i)*.5);
+        box(tris, lines, 0, -.65, .4, 28.8, .36, 14.4, C.floor, .5,baseLevels.lowerBoard);
+        box(tris, lines, 0, -.81, .4, 29.4, .1, 15, C.floor, .22,baseLevels.table);
+        if(!style.matte){
+            for (let x = -28; x <= 28; x += 1) line(lines, [x,-.84,-22], [x,-.84,22], C.floor, x % 4 === 0 ? .27 : .12);
+            for (let z = -22; z <= 22; z += 1) line(lines, [-28,-.84,z], [28,-.84,z], C.floor, z % 4 === 0 ? .27 : .12);
+            for (let i = 0; i < 130; i++) {
+                const x = -14 + hash(i+41) * 28, z = -6.2 + hash(i+77) * 13;
+                const y = -.26, len = .25 + hash(i) * 1.5, c = i % 8 === 0 ? C.integer : C.floor;
+                line(lines, [x,y,z], [x+len,y,z], c, i % 8 === 0 ? .28 : .38);
+                line(lines, [x+len,y,z], [x+len+.27,y,z+.27], c, .25);
+                if (i % 4 === 0) point(stars, [x,y,z], c, 3, .6);
+            }
+            for (let i = 0; i < 310; i++) point(stars, [(hash(i+910)-.5)*70, hash(i+830)*17-3, (hash(i+920)-.5)*55], i%6 ? [.22,.42,.55] : C.integer, .8+hash(i+940)*2.1, .2+hash(i)*.5);
+        }
         for (const node of nodes.values()) {
             const {x,z,w,d,h,color,id} = node;
+            if(style.matte){
+                contactShadow(shadows,x,baseLevels.board+.002,z,w+.2,d+.2,.14);
+                const specialized=node.pipeCount||node.mapWords||["issue","register-read","commit"].includes(id);
+                const stripe=Math.min(w*.60,1.5),top=h-(specialized?0:.05);
+                beveledBlock(tris,x-w/2+.12+stripe/2,top+.004,z+d/2-.13,stripe,.018,.07,color,1,0,top);
+            }
             if(node.pipeCount){executionModule(tris,lines,node);continue;}
             if(id==="issue"){matrixModule(tris,lines,node);continue;}
             if(id==="register-read"){registerModule(tris,lines,node);continue;}
             if(id==="commit"){commitModule(tris,lines,node);continue;}
             if(node.mapWords){renameModule(tris,lines,node);continue;}
-            box(tris, lines, x, -.25, z, w+.25, .16, d+.25, color, .22);
-            box(tris, lines, x, -.05, z, w, h, d, color, .52);
+            box(tris, lines, x, -.25, z, w+.25, .16, d+.25, color, .22,baseLevels.board);
+            box(tris, lines, x, -.05, z, w, h, d, color, .52,baseLevels.plinth);
             // 天面の細かい刻みと側面のフィンで、光を載せる物体の質感を表す。
             for (let k = 0; k < 8; k++) {
                 const dz = z-d*.38 + k*d*.76/7;
@@ -848,8 +1241,27 @@
                 for(const p of [source,target])point(stars,p,color,3,.4);
             }
         }
-        [staticTriangles, staticLines, staticStars].forEach(deleteBuffer);
-        staticTriangles=buffer(tris);staticLines=buffer(lines);staticStars=buffer(stars,true);
+        if(style.matte){
+            // 静的な配線・格子・空きスロットは灰色。端子の小さな色印と動的な活動は残す。
+            for(let i=0;i<lines.length;i+=7)for(let channel=0;channel<3;channel++)lines[i+3+channel]=style.structure.wire[channel];
+        }
+        [staticTriangles, staticLines, staticStars, staticShadows, staticMaterials].forEach(deleteBuffer);
+        staticTriangles=buffer(tris.triangles);staticMaterials=materialBuffer(tris.materials);staticLines=buffer(lines);staticStars=buffer(stars,true);staticShadows=buffer(shadows);
+        pieceGround=null;piecePoseCache=new WeakMap();
+        if(style.matte){
+            const surfaces=[];
+            // 卓上の巨大な二枚は無限平面として扱う。溝は表示用の三角形をそのまま使う。
+            for(let i=42;i<tris.triangles.length;i+=21)surfaces.push([0,7,14].map(k=>tris.triangles.slice(i+k,i+k+3)));
+            for(let i=0;i<tris.materials.length;i+=12){
+                const m=tris.materials.slice(i,i+12);
+                for(let j=0;j<roundedGeometry.length;j+=18){
+                    if(roundedGeometry[j+4]+roundedGeometry[j+10]+roundedGeometry[j+16]<=0)continue;
+                    surfaces.push([0,6,12].map(k=>[0,1,2].map(a=>m[a]+roundedGeometry[j+k+a]*(m[3+a]-m[10])+roundedGeometry[j+k+3+a]*m[10])));
+                }
+            }
+            pieceGround=sonataPieceGrounding.createGround(surfaces,baseLevels.table);
+        }
+        buildMaterialShadow();
         $("labels").replaceChildren();
         $("register-readouts").replaceChildren();physicalElements=new Map();renameWords=[];
         for(const tag of registerTags){
@@ -896,8 +1308,34 @@
             op[field]=slot;ends[slot]=end(op);
         }
     }
+    function allocateRenameSlots(){
+        const ends=[];
+        const entries=ops.flatMap(op=>op.stages.flatMap((stage,index)=>stage.names.includes("Rn")?[{op,stage,next:op.stages[index+1]}]:[]));
+        // 同時に滞在する命令を別々に置く。退場の補間中も元の場所を再利用しない。
+        for(const {op,stage,next} of entries.sort((a,b)=>a.stage.start-b.stage.start||a.op.id-b.op.id)){
+            let slot=ends.findIndex(end=>end<=stage.start);
+            if(slot<0)slot=ends.length;
+            stage.displaySlot=slot;
+            ends[slot]=Math.min(op.end,next?next.start+stageTransition(next):stage.end);
+        }
+    }
+    function setVisualStyle(key) {
+        if(!Object.hasOwn(sonataStyles,key)||key===visualStyle||contextLost)return;
+        visualStyle=key;style=sonataStyles[key];C=style.palette;
+        document.documentElement.dataset.style=key;
+        document.querySelector('meta[name="color-scheme"]').content=style.matte?"light":"dark";
+        for(const el of document.querySelectorAll("[data-bound]")){
+            if(el.closest(".bound-bar,.bound-scene-key"))el.style.setProperty("--bound-color",style.bounds[el.dataset.bound]);
+        }
+        for(const button of document.querySelectorAll("[data-style-choice]"))button.setAttribute("aria-pressed",String(button.dataset.styleChoice===key));
+        $("bloom").disabled=style.matte;
+        $("bloom-value").textContent=style.matte?"Not used":`${Math.round(bloom*100)}%`;
+        // loadTrace は呼ばず、時計・選択・カメラ・演出設定を維持する。
+        boundDisplay.trace=null;buildWorld();drawTimeline();render();updateUI();
+    }
     function loadTrace(key) {
         trace=samples.find((s)=>s.key===key)||samples[0];
+        pieceTracks=new WeakMap();
         $("trace-select").value=trace.key;selectedID=null;
         ops=trace.ops.map((t,index)=>{
             const [id,rid,fetch,retired,flush,label,source,allocation,issue,completion,execution,flushCycle]=t;
@@ -912,6 +1350,7 @@
                 reads:trace.evidence?.registers?.origin==="gem5"?[...new Set((trace.evidence.registers.reads??[]).filter(r=>r.id===id).map(r=>r.cycle))].map(time=>({start:time,end:time+.7,sources:trace.evidence.registers.reads.filter(r=>r.id===id&&r.cycle===time).map(r=>({physical:r.physical,hex:r.hex}))})):source.filter(s=>s[0]==="Rr").map(s=>({start:s[2],end:s[3]})),
                 sourceRegisters:trace.evidence?.scheduling.ops.find(o=>o.id===id)?.sources??[]};
         });
+        allocateRenameSlots();
         commitGroups=new Map();
         for(const op of ops.filter(o=>!o.flush).sort((a,b)=>a.end-b.end||a.rid-b.rid||a.id-b.id)){
             const time=Math.floor(op.end),group=commitGroups.get(time)??[];
@@ -1009,6 +1448,8 @@
             const lane=executionLane(n,op.index%n.pipeCount),arrival=stageTransition(stage);
             const progress=smooth((t-stage.start-arrival)/Math.max(.001,stage.end-stage.start-arrival));
             return lane.inlet.map((v,i)=>mix(v,lane.outlet[i],progress));
+        } else if(n.names?.includes("Rn")) {
+            return renameInstructionPosition(stage.displaySlot??0);
         } else {
             z+=((op.index%Math.max(2,trace.fetchWidth))-(Math.max(2,trace.fetchWidth)-1)/2)*.38;
         }
@@ -1054,6 +1495,22 @@
         }
         return route(source,target,smooth(progress));
     }
+    function pieceRotation(op,t,position){
+        if(reducedMotion)return [0,0,0,1];
+        let track=pieceTracks.get(op);
+        if(!track){
+            const end=op.end+(op.flush?2.2:2)-.000001,times=[op.fetch,op.end,end];
+            for(const stage of op.stages){
+                times.push(stage.start,stage.end);
+                for(const fraction of [.48,.65,.7,.8,1])times.push(stage.start+stageTransition(stage)*fraction);
+            }
+            if(!op.flush)times.push(op.end+.45,op.end+.95);
+            // 命令の実際の表示経路を使い、視点・スタイル切替では姿勢のキャッシュを捨てない。
+            track=sonataPieceMotion.createRollingTrack(time=>positionAt(op,time),times.filter(time=>time>=op.fetch&&time<=end));
+            pieceTracks.set(op,track);
+        }
+        return track.rotationAt(t,position);
+    }
     function occupancy(t) {
         const active=ops.filter(o=>o.fetch<=t&&o.end>t);
         const issued=active.filter(o=>o.allocation!=null&&t>=o.allocation&&t<(o.issue??o.end));
@@ -1074,6 +1531,59 @@
             return {state:ready?"ready":"waiting",brightness:ready?.42+completion*.85:.22,size:ready?19+completion*10:14};
         }
         return {state:node?.startsWith("exec")?"executing":"flowing",brightness:node?.startsWith("exec")?1.3:.85,size:28};
+    }
+    function pieceTransfer(op,t){
+        if(t>=op.end){
+            if(op.flush)return null;
+            const age=t-op.end,slot=commitSlot(op.commitSlot);
+            if(age<.45)return {from:op.robSlot===undefined?location(op,op.stages.at(-1)??{node:"commit"},op.end-.001):robCell(op.robSlot,.19),to:slot.inlet,progress:smooth(age/.45),start:op.end,end:op.end+.45};
+            // COMMIT を出た後は、消えるまで出口の高さを保つ。
+            return age>=.95?{from:slot.outlet,to:slot.outlet,progress:1,start:op.end+.95,end:op.end+2}:null;
+        }
+        const stage=stageAt(op,t);if(!stage)return null;
+        const progress=(t-stage.start)/stageTransition(stage);if(progress>=1)return null;
+        const previous=op.stages[op.stages.indexOf(stage)-1],to=location(op,stage,t);
+        // 入場には最初のステージの高さを使う。途中の土台を経由させない。
+        return {from:previous?location(op,previous,previous.end-.001):to,to,progress:smooth(clamp(progress)),start:stage.start,end:stage.start+stageTransition(stage)};
+    }
+    function groundedPiece(op,t,path=positionAt(op,t)){
+        if(!path)return null;
+        let cache=piecePoseCache.get(op);if(!cache){cache=new Map();piecePoseCache.set(op,cache);}
+        const key=`${t}/${reducedMotion}`;if(cache.has(key))return cache.get(key);
+        // 場所や待機・実行・退場で大きさを変えず、同じ命令の形を保つ。
+        const radius=instructionRadius;
+        const rotation=pieceRotation(op,t,path);
+        const poseKey=JSON.stringify([path[0],path[2],radius,rotation]);
+        if(cache.poseKey!==poseKey){cache.poseKey=poseKey;cache.seat=pieceGround.seat(path,radius,rotation);}
+        let {position,contact}=cache.seat;
+        const transfer=pieceTransfer(op,t);
+        if(transfer){
+            const {from,to,progress}=transfer,bridgeKey=JSON.stringify([from,to,radius,rotation]);
+            if(cache.bridgeKey!==bridgeKey){
+                cache.bridgeKey=bridgeKey;
+                cache.bridgeSeats=[from,to].map(p=>pieceGround.seat(p,radius,rotation));
+            }
+            const profileKey=`${transfer.start}/${transfer.end}`;
+            if(cache.bridgeProfileKey!==profileKey){
+                cache.bridgeProfileKey=profileKey;cache.bridgeSurfaces=[];
+                cache.bridgeThreshold=Math.max(...[from,to].map(p=>pieceGround.seat(p,radius,[0,0,0,1],true).contact[1]))+.05;
+                for(let i=1;i<16;i++){
+                    const p=positionAt(op,mix(transfer.start,transfer.end,i/16));
+                    if(p)cache.bridgeSurfaces.push({progress:smooth(i/16),height:pieceGround.seat(p,radius,[0,0,0,1],true).contact[1]});
+                }
+            }
+            // 両端を直接渡る。途中にそれより高い部品があれば、手前から滑らかに越える。
+            const [a,b]=cache.bridgeSeats;let arch=0;
+            for(const sample of cache.bridgeSurfaces){
+                if(sample.height<=cache.bridgeThreshold)continue;
+                const u=sample.progress;
+                arch=Math.max(arch,(sample.height+radius-mix(a.position[1],b.position[1],u))/(4*u*(1-u)));
+            }
+            const height=mix(a.position[1],b.position[1],progress)+arch*4*progress*(1-progress);
+            if(height>position[1]+1e-9){position=[path[0],height,path[2]];contact=null;}
+        }
+        const piece={id:op.id,position,pathPosition:path,contact,transfer,radius,rotation};
+        if(cache.size>=16)cache.delete(cache.keys().next().value);cache.set(key,piece);return piece;
     }
     function instructionColor(op,t) {
         return C[op.kind];
@@ -1105,9 +1615,9 @@
             const targetRegion=boundStyles[dominant].region;
             topDownRegion=targetRegion?{category:dominant,bounds:[...targetRegion]}:null;
             for(const [key,weight] of Object.entries(weights)){
-                const style=boundStyles[key],color=boundRGB(key);
-                if(!style.region||weight<.001)continue;
-                const [x0,x1,z0,z1]=style.region,y=-.255,cut=.45;
+                const boundStyle=boundStyles[key],color=boundRGB(key);
+                if(!boundStyle.region||weight<.001)continue;
+                const [x0,x1,z0,z1]=boundStyle.region,y=-.255,cut=.45;
                 quad(x0,x1,z0,z1,y,color,(.035+dominantShare*.045)*weight);
                 const rim=[[x0+cut,y,z0],[x1-cut,y,z0],[x1,y,z0+cut],[x1,y,z1-cut],
                     [x1-cut,y,z1],[x0+cut,y,z1],[x0,y,z1-cut],[x0,y,z0+cut]];
@@ -1136,10 +1646,10 @@
     }
 
     function drawDynamic(dt) {
-        const lines=[],points=[];
+        const lines=[],points=[],pieces=[];
         drawTopDown(lines,dt);
         drawInstructionStream(lines,points);
-        currentStats=occupancy(cycle);visibleParticles=[];
+        currentStats=occupancy(cycle);visibleParticles=[];visiblePieces=[];
         activeBranches=branchRecoveries.filter(e=>cycle>=e.cycle&&cycle<e.until&&positionAt(e.op,cycle));
         matrixState=dependencyReplay.stateAt(cycle);registerState=registerReplay.stateAt(cycle);
         registerReads=registerState.available?ops.flatMap(op=>op.reads.filter(r=>cycle>=r.start&&cycle<Math.min(r.end,op.end)).map(r=>({op,id:op.id,sources:r.sources??op.sourceRegisters,progress:(cycle-r.start)/(r.end-r.start)}))):[];
@@ -1157,8 +1667,8 @@
                 for(let k=0;k<n.pipeCount;k++){
                     const lane=executionLane(n,k),busy=activeLanes.has(`${n.id}:${k}`);
                     line(lines,lane.inlet,lane.outlet,color,busy?.75:.025);
-                    point(points,lane.inlet,color,busy?14:4,busy?.9:.08);
-                    point(points,lane.outlet,color,busy?12:4,busy?.8:.06);
+                    point(points,lane.inlet,color,busy?(style.matte?7:14):4,busy?.9:.08);
+                    point(points,lane.outlet,color,busy?(style.matte?6:12):4,busy?.8:.06);
                     if(busy){
                         for(const side of [-1,1])line(lines,[lane.inlet[0],lane.inlet[1],lane.inlet[2]+side*lane.radius],
                             [lane.outlet[0],lane.outlet[1],lane.outlet[2]+side*lane.radius],color,.4);
@@ -1184,7 +1694,7 @@
         const fifo=robReplay.stateAt(cycle),occupied=new Map(fifo.entries.map(entry=>[entry.slot,entry.op]));
         for(let slot=0;slot<trace.structure.robCapacity;slot++){
             const p=robCell(slot),op=occupied.get(slot);
-            const col=op?instructionColor(op,cycle):C.blue;
+            const col=op?instructionColor(op,cycle):style.matte?style.structure.wire:C.blue;
             const ready=op?.completion!=null&&cycle>=op.completion;
             const completion=ready?1-smooth((cycle-op.completion)/.7):0;
             point(points,p,col,op?(ready?6+completion*4:4):2.5,op?(ready?.38+completion*.55:.16):.07);
@@ -1223,7 +1733,7 @@
             }
         }
         for(const op of ops){
-            const p=positionAt(op,cycle);if(!p)continue;
+            const path=positionAt(op,cycle);if(!path)continue;
             const squashed=op.flush&&cycle>=op.end,leaving=cycle>=op.end;
             const alpha=leaving?clamp(1-(cycle-op.end)/(op.flush?2.2:2)):1;
             const color=squashed?C.red:instructionColor(op,cycle);
@@ -1231,22 +1741,27 @@
             const recoveryBranch=activeBranches.find(e=>e.id===op.id);
             const light=instructionLight(op,cycle);
             if(recoveryBranch){light.brightness=Math.max(light.brightness,1.1);light.size=Math.max(light.size,32);}
-            const overMatrix=crossesDependencyGrid(p)||crossesMapWords(p);
+            const piece=style.matte?groundedPiece(op,cycle,path):null,p=piece?.position??path;
+            const overMatrix=crossesDependencyGrid(path)||crossesMapWords(path);
             if(trails){
                 let previous=p;
-                for(let k=1;k<=15;k++){
-                    const old=positionAt(op,cycle-k*.045);if(!old)break;
+                const count=style.matte?5:15;
+                for(let k=1;k<=count;k++){
+                    const old=style.matte?groundedPiece(op,cycle-k*.045)?.position:positionAt(op,cycle-k*.045);if(!old)break;
                     const fade=(1-k/16)*alpha*light.brightness/1.2;
                     if(!crossesDependencyGrid(previous,old)&&!crossesMapWords(previous,old)&&Math.hypot(...old.map((v,i)=>v-previous[i]))>.003){
                         const trailColor=squashed?C.red:instructionColor(op,cycle-k*.045);
                         line(lines,previous,old,trailColor,fade*.88);
-                        if(k%2===0)point(points,old,trailColor,Math.max(3,15-k*.7),fade*.5);
+                        if(!style.matte&&k%2===0)point(points,old,trailColor,Math.max(3,15-k*.7),fade*.5);
                     }
                     previous=old;
                 }
             }
-            point(points,p,color,overMatrix?(selected?7:4):selected?43:squashed?31:light.size,alpha*(overMatrix?.28:selected?1.6:light.brightness));
-            if(!leaving)visibleParticles.push({op,position:p,screen:project(p),state:light.state,brightness:light.brightness,color});
+            if(style.matte){
+                pieces.push(...p,piece.radius,...color,alpha,...piece.rotation);
+                visiblePieces.push(piece);
+            }else point(points,p,color,overMatrix?(selected?7:4):selected?43:squashed?31:light.size,alpha*(overMatrix?.28:selected?1.6:light.brightness));
+            if(!leaving)visibleParticles.push({op,position:p,pathPosition:path,screen:project(p),state:light.state,brightness:light.brightness,color});
             if(recoveryBranch){
                 ring(lines,p[0],p[1]+.015,p[2],.26,C.branch,.85,0,TAU,36);
                 line(lines,p,[p[0],p[1]+.65,p[2]],C.branch,.65);
@@ -1270,14 +1785,35 @@
                 point(points,[origin.x+Math.cos(a)*dist,.3+Math.sin(hash(k)*Math.PI)*age*2,origin.z+Math.sin(a)*dist],C.red,5+hash(k)*8,fade*.8);
             }
         }
-        upload(movingLines,lines);upload(particles,points);
+        upload(movingLines,lines);upload(particles,points);upload(instructionPieces,pieces);
         return shock;
     }
 
     function drawBuffer(b,mode,p) {
+        if(!b.count)return;
         gl.useProgram(p.p);gl.uniformMatrix4fv(p.u("uMatrix"),false,viewProjection);
-        if(p===pointProgram)gl.uniform1f(p.u("uScale"),renderHeight*.042);
-        gl.bindVertexArray(b.vao);gl.drawArrays(mode,0,b.count);
+        if(p===materialProgram||p===pieceReceiverProgram){
+            gl.uniformMatrix4fv(p.u("uLightMatrix"),false,lightProjection);
+            gl.activeTexture(gl.TEXTURE4);gl.bindTexture(gl.TEXTURE_2D,pieceShadow.texture);gl.uniform1i(p.u("uPieceDepth"),4);
+            gl.activeTexture(gl.TEXTURE5);gl.bindTexture(gl.TEXTURE_2D,pieceShadow.coverage);gl.uniform1i(p.u("uPieceCoverage"),5);
+            gl.uniform1f(p.u("uPieceStrength"),style.surface.pieceShadow*(1-crystalTransmission*.5));
+        }
+        if(p===materialProgram||p===pieceProgram){
+            gl.uniform3fv(p.u("uEye"),eye);gl.uniform3fv(p.u("uLight"),style.surface.light);
+            gl.uniform1f(p.u("uRoughness"),style.surface.roughness);gl.uniform1f(p.u("uGrain"),style.surface.grain);
+            gl.uniformMatrix4fv(p.u("uLightMatrix"),false,lightProjection);
+            gl.activeTexture(gl.TEXTURE2);gl.bindTexture(gl.TEXTURE_2D,materialShadow.texture);
+            gl.uniform1i(p.u("uShadow"),2);gl.uniform1f(p.u("uShadowTexel"),1/materialShadow.w);
+            gl.activeTexture(gl.TEXTURE3);gl.bindTexture(gl.TEXTURE_2D,surfaceTexture);gl.uniform1i(p.u("uSurfaceTexture"),3);
+        }
+        if(p===pieceProgram){
+            gl.activeTexture(gl.TEXTURE0);gl.bindTexture(gl.TEXTURE_2D,bloomA.texture);gl.uniform1i(p.u("uBackground"),0);
+            gl.uniform1f(p.u("uScale"),renderHeight/(2*Math.tan(.33)));
+        }
+        if(p===pointProgram){gl.uniform1f(p.u("uScale"),renderHeight*.042);gl.uniform1i(p.u("uMatte"),style.matte?1:0);}
+        gl.bindVertexArray(b.vao);
+        if(b.instances)gl.drawArraysInstanced(mode,0,b.vertices,b.count);
+        else gl.drawArrays(mode,0,b.count);
     }
     function blur(source,destination,dx,dy,extract) {
         gl.bindFramebuffer(gl.FRAMEBUFFER,destination.fbo);gl.viewport(0,0,destination.w,destination.h);
@@ -1297,31 +1833,50 @@
         // 縦画面でもプロセッサ全体が収まるようにする。
         const distance=radius*Math.max(1,1.48/(cssWidth/cssHeight));
         eye=[Math.sin(a)*Math.cos(elevation)*distance,Math.sin(elevation)*distance,Math.cos(a)*Math.cos(elevation)*distance].map((value,i)=>value+focus[i]);
-        viewProjection=multiply(perspective(cssWidth/cssHeight),lookAt(eye,focus));
+        viewProjection=multiply(perspective(cssWidth/cssHeight,distance),lookAt(eye,focus));
         const shock=drawDynamic(dt);
+        if(style.matte)updatePieceShadow();
         gl.bindFramebuffer(gl.FRAMEBUFFER,(sceneMultisample??sceneTarget).fbo);gl.viewport(0,0,renderWidth,renderHeight);
-        gl.depthMask(true);gl.clearColor(.012,.022,.035,1);gl.clear(gl.COLOR_BUFFER_BIT|gl.DEPTH_BUFFER_BIT);
-        gl.enable(gl.DEPTH_TEST);gl.depthMask(true);gl.disable(gl.BLEND);
-        drawBuffer(staticTriangles,gl.TRIANGLES,solidProgram);
-        gl.depthMask(false);gl.enable(gl.BLEND);gl.blendFunc(gl.SRC_ALPHA,gl.ONE);
-        gl.depthFunc(gl.LEQUAL);drawBuffer(analysisSurface,gl.TRIANGLES,solidProgram);
-        drawBuffer(registerSurface,gl.TRIANGLES,solidProgram);
+        gl.depthMask(true);gl.clearColor(...style.background,1);gl.clear(gl.COLOR_BUFFER_BIT|gl.DEPTH_BUFFER_BIT);
+        // 影の更新・再利用のどちらから来ても、不透明面の深度条件を同じにする。
+        gl.enable(gl.DEPTH_TEST);gl.depthMask(true);gl.depthFunc(gl.LESS);gl.disable(gl.BLEND);
+        const receiver=style.matte?pieceReceiverProgram:solidProgram;
+        drawBuffer(staticTriangles,gl.TRIANGLES,receiver);
+        if(style.matte)drawBuffer(staticMaterials,gl.TRIANGLES,materialProgram);
+        gl.depthMask(false);gl.enable(gl.BLEND);gl.blendFunc(gl.SRC_ALPHA,style.matte?gl.ONE_MINUS_SRC_ALPHA:gl.ONE);
+        gl.depthFunc(gl.LEQUAL);
+        if(style.matte)drawBuffer(staticShadows,gl.TRIANGLES,solidProgram);
+        drawBuffer(analysisSurface,gl.TRIANGLES,receiver);
+        drawBuffer(registerSurface,gl.TRIANGLES,receiver);
         drawBuffer(staticLines,gl.LINES,solidProgram);
         drawBuffer(staticStars,gl.POINTS,pointProgram);
         drawBuffer(movingLines,gl.LINES,solidProgram);
         drawBuffer(particles,gl.POINTS,pointProgram);
+        if(style.matte&&instructionPieces.count){
+            // 玉を描く前の背景を半解像度で保存する。MSAA の解決と縮小は別々に行う。
+            if(sceneMultisample){
+                gl.bindFramebuffer(gl.READ_FRAMEBUFFER,sceneMultisample.fbo);gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER,sceneTarget.fbo);
+                gl.blitFramebuffer(0,0,renderWidth,renderHeight,0,0,renderWidth,renderHeight,gl.COLOR_BUFFER_BIT,gl.NEAREST);
+            }
+            gl.bindFramebuffer(gl.READ_FRAMEBUFFER,sceneTarget.fbo);gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER,bloomA.fbo);
+            gl.blitFramebuffer(0,0,renderWidth,renderHeight,0,0,bloomA.w,bloomA.h,gl.COLOR_BUFFER_BIT,gl.LINEAR);
+            gl.bindFramebuffer(gl.FRAMEBUFFER,(sceneMultisample??sceneTarget).fbo);
+            gl.depthMask(true);drawBuffer(instructionPieces,gl.TRIANGLES,pieceProgram);gl.depthMask(false);
+        }
         gl.disable(gl.DEPTH_TEST);gl.disable(gl.BLEND);
         if(sceneMultisample){
             gl.bindFramebuffer(gl.READ_FRAMEBUFFER,sceneMultisample.fbo);gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER,sceneTarget.fbo);
             gl.blitFramebuffer(0,0,renderWidth,renderHeight,0,0,renderWidth,renderHeight,gl.COLOR_BUFFER_BIT|gl.DEPTH_BUFFER_BIT,gl.NEAREST);
         }
-        blur(sceneTarget,bloomA,1/renderWidth,0,1);
-        blur(bloomA,bloomB,0,1/bloomA.h,0);
-        blur(bloomB,bloomA,2/bloomA.w,0,0);
-        blur(bloomA,bloomB,0,2/bloomA.h,0);
+        if(!style.matte){
+            blur(sceneTarget,bloomA,1/renderWidth,0,1);
+            blur(bloomA,bloomB,0,1/bloomA.h,0);
+            blur(bloomB,bloomA,2/bloomA.w,0,0);
+            blur(bloomA,bloomB,0,2/bloomA.h,0);
+        }
         // 文字はシーンの奥行きを使いつつブルームの入力から外し、輪郭を鮮明に保つ。
         gl.bindFramebuffer(gl.FRAMEBUFFER,sceneTarget.fbo);gl.viewport(0,0,renderWidth,renderHeight);
-        gl.enable(gl.DEPTH_TEST);gl.enable(gl.BLEND);gl.blendFunc(gl.SRC_ALPHA,gl.ONE);
+        gl.enable(gl.DEPTH_TEST);gl.enable(gl.BLEND);gl.blendFunc(gl.SRC_ALPHA,style.matte?gl.ONE_MINUS_SRC_ALPHA:gl.ONE);
         gl.useProgram(typeProgram.p);gl.activeTexture(gl.TEXTURE0);gl.bindTexture(gl.TEXTURE_2D,glyphTexture);gl.uniform1i(typeProgram.u("uGlyphs"),0);
         drawBuffer(feedType,gl.TRIANGLES,typeProgram);
         // 履歴から剥がれた文字は、ほどけている間はチップの手前に表示する。
@@ -1331,12 +1886,13 @@
         gl.useProgram(compositeProgram.p);
         gl.activeTexture(gl.TEXTURE0);gl.bindTexture(gl.TEXTURE_2D,sceneTarget.texture);gl.uniform1i(compositeProgram.u("uScene"),0);
         gl.activeTexture(gl.TEXTURE1);gl.bindTexture(gl.TEXTURE_2D,bloomB.texture);gl.uniform1i(compositeProgram.u("uBloom"),1);
+        gl.uniform1i(compositeProgram.u("uMatte"),style.matte?1:0);
         gl.uniform1f(compositeProgram.u("uBloomAmount"),bloom);gl.uniform1f(compositeProgram.u("uTime"),artTime);
         gl.uniform1f(compositeProgram.u("uShock"),reducedMotion?0:shock);gl.uniform2f(compositeProgram.u("uResolution"),renderWidth,renderHeight);
         gl.uniform1f(compositeProgram.u("uPixelRatio"),pixelRatio);
         gl.bindVertexArray(null);gl.drawArrays(gl.TRIANGLES,0,3);
         for(const n of nodes.values()){
-            const side=n.id.startsWith("exec"),below=n.id==="memory-wait";
+            const side=n.id.startsWith("exec"),below=n.id==="memory-wait"||n.id==="issue"&&n.d>6;
             const p=project(below?[n.x,n.h,n.z+n.d*.7]:side?[n.x+n.w/2+.5,n.h+.6,n.z]:[n.x,n.h+.7,n.z-n.d*.52]);
             n.element.style.transform=`translate(${p[0].toFixed(1)}px,${p[1].toFixed(1)}px) translate(${below?"-50%,8px":side?"0,-50%":"-50%,-100%"})`;
             n.element.classList.toggle("below-label",below);
@@ -1366,7 +1922,7 @@
         const marker=$("recovery-branch"),branch=activeBranches.at(-1);
         marker.hidden=!branch;
         if(branch){
-            const p=project(positionAt(branch.op,cycle)),retiring=cycle>=branch.op.end;
+            const p=project(style.matte?groundedPiece(branch.op,cycle).position:positionAt(branch.op,cycle)),retiring=cycle>=branch.op.end;
             const location=retiring?"COMMIT":stageAt(branch.op,cycle)?.node==="rob"?"ROB":nodes.get(stageAt(branch.op,cycle)?.node)?.label??"IN FLIGHT";
             marker.firstElementChild.textContent=`${branch.inferred?"RECOVERY BRANCH ≈":"MISPREDICT"} #${branch.id}`;
             marker.lastElementChild.textContent=`${location} · ${retiring?"COMMITTED":"PRESERVED"}`;
@@ -1414,11 +1970,11 @@
         for(let i=0;i<activity.length;i++){
             const a=activity[i],x=i*bar;
             const ah=a.active/peak*(h-6),rh=a.retired/retirePeak*(h-10);
-            ctx.fillStyle="#1d3946";ctx.fillRect(x,h-ah,Math.max(1,bar-.7),ah);
-            ctx.fillStyle="#59bba9";ctx.globalAlpha=.55+a.retired/retirePeak*.25;
+            ctx.fillStyle=style.timeline[0];ctx.fillRect(x,h-ah,Math.max(1,bar-.7),ah);
+            ctx.fillStyle=style.timeline[1];ctx.globalAlpha=.55+a.retired/retirePeak*.25;
             ctx.fillRect(x,h-rh,Math.max(1,bar-.7),rh);ctx.globalAlpha=1;
         }
-        ctx.fillStyle="#31525e";ctx.fillRect(0,h-1,w,1);
+        ctx.fillStyle=style.timeline[2];ctx.fillRect(0,h-1,w,1);
     }
     function updateTopDownUI(animateLabels) {
         const topDown=sceneTopDown;
@@ -1465,7 +2021,7 @@
                 const row=document.createElement("div"),label=document.createElement("strong"),detail=document.createElement("small");
                 label.textContent={"branch-mispredict":"BRANCH MISPREDICTION","dcache-miss":"D-CACHE MISS","icache-miss":"I-CACHE MISS"}[e.kind];
                 detail.textContent=`#${e.id} · cycle ${e.cycle.toLocaleString()} · recorded`;
-                row.style.setProperty("--event-color",e.kind==="branch-mispredict"?"#ff6277":"#ffbb65");row.append(label,detail);return row;
+                row.style.setProperty("--event-color",e.kind==="branch-mispredict"?style.bounds.badSpeculation:style.bounds.backend);row.append(label,detail);return row;
             }));
         }
         const feedLabel=$("instruction-stream-label"),feedTitle=feedLabel.querySelector("span"),feedDetail=feedLabel.querySelector("small");
@@ -1494,7 +2050,7 @@
             const stage=stageAt(op,cycle),stageIndex=op.stages.indexOf(stage);
             $("op-id").textContent=`#${op.id}`;$("op-code").textContent=op.label;$("op-code").title=op.label;
             $("op-stage").textContent=cycle<op.fetch?"PENDING":cycle>=op.end?(op.flush?"SQUASHED":"COMMITTED"):nodes.get(stage?.node)?.label||"IN FLIGHT";
-            $("op-state").textContent=selected?"Pinned instruction":"Click a particle to pin";
+            $("op-state").textContent=selected?"Pinned instruction":"Click an instruction to pin";
             $("spotlight").style.borderLeftColor=rgb(op.flush&&cycle>=op.end?C.red:instructionColor(op,cycle));
             $("op-progress").replaceChildren(...op.stages.map((s,i)=>{
                 const el=document.createElement("i");el.className=i===stageIndex?"current":cycle>=s.end?"done":"";el.title=`${s.names.join(" / ")}: ${s.start}–${s.end}`;return el;
@@ -1545,13 +2101,14 @@
             render(dt);
             if(now>=nextUI){updateUI();nextUI=now+80;}
             frameCount++;
-            if(now-fpsTime>=1200){fps=Math.round(frameCount*1000/(now-fpsTime));frameCount=0;fpsTime=now;$("renderer-status").textContent=`WebGL 2 · ${fps} fps · ${msaaSamples?`${msaaSamples}× MSAA + `:""}smooth light`;
+            if(now-fpsTime>=1200){fps=Math.round(frameCount*1000/(now-fpsTime));frameCount=0;fpsTime=now;$("renderer-status").textContent=`WebGL 2 · ${fps} fps · ${msaaSamples?`${msaaSamples}× MSAA + `:""}${style.matte?"matte surfaces":"smooth light"}`;
             }
         }
         animationID=requestAnimationFrame(animate);
     }
 
     for(const sample of samples){const option=document.createElement("option");option.value=sample.key;option.textContent=sample.label;$("trace-select").append(option);}
+    document.querySelectorAll("[data-style-choice]").forEach(button=>button.addEventListener("click",()=>setVisualStyle(button.dataset.styleChoice)));
     $("trace-select").addEventListener("change",()=>{loadTrace($("trace-select").value);render();updateUI();});
     $("play").addEventListener("click",()=>setPlaying(!playing));
     $("previous").addEventListener("click",()=>step(-1));$("next").addEventListener("click",()=>step(1));
@@ -1662,6 +2219,7 @@
     canvas.addEventListener("dblclick",()=>setCamera("orbit"));
     canvas.addEventListener("webglcontextlost",event=>{
         event.preventDefault();contextLost=true;cancelAnimationFrame(animationID);$("fallback").hidden=false;
+        document.querySelectorAll("[data-style-choice]").forEach(button=>button.disabled=true);
         $("fallback").firstElementChild.textContent="Graphics context interrupted.";
         $("fallback").querySelector("p").textContent="Restoring the light field…";
         $("renderer-status").textContent="Graphics context lost";
@@ -1673,18 +2231,25 @@
     loadTrace(samples.find(s=>s.key==="rename-rush")?.key??samples[0].key);toggleAuto(autoOrbit);setPlaying(playing);render();updateUI();
     // 読み取り専用の診断値と決定的なシークにより、表示の確認を再現可能にする。
     globalThis.sonata={
-        get camera(){return {mode:cameraMode,radius,targetRadius,azimuth,elevation,focus:[...focus],targetFocus:[...targetFocus],pointers:pointers.size,compact:compactMedia.matches};},
+        get visualStyle(){return visualStyle;},get selectedID(){return selectedID;},
+        get camera(){return {mode:cameraMode,radius,targetRadius,azimuth,targetAzimuth,elevation,targetElevation,focus:[...focus],targetFocus:[...targetFocus],pointers:pointers.size,compact:compactMedia.matches};},
         get trace(){return trace;},get cycle(){return cycle;},get playing(){return playing;},get ops(){return ops;},get flushEvents(){return [...flushEvents];},
         get stats(){return {active:currentStats.active.length,issue:currentStats.issued.length,rob:currentStats.rob.length,ipc:currentStats.ipc};},
         get topDown(){return sonataReplay.sampleTopDown(trace.topDown,cycle);},
         get topDownVisual(){return {region:topDownRegion?{...topDownRegion,bounds:[...topDownRegion.bounds]}:null,rail:topDownRail.map(s=>({...s})),
             shares:{...boundDisplay.shares},weights:{...boundDisplay.weights},color:[...boundDisplay.color]};},
-        get particles(){return visibleParticles.map(p=>({id:p.op.id,screen:p.screen,position:p.position,state:p.state,brightness:p.brightness,color:[...p.color]}));},
+        get particles(){return visibleParticles.map(p=>({id:p.op.id,screen:p.screen,position:p.position,pathPosition:[...p.pathPosition],state:p.state,brightness:p.brightness,color:[...p.color]}));},
+        get pieces(){return visiblePieces.map(p=>({...p,position:[...p.position],pathPosition:[...p.pathPosition],contact:p.contact?[...p.contact]:null,
+            transfer:p.transfer?{...p.transfer,from:[...p.transfer.from],to:[...p.transfer.to]}:null,rotation:[...p.rotation]}));},
+        get instructionLayout(){return {radius:instructionRadius,scheduler:Array.from({length:trace.structure.queueCapacity},(_,row)=>matrixPosition(row)),
+            rob:Array.from({length:trace.structure.robCapacity},(_,slot)=>robCell(slot,.19)),
+            rename:Array.from({length:renameNode()?.instructionSlots??0},(_,slot)=>renameInstructionPosition(slot))};},
         get executionPipes(){return [...nodes.values()].filter(n=>n.pipeCount).flatMap(n=>Array.from({length:n.pipeCount},(_,index)=>({node:n.id,index,...executionLane(n,index)})));},
         get connections(){return connections.map(c=>({from:c.from,to:c.to,peak:c.peak,lineCount:c.lanes.length,
             lanes:c.lanes.map(l=>({source:[...l.source],target:[...l.target]}))}));},
         get playbackStep(){return {...lastPlayback};},
         get dependencyMatrix(){return dependencyReplay.stateAt(cycle);},
+        get schedulerGrid(){const grid=nodes.get("issue").grid;return Object.fromEntries(Object.entries(grid).map(([key,segments])=>[key,segments.map(segment=>segment.map(p=>[...p]))]));},
         get issuePaths(){return matrixState.issues.map(issuePath);},
         get registers(){return registerReplay.stateAt(cycle);},
         get commitSlots(){const group=commitGroups.get(Math.floor(cycle))??[];return Array.from({length:trace.retireWidth},(_,index)=>{const op=group[index];return {index,...commitSlot(index),id:op&&cycle>=op.end?op.id:null};});},
@@ -1694,14 +2259,14 @@
         get renameMapWords(){return renameWords;},
         get registerLayout(){return registerState.available?{renameNode:renameNode().id,renamePosition:[renameNode().x,renameNode().z],
             mapWords:renameWords.length,physicalNode:"register-read",cells:registerTags.map(id=>({id,position:physicalTagPosition(id)}))}:null;},
-        get recoveryBranches(){return activeBranches.map(e=>({id:e.id,cycle:e.cycle,until:e.until,inferred:e.inferred,position:positionAt(e.op,cycle)}));},
+        get recoveryBranches(){return activeBranches.map(e=>({id:e.id,cycle:e.cycle,until:e.until,inferred:e.inferred,pathPosition:positionAt(e.op,cycle),position:style.matte?groundedPiece(e.op,cycle)?.position:positionAt(e.op,cycle)}));},
         get instructionFeed(){return feedVisible.map(row=>({...row,position:[...row.position]}));},
         get codeFragments(){return codeFragments.map(g=>({...g,origin:[...g.origin],position:[...g.position],screen:project(g.position),originScreen:project(g.origin)}));},
         get codeRewind(){return {...feedState,ids:[...feedState.ids],visible:instructionStream};},
         get rob(){const s=robReplay.stateAt(cycle);return {head:s.head,tail:s.tail,capacity:robReplay.capacity,entries:s.entries.map(e=>({id:e.op.id,slot:e.slot,ready:e.op.completion!=null&&cycle>=e.op.completion}))};},
         get memoryReturns(){return memoryEvents.map(e=>({id:e.id,time:e.time}));},
         get notifications(){return activeNotifications.map(e=>({id:e.id,time:e.time,phase:cycle-e.time<wakeFlightCycles?"flight":"arrived",target:wakeBusEntry(),column:dependencyReplay.columnAt(e.id,cycle)}));},
-        get renderer(){return {width:renderWidth,height:renderHeight,pixelRatio,msaaSamples,fps,contextLost,error:gl.getError()};},
+        get renderer(){return {width:renderWidth,height:renderHeight,pixelRatio,msaaSamples,fps,contextLost,style:visualStyle,instructionShape:style.matte?"cut-crystal":"glow",pieceVertices:instructionPieces.count*instructionPieces.vertices,pieceInstances:instructionPieces.count,materialInstances:staticMaterials.count,pieceShadows:{size:pieceShadow?.w??0,instances:style.matte?instructionPieces.count:0,updates:pieceShadowUpdates},error:gl.getError()};},
         setCycle,setPlaying,loadTrace,setCamera,
         captureAt(t){setPlaying(false);setCycle(t);return {cycle,active:currentStats.active.length};}
     };

@@ -21,6 +21,14 @@ module.exports=async function reviewBrowser(window,entry,screenshots){
         assert.fail(`${message}: ${JSON.stringify(state)}`);
     };
     const ready=()=>waitFor("!!globalThis.sonata&&sonata.renderer.error===0&&document.getElementById('fallback').hidden","Renderer did not initialize");
+    const readFrame=()=>js(`(()=>{
+        sonata.captureAt(sonata.trace.demo.screenshotCycle);
+        const gl=document.getElementById('scene').getContext('webgl2');
+        const pixels=new Uint8Array(gl.drawingBufferWidth*gl.drawingBufferHeight*4);
+        gl.readPixels(0,0,gl.drawingBufferWidth,gl.drawingBufferHeight,gl.RGBA,gl.UNSIGNED_BYTE,pixels);
+        let colored=0;for(let i=0;i<pixels.length;i+=4)if(Math.max(...pixels.subarray(i,i+3))-Math.min(...pixels.subarray(i,i+3))>40)colored++;
+        return {colored,error:gl.getError(),particles:sonata.particles.length};
+    })()`);
     const press=async(keyCode,modifiers=[])=>{
         // main process からの入力配送を keyup と2フレームで確認し、否定条件も送信後に判定する。
         await js("globalThis.reviewKeyReleased=false;document.addEventListener('keyup',()=>globalThis.reviewKeyReleased=true,{once:true,capture:true})");
@@ -125,33 +133,67 @@ module.exports=async function reviewBrowser(window,entry,screenshots){
     }
     await window.loadFile(entry);await ready();
 
-    // 実際に context を失わせ、案内・停止・復旧後の描画と再生を検査する。
-    const available=await js(`(()=>{
-        globalThis.reviewContext=document.getElementById('scene').getContext('webgl2').getExtension('WEBGL_lose_context');
-        if(!reviewContext)return false;
-        reviewContext.loseContext();return true;
-    })()`);
-    assert.equal(available,true,"The context-loss extension is unavailable");
-    await waitFor("document.getElementById('renderer-status').textContent==='Graphics context lost'","Context loss was not reported");
-    assert.equal(await js("document.getElementById('fallback').hidden"),false);
-    const stopped=await js("sonata.cycle");await settle();
-    assert.equal(await js("sonata.cycle"),stopped,"The playback clock advanced while graphics were lost");
-    await js("reviewContext.restoreContext()");
-    await waitFor("!!globalThis.sonata&&document.getElementById('fallback').hidden&&!document.getElementById('scene').getContext('webgl2').isContextLost()","Restored graphics did not recover the app");
-    await ready();
-    const resumed=await js("sonata.setPlaying(true);sonata.cycle");
-    await waitFor(`sonata.cycle>${resumed}`,"Playback did not resume after graphics recovery");
-    const frame=await js(`(()=>{
-        sonata.captureAt(sonata.trace.demo.screenshotCycle);
-        const gl=document.getElementById('scene').getContext('webgl2');
-        const pixels=new Uint8Array(gl.drawingBufferWidth*gl.drawingBufferHeight*4);
-        gl.readPixels(0,0,gl.drawingBufferWidth,gl.drawingBufferHeight,gl.RGBA,gl.UNSIGNED_BYTE,pixels);
-        let colored=0;for(let i=0;i<pixels.length;i+=4)if(Math.max(...pixels.subarray(i,i+3))-Math.min(...pixels.subarray(i,i+3))>40)colored++;
-        return {colored,error:gl.getError(),particles:sonata.particles.length};
-    })()`);
-    assert.equal(frame.error,0,"Restored graphics returned a WebGL error");
-    assert.ok(frame.colored>1000&&frame.particles>0,`Restored graphics left an empty frame: ${JSON.stringify(frame)}`);
+    // 両スタイルで context を失わせ、Blocks の材質テクスチャ・影も復旧後に再生成できることを確認する。
+    const contextRecoveries=[];
+    for(const visualStyle of ["neon","blocks"]){
+        await js(`document.getElementById('style-'+${JSON.stringify(visualStyle)}).click()`);
+        const available=await js(`(()=>{
+            globalThis.reviewContext=document.getElementById('scene').getContext('webgl2').getExtension('WEBGL_lose_context');
+            if(!reviewContext)return false;
+            reviewContext.loseContext();return true;
+        })()`);
+        assert.equal(available,true,"The context-loss extension is unavailable");
+        await waitFor("document.getElementById('renderer-status').textContent==='Graphics context lost'","Context loss was not reported");
+        assert.equal(await js("document.getElementById('fallback').hidden"),false);
+        const stopped=await js("sonata.cycle");await settle();
+        assert.equal(await js("sonata.cycle"),stopped,"The playback clock advanced while graphics were lost");
+        await js("reviewContext.restoreContext()");
+        await waitFor("!!globalThis.sonata&&document.getElementById('fallback').hidden&&!document.getElementById('scene').getContext('webgl2').isContextLost()","Restored graphics did not recover the app");
+        await ready();
+        assert.equal(await js("sonata.visualStyle"),"neon","Context recovery changed the default style");
+        await js(`document.getElementById('style-'+${JSON.stringify(visualStyle)}).click()`);
+        const resumed=await js("sonata.setPlaying(true);sonata.cycle");
+        await waitFor(`sonata.cycle>${resumed}`,"Playback did not resume after graphics recovery");
+        const frame=await readFrame();
+        assert.equal(frame.error,0,"Restored graphics returned a WebGL error");
+        assert.ok(frame.colored>1000&&frame.particles>0,`Restored graphics left an empty frame: ${JSON.stringify(frame)}`);
+        if(visualStyle==="blocks"){
+            await js("sonata.loadTrace('rename-rush');sonata.captureAt(459.4)");
+            frame.pieceShadows=await require("./check-piece-shadows.cjs")(window);
+        }
+        contextRecoveries.push({style:visualStyle,...frame});
+    }
+    // MSAA を使えない環境でも、Cut crystal の背景コピーが描画先を読み書きする循環を作らない。
+    let withoutMSAA;
+    debuggerAPI.attach("1.3");injected=null;
+    try{
+        await debuggerAPI.sendCommand("Page.enable");
+        injected=await debuggerAPI.sendCommand("Page.addScriptToEvaluateOnNewDocument",{source:`
+            const original=WebGL2RenderingContext.prototype.getInternalformatParameter;
+            WebGL2RenderingContext.prototype.getInternalformatParameter=function(target,format,pname){
+                return pname===this.SAMPLES?new Int32Array(0):Reflect.apply(original,this,[target,format,pname]);
+            };`});
+        await window.loadFile(entry);await ready();
+        await js(`sonata.setPlaying(false);
+            if(document.getElementById('auto-camera').getAttribute('aria-pressed')==='true')document.getElementById('auto-camera').click();
+            document.getElementById('style-blocks').click();
+            for(let i=0;i<4;i++)document.getElementById('zoom-in').click();`);
+        await waitFor("Math.abs(sonata.camera.radius-sonata.camera.targetRadius)<.01","Crystal close-up without MSAA did not settle");
+        withoutMSAA={...await readFrame(),...await js("({samples:sonata.renderer.msaaSamples,pieces:sonata.renderer.pieceInstances})")};
+        assert.equal(withoutMSAA.samples,0,"MSAA fallback was not exercised");
+        assert.equal(withoutMSAA.error,0,"Crystal background copy without MSAA returned a WebGL error");
+        assert.ok(withoutMSAA.colored>1000&&withoutMSAA.particles>0&&withoutMSAA.pieces>0,"Crystal fallback left an empty frame");
+        assert.equal(await js("sonata.renderer.instructionShape"),"cut-crystal","MSAA fallback changed the fixed instruction shape");
+        await js("sonata.loadTrace('rename-rush');sonata.captureAt(459.4)");
+        withoutMSAA.pieceShadows=await require("./check-piece-shadows.cjs")(window);
+        await settle();
+        if(screenshots)fs.writeFileSync(path.join(screenshots,"sonata-style-blocks-no-msaa.png"),(await window.webContents.capturePage()).toPNG());
+    }finally{
+        try{if(injected)await debuggerAPI.sendCommand("Page.removeScriptToEvaluateOnNewDocument",{identifier:injected.identifier});}
+        finally{debuggerAPI.detach();}
+    }
+    await window.loadFile(entry);await ready();
     return {keyboard:{stepping:true,bounds:true,playback:true,cinema:true,focusedControls:true,modalFocus:true},
         camera:{rightDrag:true,leftOrbit:true,buttons:true,wheel:true,fit:true,minRadius:3,maxRadius:62},
-        unavailable:{fallback:true,licenses:true},contextRecovery:{clockPaused:true,playbackResumed:true,...frame}};
+        unavailable:{fallback:true,licenses:true},contextRecovery:{clockPaused:true,playbackResumed:true,styles:contextRecoveries},withoutMSAA};
 };

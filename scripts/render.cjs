@@ -41,6 +41,12 @@ app.whenReady().then(async () => {
         assert.fail(message);
     };
     await window.loadFile(entry);
+    if(process.argv.includes("--styles")){
+        const styles=await require("./check-styles.cjs")(window,entry,screenshots);
+        assert.deepEqual(errors,[]);assert.deepEqual(unexpectedRequests,[]);
+        console.log(JSON.stringify({styles,errors,externalRequests:unexpectedRequests},null,2));
+        fs.rmSync(isolated,{recursive:true,force:true});app.quit();return;
+    }
     if(process.argv.includes("--browser")){
         const browser=await require("./check-browser.cjs")(window,entry,screenshots);
         assert.deepEqual(errors,[]);assert.deepEqual(unexpectedRequests,[]);
@@ -696,10 +702,11 @@ app.whenReady().then(async () => {
     assert.equal(await js("sonata.playing&&document.getElementById('motion-effects').getAttribute('aria-pressed')==='true'&&document.getElementById('motion-notice').hidden"),true,"Reload did not restore the default animation and playback");
     window.webContents.debugger.detach();
     const browser=await require("./check-browser.cjs")(window,entry,screenshots);
+    const styles=await require("./check-styles.cjs")(window,entry,screenshots);
     assert.deepEqual(errors, [], `Browser errors: ${errors.join("; ")}`);
     assert.deepEqual(unexpectedRequests,[],"The copied HTML tried to fetch another resource");
     console.log(JSON.stringify({samples: results, controls, rewind, unravel,branchReview,matrixReview,registerReview,registerReadReview,recovery:{frames:recoveryFrames.length,rates:recoveryFrames.map(f=>({age:f.age,rate:f.rate}))},notification, rsd, bounds,
-        boundMotion:{frames:boundMotion.samples.length,intermediate:intermediate.length,reducedMotionExact:true},motion,particlePicked:pick.id,playbackAdvance:playbackEnd-playbackStart,mobile,browser,errors,standalone:{isolated:true,externalRequests:unexpectedRequests}}, null, 2));
+        boundMotion:{frames:boundMotion.samples.length,intermediate:intermediate.length,reducedMotionExact:true},motion,particlePicked:pick.id,playbackAdvance:playbackEnd-playbackStart,mobile,browser,styles,errors,standalone:{isolated:true,externalRequests:unexpectedRequests}}, null, 2));
     fs.rmSync(isolated,{recursive:true,force:true});
     app.quit();
 }).catch(error => {console.error(error);fs.rmSync(isolated,{recursive:true,force:true});app.exit(1);});

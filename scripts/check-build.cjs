@@ -32,7 +32,7 @@ for(const file of ["LICENSE.md","THIRD_PARTY_NOTICES.md","licenses/COREMARK-LICE
     assert.ok(notices.includes(read(file).trim()),`Standalone HTML lost third-party notice: ${file}`);
 }
 const scripts=[...html.matchAll(/<script>([\s\S]*?)<\/script>/g)].map(m=>m[1]);
-assert.equal(scripts.length,3);
+assert.equal(scripts.length,6);
 assert.deepEqual(readTrace(scripts[0]),expected,"HTML changed the recorded demo data");
 assert.equal(new Set(expected.map(t=>t.key)).size,5);
 for(const script of scripts)new vm.Script(script);

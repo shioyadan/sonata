@@ -4,17 +4,18 @@ const fs=require("node:fs");
 const path=require("node:path");
 const delay=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 
-module.exports=async function reviewMobile(window,screenshots){
+module.exports=async function reviewMobile(window,screenshots,visualStyle="neon"){
     const js=source=>window.webContents.executeJavaScript(source);
     const debuggerAPI=window.webContents.debugger;
     debuggerAPI.attach("1.3");
     const command=(method,args={})=>debuggerAPI.sendCommand(method,args);
-    const capture=async name=>fs.writeFileSync(path.join(screenshots,`sonata-mobile${name}.png`),(await window.webContents.capturePage()).toPNG());
+    const capture=async name=>fs.writeFileSync(path.join(screenshots,`sonata-mobile${visualStyle==="neon"?"":"-"+visualStyle}${name}.png`),(await window.webContents.capturePage()).toPNG());
     const settle=()=>js("new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))");
     const layouts=[];
     let result;
     try{
         await command("Emulation.setTouchEmulationEnabled",{enabled:true,maxTouchPoints:2});
+        await js(`document.getElementById('style-'+${JSON.stringify(visualStyle)}).click()`);
         await js(`sonata.loadTrace('rename-rush');sonata.captureAt(sonata.trace.demo.screenshotCycle);
             if(document.getElementById('auto-camera').getAttribute('aria-pressed')==='true')document.getElementById('auto-camera').click();
             document.querySelector('[data-view=orbit]').click();`);
@@ -26,9 +27,10 @@ module.exports=async function reviewMobile(window,screenshots){
                 const rect=id=>document.getElementById(id).getBoundingClientRect();
                 const w=rect('world'),b=rect('bound-scene'),transport=document.querySelector('.transport').getBoundingClientRect();
                 const fits=r=>r.left>=0&&r.right<=innerWidth+.1&&r.top>=0&&r.bottom<=innerHeight+.1;
-                const ids=['play','previous','next','reset','speed','timeline','next-flush','mobile-details','zoom-in','zoom-fit','zoom-out'];
+                const ids=['play','previous','next','reset','speed','timeline','next-flush','mobile-details','style-neon','style-blocks','zoom-in','zoom-fit','zoom-out'];
                 return {width:innerWidth,height:innerHeight,scrollWidth:document.documentElement.scrollWidth,scrollHeight:document.documentElement.scrollHeight,
-                    controls:ids.map(id=>({id,width:rect(id).width,height:rect(id).height,visible:fits(rect(id))})),
+                    controls:ids.map(id=>{const r=rect(id);return {id,width:r.width,height:r.height,visible:fits(r),reachable:document.getElementById(id).contains(document.elementFromPoint(r.x+r.width/2,r.y+r.height/2))};}),
+                    styleBelowView:rect('style-neon').top>=document.querySelector('.view-controls').getBoundingClientRect().bottom,
                     compact:sonata.camera.compact,transportVisible:fits(transport),error:sonata.renderer.error,
                     boundVisible:b.width>0&&b.left>=w.left&&b.right<=w.right&&b.top>=w.top&&b.bottom<=w.bottom,
                     telemetryInPanel:document.getElementById('mobile-panel').contains(document.querySelector('.telemetry'))};
@@ -36,8 +38,19 @@ module.exports=async function reviewMobile(window,screenshots){
             assert.ok(layout.scrollWidth<=width,`Horizontal overflow at ${width} px`);
             assert.ok(layout.scrollHeight<=height,`Playback requires scrolling at ${width} px`);
             assert.ok(layout.compact&&layout.telemetryInPanel&&layout.transportVisible&&layout.boundVisible);
-            assert.ok(layout.controls.every(c=>c.visible&&c.width>=44&&c.height>=44),JSON.stringify(layout.controls));
+            assert.ok(layout.controls.every(c=>c.visible&&c.reachable&&c.width>=44&&c.height>=44),JSON.stringify(layout.controls));
+            assert.ok(layout.styleBelowView,"Appearance controls did not fit below the view controls");
             assert.equal(layout.error,0);layouts.push(layout);await capture(name);
+            // 実際のタッチで両方を選び、再生時刻を保ったまま選択表示が切り替わる。
+            const cycle=await js("sonata.cycle");
+            for(const key of [visualStyle==="blocks"?"neon":"blocks",visualStyle]){
+                const point=await js(`(()=>{const r=document.getElementById('style-'+${JSON.stringify(key)}).getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2};})()`);
+                await command("Input.dispatchTouchEvent",{type:"touchStart",touchPoints:[{...point,id:9}]});
+                await command("Input.dispatchTouchEvent",{type:"touchEnd",touchPoints:[]});await settle();
+                assert.equal(await js("sonata.visualStyle"),key,"Style button did not receive touch input");
+                assert.equal(await js("sonata.cycle"),cycle,"Touching a style changed the trace cycle");
+                assert.ok(await js(`document.querySelectorAll('[data-style-choice][aria-pressed=true]').length===1&&document.getElementById('style-'+${JSON.stringify(key)}).getAttribute('aria-pressed')==='true'`),"Style buttons lost their selection state");
+            }
         }
         window.setContentSize(390,844);
         await command("Emulation.setDeviceMetricsOverride",{width:390,height:844,deviceScaleFactor:2,mobile:true});
@@ -51,7 +64,9 @@ module.exports=async function reviewMobile(window,screenshots){
         for(let i=1;i<=5;i++){await touch("touchMove",pair(40+i*8));await settle();}
         const pinched=await js("sonata.camera");
         assert.ok(pinched.targetRadius<before.targetRadius*.7,"Pinch did not enlarge the pipeline");
-        assert.equal(pinched.azimuth,before.azimuth,"Pinch accidentally orbited the camera");
+        // 表示角は直前のカメラ補間で微小に変わり得る。ピンチが回転の目標を動かさないことを検査する。
+        assert.equal(pinched.targetAzimuth,before.targetAzimuth,"Pinch accidentally orbited the camera");
+        assert.equal(pinched.targetElevation,before.targetElevation,"Pinch accidentally tilted the camera");
         for(let i=1;i<=4;i++){await touch("touchMove",pair(80,i*8,0));await settle();}
         const panned=await js("sonata.camera");
         assert.ok(Math.hypot(...panned.targetFocus.map((v,i)=>v-pinched.targetFocus[i]))>.5,"Two-finger movement did not pan");
@@ -79,6 +94,17 @@ module.exports=async function reviewMobile(window,screenshots){
         await js("document.getElementById('zoom-fit').click()");
         assert.equal(await js("sonata.camera.targetRadius"),32.5,"Fit did not reset detailed pinch zoom");
 
+        const cycle=await js("sonata.cycle"),playing=await js("sonata.playing");
+        // ネイティブ button の Space 入力で切り替え、再生ショートカットとの干渉を検出する。
+        for(const key of [visualStyle==="blocks"?"neon":"blocks",visualStyle]){
+            await js(`document.getElementById('style-'+${JSON.stringify(key)}).focus()`);
+            window.webContents.sendInputEvent({type:"keyDown",keyCode:"Space"});window.webContents.sendInputEvent({type:"keyUp",keyCode:"Space"});
+            const deadline=Date.now()+5000;
+            while(await js("sonata.visualStyle")!==key&&Date.now()<deadline)await delay(50);
+            assert.equal(await js("sonata.visualStyle"),key,"Style button did not receive keyboard input");
+            assert.equal(await js("sonata.cycle"),cycle,"Style button also stepped the trace");
+            assert.equal(await js("sonata.playing"),playing,"Style button also toggled playback");
+        }
         await js("document.getElementById('mobile-details').click()");
         assert.ok(await js("document.getElementById('mobile-panel').open&&document.getElementById('mobile-panel').contains(document.activeElement)"));
         await js("document.getElementById('license-open').scrollIntoView();document.getElementById('license-open').click()");
