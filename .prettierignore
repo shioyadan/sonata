@@ -1,0 +1,12 @@
+/data/
+/vendor/
+/licenses/
+/LICENSE.md
+/THIRD_PARTY_NOTICES.md
+/dist/
+/artifacts/
+/inputs/
+/work/
+/task/
+/coverage/
+/.cache/

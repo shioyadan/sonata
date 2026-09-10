@@ -24,12 +24,15 @@
     "capture:flush": "electron --no-sandbox scripts/capture-flush.cjs",
     "demos:generate": "node --import tsx scripts/generate-demos.ts",
     "demos:select": "node --import tsx scripts/select-traces.ts",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "format": "prettier --write src scripts",
+    "format:check": "prettier --check src scripts"
   },
   "devDependencies": {
     "@hpcc-js/wasm-zstd": "1.15.0",
     "@types/node": "22.20.2",
     "electron": "43.2.0",
+    "prettier": "3.6.2",
     "tsx": "4.23.11",
     "typescript": "5.9.3"
   }

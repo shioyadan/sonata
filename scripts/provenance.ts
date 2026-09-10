@@ -5,20 +5,31 @@ export const runProvenance = {
         simulator: "gem5 v25.1.0.1 · O3",
         workload: "CoreMark · 2 iterations",
         processor: "ARM64 / AArch64 · out-of-order",
-        configuration: "8-wide fetch / decode / rename / dispatch / issue / commit; 192-entry ROB; 2 GHz; one thread; L1 caches; 512 MiB memory.",
+        configuration:
+            "8-wide fetch / decode / rename / dispatch / issue / commit; 192-entry ROB; 2 GHz; one thread; L1 caches; 512 MiB memory.",
         note: "CoreMark performance workload, 2 KB input. Both ARM64 demos are excerpts from the same run. This short run is for trace inspection, not a scored CoreMark result.",
         workloadKnown: true,
         robEntries: 192,
-        evidence: ["gem5-traces/full-2iter/README.md", "gem5-traces/full-2iter/arm64/config.ini", "gem5-traces/full-2iter/arm64/coremark.out"],
+        evidence: [
+            "gem5-traces/full-2iter/README.md",
+            "gem5-traces/full-2iter/arm64/config.ini",
+            "gem5-traces/full-2iter/arm64/coremark.out"
+        ]
     },
     "rsd-mshr": {
         simulator: "RSD processor",
         workload: "IntRegImm test · startup",
         processor: "RSD · RISC-V · out-of-order",
-        configuration: "Captured from the RSD processor. The simulator backend, version and run configuration are not identified in the retained trace.",
+        configuration:
+            "Captured from the RSD processor. The simulator backend, version and run configuration are not identified in the retained trace.",
         note: "Source: mshr.log. The recorded instruction stream matches RSD's IntRegImm test. This excerpt shows the _load startup routine copying initialized data and clearing BSS. D$-miss / MSHR and Br-pred-miss-ex annotations record cache misses and branch mispredictions.",
         workloadKnown: true,
-        evidence: ["User confirmation: trace acquired from processor RSD", "rsd/mshr.log", "https://github.com/rsd-devel/rsd/blob/7b65f6ba0bce58d4d859082660123b7100aae975/Processor/Src/Verification/TestCode/rsd-loader.c", "https://github.com/rsd-devel/rsd/blob/7b65f6ba0bce58d4d859082660123b7100aae975/Processor/Src/Verification/TestCode/Asm/IntRegImm/code.s"],
+        evidence: [
+            "User confirmation: trace acquired from processor RSD",
+            "rsd/mshr.log",
+            "https://github.com/rsd-devel/rsd/blob/7b65f6ba0bce58d4d859082660123b7100aae975/Processor/Src/Verification/TestCode/rsd-loader.c",
+            "https://github.com/rsd-devel/rsd/blob/7b65f6ba0bce58d4d859082660123b7100aae975/Processor/Src/Verification/TestCode/Asm/IntRegImm/code.s"
+        ]
     },
     "gem5-arm-detailed": {
         simulator: "gem5 v25.1.0.1 · O3",
@@ -26,8 +37,13 @@ export const runProvenance = {
         processor: "ARM64 / AArch64 · out-of-order",
         configuration: "8-wide pipeline; 192-entry ROB; 256 integer physical registers; 2 GHz; one thread.",
         note: "Detailed O3PipeView + O3CPUAll trace of CoreMark's core_list_init function. Actual integer rename mappings, register reads and values are recorded. The rename map shows x0–x30 and SP_EL0; unobserved mappings stay blank. This short run is for trace inspection, not a scored CoreMark result.",
-        workloadKnown: true, robEntries: 192,
-        evidence: ["gem5-parser-study/report.md", "gem5-traces/detailed/arm64/config.ini", "gem5-traces/detailed/arm64/trace.log"],
+        workloadKnown: true,
+        robEntries: 192,
+        evidence: [
+            "gem5-parser-study/report.md",
+            "gem5-traces/detailed/arm64/config.ini",
+            "gem5-traces/detailed/arm64/trace.log"
+        ]
     },
     "gem5-x86-detailed": {
         simulator: "gem5 v25.1.0.1 · O3",
@@ -35,16 +51,22 @@ export const runProvenance = {
         processor: "x86-64 · out-of-order · micro-ops",
         configuration: "8-wide pipeline; 192-entry ROB; 256 integer physical registers; 2 GHz; one thread.",
         note: "Detailed O3PipeView + O3CPUAll trace of CoreMark's core_list_mergesort and cmp_idx functions. x86 macro-instructions expand into micro-ops. Actual integer rename mappings, register reads and values are recorded. The rename map shows all 16 architectural integer registers and 16 micro-op temporaries; unobserved mappings stay blank. This short run is for trace inspection, not a scored CoreMark result.",
-        workloadKnown: true, robEntries: 192,
-        evidence: ["gem5-parser-study/report.md", "gem5-traces/detailed/x86/config.ini", "gem5-traces/detailed/x86/trace.log"],
+        workloadKnown: true,
+        robEntries: 192,
+        evidence: [
+            "gem5-parser-study/report.md",
+            "gem5-traces/detailed/x86/config.ini",
+            "gem5-traces/detailed/x86/trace.log"
+        ]
     },
     "nada-tuned": {
         simulator: "NaDa · modified Sniper",
         workload: "Program not yet identified",
         processor: "In-order processor · tuned configuration",
-        configuration: "NaDa is an in-order processor model built by modifying Sniper (confirmed by the user). Source configuration: inorder-tuned.",
+        configuration:
+            "NaDa is an in-order processor model built by modifying Sniper (confirmed by the user). Source configuration: inorder-tuned.",
         note: "The original program name, simulator version and exact tuning parameters were not retained with this trace.",
         workloadKnown: false,
-        evidence: ["User confirmation: in-order processor built by modifying Sniper", "nada/inorder-tuned.out.zst"],
-    },
+        evidence: ["User confirmation: in-order processor built by modifying Sniper", "nada/inorder-tuned.out.zst"]
+    }
 };

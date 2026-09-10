@@ -9,9 +9,9 @@ import type { Op, ParsedTrace } from "../vendor/konata-core/model";
 import { OnikiriParser } from "../vendor/konata-core/onikiri_parser";
 import { StageStructureDetector } from "../vendor/konata-core/stage_structure_detector";
 import { buildCycleNavigatorData, getCycleNavigatorTopDown } from "../vendor/konata-core/trace_navigator_analysis";
-import {readGem5Registers,configuredGem5Registers} from "./gem5-registers";
-import { buildSchedulingEvidence,readRsdRegisterEvidence } from "./scheduling-evidence";
-import {topDownObservationTimes} from "./top-down";
+import { readGem5Registers, configuredGem5Registers } from "./gem5-registers";
+import { buildSchedulingEvidence, readRsdRegisterEvidence } from "./scheduling-evidence";
+import { topDownObservationTimes } from "./top-down";
 
 export interface TraceSource {
     readonly key: string;
@@ -75,12 +75,15 @@ function readSourceBytes(source: TraceSource): Buffer {
         const count = fs.readSync(fd, bytes, 0, bytes.length, 0);
         const complete = bytes.subarray(0, count);
         return complete.subarray(0, complete.lastIndexOf(0x0a) + 1);
+    } finally {
+        fs.closeSync(fd);
     }
-    finally { fs.closeSync(fd); }
 }
 
 async function makeFile(source: TraceSource): Promise<File> {
-    const bytes = source.zstdPrefix ? await readZstdPrefix(source.fileName, source.prefixBytes) : readSourceBytes(source);
+    const bytes = source.zstdPrefix
+        ? await readZstdPrefix(source.fileName, source.prefixBytes)
+        : readSourceBytes(source);
     const contents = source.fileName.endsWith(".gz") ? zlib.gunzipSync(bytes) : bytes;
     return new NodeFile([contents], path.basename(source.fileName).replace(/\.(gz|zst)$/, "")) as unknown as File;
 }
@@ -103,10 +106,7 @@ export function getOps(trace: ParsedTrace): Readonly<Op>[] {
 
 // O3PipeViewのretire:0にはsquash時刻がない。詳細ログが併記されている場合は
 // [sn:N]を持つsquash行から実時刻を回収し、なければ同じ連続列の最終観測時刻を使う。
-export function getGem5FlushCycles(
-    source: TraceSource,
-    ops: readonly Readonly<Op>[],
-): ReadonlyMap<number, number> {
+export function getGem5FlushCycles(source: TraceSource, ops: readonly Readonly<Op>[]): ReadonlyMap<number, number> {
     if (source.parser !== "gem5") return new Map();
 
     const contents = readSourceBytes(source).toString("utf8");
@@ -146,20 +146,20 @@ export function getGem5FlushCycles(
 
     const result = new Map<number, number>();
     const ordered = [...ops].sort((left, right) => left.id - right.id);
-    for (let index = 0; index < ordered.length;) {
+    for (let index = 0; index < ordered.length; ) {
         if (!ordered[index].flush) {
             index++;
             continue;
         }
         const group = [ordered[index++]];
-        while (index < ordered.length && ordered[index].flush &&
-            ordered[index].id === group.at(-1)!.id + 1) group.push(ordered[index++]);
+        while (index < ordered.length && ordered[index].flush && ordered[index].id === group.at(-1)!.id + 1)
+            group.push(ordered[index++]);
         const explicit = group.flatMap((op) => {
             const cycle = observed.get(op.id);
             return cycle === undefined ? [] : [cycle];
         });
-        const flushCycle = explicit.length > 0 ? Math.max(...explicit) :
-            Math.max(...group.map((op) => op.retiredCycle));
+        const flushCycle =
+            explicit.length > 0 ? Math.max(...explicit) : Math.max(...group.map((op) => op.retiredCycle));
         group.forEach((op) => result.set(op.id, flushCycle));
     }
     return result;
@@ -174,10 +174,9 @@ function getStageRanges(op: Readonly<Op>, laneID: number): StageRange[] {
             ranges[ranges.length - 1] = {
                 name: previous.name,
                 startCycle: Math.min(previous.startCycle, stage.startCycle),
-                endCycle: Math.max(previous.endCycle, endCycle),
+                endCycle: Math.max(previous.endCycle, endCycle)
             };
-        }
-        else {
+        } else {
             ranges.push({ name: stage.name, startCycle: stage.startCycle, endCycle });
         }
     }
@@ -185,7 +184,12 @@ function getStageRanges(op: Readonly<Op>, laneID: number): StageRange[] {
 }
 
 export function instructionKind(label: string): InstructionKind {
-    const mnemonic = label.replace(/^(?:0x)?[0-9a-f]+:\s*/i, "").trim().replace(/^[A-Z0-9_]+\s*:\s*/, "").split(/\s+/)[0].toLowerCase();
+    const mnemonic = label
+        .replace(/^(?:0x)?[0-9a-f]+:\s*/i, "")
+        .trim()
+        .replace(/^[A-Z0-9_]+\s*:\s*/, "")
+        .split(/\s+/)[0]
+        .toLowerCase();
     if (/^(b|bl|br|bx|cbz|cbnz|tbz|tbnz|jal|jalr|jr|ret|wrip)/.test(mnemonic)) {
         return "branch";
     }
@@ -198,7 +202,7 @@ export function instructionKind(label: string): InstructionKind {
 function selectWindow(
     ops: readonly Readonly<Op>[],
     lastCycle: number,
-    endCycle: (op: Readonly<Op>) => number = (op) => op.retiredCycle,
+    endCycle: (op: Readonly<Op>) => number = (op) => op.retiredCycle
 ): readonly [number, number] {
     const span = Math.min(300, lastCycle + 1);
     const flushCycles = [...new Set(ops.filter((op) => op.flush).map(endCycle))];
@@ -235,7 +239,7 @@ function selectInitialCycle(
     ops: readonly Readonly<Op>[],
     firstCycle: number,
     lastCycle: number,
-    endCycle: (op: Readonly<Op>) => number = (op) => op.retiredCycle,
+    endCycle: (op: Readonly<Op>) => number = (op) => op.retiredCycle
 ): number {
     let selected = firstCycle;
     let selectedScore = Number.NEGATIVE_INFINITY;
@@ -261,15 +265,18 @@ function peakOccupancy(
     firstCycle: number,
     lastCycle: number,
     begin: (op: Readonly<Op>) => number | null,
-    end: (op: Readonly<Op>) => number | null,
+    end: (op: Readonly<Op>) => number | null
 ): number {
     let peak = 0;
     for (let cycle = firstCycle; cycle <= lastCycle; cycle++) {
-        peak = Math.max(peak, ops.filter((op) => {
-            const beginCycle = begin(op);
-            const endCycle = end(op);
-            return beginCycle !== null && endCycle !== null && beginCycle <= cycle && cycle < endCycle;
-        }).length);
+        peak = Math.max(
+            peak,
+            ops.filter((op) => {
+                const beginCycle = begin(op);
+                const endCycle = end(op);
+                return beginCycle !== null && endCycle !== null && beginCycle <= cycle && cycle < endCycle;
+            }).length
+        );
     }
     return peak;
 }
@@ -284,10 +291,18 @@ interface FlowStageObservation {
 }
 
 interface FlowStageStructure {
-    readonly allocationStage: { readonly laneID: number; readonly stageNames: readonly string[]; readonly width: number };
+    readonly allocationStage: {
+        readonly laneID: number;
+        readonly stageNames: readonly string[];
+        readonly width: number;
+    };
     readonly executionStage: { readonly laneID: number; readonly stageNames: readonly string[] };
     readonly transitionCoverage: number;
-    readonly admissionStages: readonly { readonly laneID: number; readonly stageName: string; readonly typicalLatency: number }[];
+    readonly admissionStages: readonly {
+        readonly laneID: number;
+        readonly stageName: string;
+        readonly typicalLatency: number;
+    }[];
     observe(op: Readonly<Op>): FlowStageObservation;
 }
 
@@ -301,19 +316,18 @@ function typicalValue(values: readonly number[]): number {
     return [...counts].sort((left, right) => right[1] - left[1] || left[0] - right[0])[0]?.[0] ?? 0;
 }
 
-function buildSerialStageFallback(
-    ops: readonly Readonly<Op>[],
-    measurement: unknown,
-): FlowStageStructure {
+function buildSerialStageFallback(ops: readonly Readonly<Op>[], measurement: unknown): FlowStageStructure {
     const draft = (measurement as { readonly draft_: DetectorDraft }).draft_;
     const laneID = draft.allocationStage.laneID;
     const candidateStats = draft.allocationStage.stageNames.map((name) => {
-        const durations = ops.flatMap((op) => getStageRanges(op, laneID)
-            .filter((range) => range.name === name)
-            .map((range) => range.endCycle - range.startCycle));
+        const durations = ops.flatMap((op) =>
+            getStageRanges(op, laneID)
+                .filter((range) => range.name === name)
+                .map((range) => range.endCycle - range.startCycle)
+        );
         return {
             name,
-            average: durations.reduce((sum, duration) => sum + duration, 0) / Math.max(1, durations.length),
+            average: durations.reduce((sum, duration) => sum + duration, 0) / Math.max(1, durations.length)
         };
     });
     // 直列候補を一つのfrontierにできないin-order Traceでは、平均滞在が最長の
@@ -360,37 +374,47 @@ function buildSerialStageFallback(
         allocationStage: {
             laneID,
             stageNames: [allocationName],
-            width: Math.max(...starts.values()),
+            width: Math.max(...starts.values())
         },
         executionStage: {
             laneID,
-            stageNames: executionNames,
+            stageNames: executionNames
         },
-        transitionCoverage: executionNames.reduce((sum, name) => sum + (successorCounts.get(name) ?? 0), 0) /
+        transitionCoverage:
+            executionNames.reduce((sum, name) => sum + (successorCounts.get(name) ?? 0), 0) /
             Math.max(1, allocationCount),
         admissionStages,
         observe(op): FlowStageObservation {
             const ranges = getStageRanges(op, laneID);
             const allocationIndex = ranges.findIndex((range) => range.name === allocationName);
             const allocation = ranges[allocationIndex];
-            const executionIndex = allocationIndex < 0 ? -1 : ranges.findIndex((range, index) =>
-                index > allocationIndex && executionNames.includes(range.name));
+            const executionIndex =
+                allocationIndex < 0
+                    ? -1
+                    : ranges.findIndex(
+                          (range, index) => index > allocationIndex && executionNames.includes(range.name)
+                      );
             const execution = ranges[executionIndex];
             const completion = executionIndex < 0 ? undefined : ranges[executionIndex + 1];
             const previous = ranges[allocationIndex - 1];
-            const admission = previous === undefined ? undefined : admissionStages.find((stage) => stage.stageName === previous.name);
-            const stallStart = previous === undefined || admission === undefined ? null :
-                previous.startCycle + admission.typicalLatency;
+            const admission =
+                previous === undefined ? undefined : admissionStages.find((stage) => stage.stageName === previous.name);
+            const stallStart =
+                previous === undefined || admission === undefined
+                    ? null
+                    : previous.startCycle + admission.typicalLatency;
             return {
                 allocationCycle: allocation?.startCycle ?? null,
                 issueCycle: execution?.startCycle ?? null,
                 executionLatency: execution === undefined ? null : execution.endCycle - execution.startCycle,
                 completionCycle: completion?.startCycle ?? null,
                 admissionStallStartCycle: stallStart,
-                admissionStallEndCycle: stallStart === null || allocation === undefined ? null :
-                    Math.min(previous.endCycle, allocation.startCycle),
+                admissionStallEndCycle:
+                    stallStart === null || allocation === undefined
+                        ? null
+                        : Math.min(previous.endCycle, allocation.startCycle)
             };
-        },
+        }
     };
 }
 
@@ -399,7 +423,7 @@ export async function buildSample(source: TraceSource) {
     const allOps = getOps(trace);
     const flushCycles = getGem5FlushCycles(source, allOps);
     const effectiveEndCycle = (op: Readonly<Op>): number =>
-        op.flush ? flushCycles.get(op.id) ?? op.retiredCycle : op.retiredCycle;
+        op.flush ? (flushCycles.get(op.id) ?? op.retiredCycle) : op.retiredCycle;
     const detector = new StageStructureDetector();
     allOps.forEach((op) => detector.observe(op));
     const measurement = detector.finish();
@@ -431,8 +455,7 @@ export async function buildSample(source: TraceSource) {
         const current = pathCounts.get(key);
         if (current === undefined) {
             pathCounts.set(key, { names, count: 1 });
-        }
-        else {
+        } else {
             current.count++;
         }
     }
@@ -442,16 +465,19 @@ export async function buildSample(source: TraceSource) {
         throw new Error(`A representative path was not found for ${source.displayName}.`);
     }
     const allocationIndex = representativePath.findIndex((name) => allocationNames.has(name));
-    const executionIndex = representativePath.findIndex((name, index) =>
-        index > allocationIndex && executionNames.has(name));
+    const executionIndex = representativePath.findIndex(
+        (name, index) => index > allocationIndex && executionNames.has(name)
+    );
     const frontNames = representativePath.slice(0, allocationIndex);
     const frontGroupCount = Math.min(6, Math.max(1, frontNames.length));
     const frontNodes = Array.from({ length: frontGroupCount }, (_, index) => ({
         id: `front-${index}`,
-        names: [] as string[],
+        names: [] as string[]
     }));
     frontNames.forEach((name, index) => {
-        frontNodes[Math.min(frontGroupCount - 1, Math.floor(index * frontGroupCount / frontNames.length))].names.push(name);
+        frontNodes[Math.min(frontGroupCount - 1, Math.floor((index * frontGroupCount) / frontNames.length))].names.push(
+            name
+        );
     });
     const frontNodeByName = new Map(frontNodes.flatMap((node) => node.names.map((name) => [name, node.id])));
     const completionNames = representativePath.slice(executionIndex + 1, -1);
@@ -475,12 +501,12 @@ export async function buildSample(source: TraceSource) {
             if (responseCycle - completionCycle < memoryMissWaitCycles) continue;
             memoryWaitOpIDs.add(op.id);
             memoryWaitStartCycles.set(op.id, completionCycle);
-            ranges.slice(0, responseIndex)
+            ranges
+                .slice(0, responseIndex)
                 .filter((range) => range.startCycle >= completionCycle)
                 .forEach((range) => memoryWaitStageNames.add(range.name));
         }
-    }
-    else {
+    } else {
         const memoryTimings = allOps.flatMap((op) => {
             if (instructionKind(op.labelName) !== "memory" || !op.retired || op.flush) return [];
             const issueCycle = observations.get(op.id)?.issueCycle;
@@ -491,12 +517,17 @@ export async function buildSample(source: TraceSource) {
             if (readyCycle === undefined || readyCycle <= issueCycle) return [];
             return [{ op, ranges, issueCycle, readyCycle, readyName: readyRange.name }];
         });
-        inferredMemoryBaseLatency = memoryTimings.length === 0 ? null :
-            Math.min(...memoryTimings.map(({ issueCycle, readyCycle }) => readyCycle - issueCycle));
+        inferredMemoryBaseLatency =
+            memoryTimings.length === 0
+                ? null
+                : Math.min(...memoryTimings.map(({ issueCycle, readyCycle }) => readyCycle - issueCycle));
         for (const timing of memoryTimings) {
             memoryReadyCycles.set(timing.op.id, timing.readyCycle);
-            if (inferredMemoryBaseLatency === null ||
-                timing.readyCycle - timing.issueCycle <= inferredMemoryBaseLatency + 0.001) continue;
+            if (
+                inferredMemoryBaseLatency === null ||
+                timing.readyCycle - timing.issueCycle <= inferredMemoryBaseLatency + 0.001
+            )
+                continue;
             const waitStartCycle = timing.issueCycle + inferredMemoryBaseLatency;
             memoryWaitOpIDs.add(timing.op.id);
             memoryWaitStartCycles.set(timing.op.id, waitStartCycle);
@@ -521,8 +552,9 @@ export async function buildSample(source: TraceSource) {
             startsByKind.set(kind, starts);
         }
         starts.set(issueCycle, (starts.get(issueCycle) ?? 0) + 1);
-        const observedName = getStageRanges(op, laneID).find((range) =>
-            range.startCycle === issueCycle && executionNames.has(range.name))?.name;
+        const observedName = getStageRanges(op, laneID).find(
+            (range) => range.startCycle === issueCycle && executionNames.has(range.name)
+        )?.name;
         if (observedName !== undefined) {
             const names = executionNamesByKind.get(kind) ?? new Set<string>();
             names.add(observedName);
@@ -535,27 +567,33 @@ export async function buildSample(source: TraceSource) {
             id: `exec-${kind}`,
             kind,
             names: [...(executionNamesByKind.get(kind) ?? detected.executionStage.stageNames)],
-            pipeCount: Math.max(...(startsByKind.get(kind)?.values() ?? [1])),
+            pipeCount: Math.max(...(startsByKind.get(kind)?.values() ?? [1]))
         }));
     const [firstCycle, lastCycle] = source.window ?? selectWindow(allOps, trace.lastCycle, effectiveEndCycle);
-    const sampleOps = allOps.filter((op) =>
-        op.fetchedCycle <= lastCycle && effectiveEndCycle(op) >= firstCycle);
+    const sampleOps = allOps.filter((op) => op.fetchedCycle <= lastCycle && effectiveEndCycle(op) >= firstCycle);
     const initialCycle = source.initialCycle ?? selectInitialCycle(sampleOps, firstCycle, lastCycle, effectiveEndCycle);
     const sampledMemoryWaitOpCount = sampleOps.filter((op) => {
         const waitStartCycle = memoryWaitStartCycles.get(op.id);
         const readyCycle = memoryReadyCycles.get(op.id);
-        return waitStartCycle !== undefined && readyCycle !== undefined &&
-            waitStartCycle < lastCycle && readyCycle > firstCycle;
+        return (
+            waitStartCycle !== undefined &&
+            readyCycle !== undefined &&
+            waitStartCycle < lastCycle &&
+            readyCycle > firstCycle
+        );
     }).length;
-    const memoryWait = sampledMemoryWaitOpCount === 0 ? null : {
-        id: "memory-wait",
-        waitStageNames: [...memoryWaitStageNames],
-        completionStageNames: [...memoryCompletionStageNames],
-        observedOps: sampledMemoryWaitOpCount,
-        baseLatency: inferredMemoryBaseLatency,
-    };
+    const memoryWait =
+        sampledMemoryWaitOpCount === 0
+            ? null
+            : {
+                  id: "memory-wait",
+                  waitStageNames: [...memoryWaitStageNames],
+                  completionStageNames: [...memoryCompletionStageNames],
+                  observedOps: sampledMemoryWaitOpCount,
+                  baseLatency: inferredMemoryBaseLatency
+              };
 
-    const explicitRsdStages=source.includeEvidence&&source.fileName.endsWith("/rsd/mshr.log");
+    const explicitRsdStages = source.includeEvidence && source.fileName.endsWith("/rsd/mshr.log");
     const compactOps = sampleOps.map((op) => {
         const observation = observations.get(op.id);
         if (observation === undefined) {
@@ -567,63 +605,74 @@ export async function buildSample(source: TraceSource) {
         const terminalRange = op.retired && !op.flush ? ranges.at(-1) : undefined;
         const allocationCycle = observation.allocationCycle;
         const issueCycle = observation.issueCycle;
-        const completionCycle = explicitRsdStages?(ranges.findLast(range=>range.name==="Rw")?.startCycle??null):observation.completionCycle;
+        const completionCycle = explicitRsdStages
+            ? (ranges.findLast((range) => range.name === "Rw")?.startCycle ?? null)
+            : observation.completionCycle;
         const memoryReadyCycle = memoryReadyCycles.get(op.id) ?? completionCycle;
         const memoryWaitStartCycle = memoryWaitStartCycles.get(op.id);
         const mappedStages = ranges.flatMap((range, rangeIndex) => {
             const boundaries = [range.startCycle, range.endCycle];
             if (kind === "memory") {
                 for (const boundary of [memoryWaitStartCycle, memoryReadyCycle]) {
-                    if (boundary !== null && boundary !== undefined &&
-                        boundary > range.startCycle && boundary < range.endCycle) boundaries.push(boundary);
+                    if (
+                        boundary !== null &&
+                        boundary !== undefined &&
+                        boundary > range.startCycle &&
+                        boundary < range.endCycle
+                    )
+                        boundaries.push(boundary);
                 }
             }
             boundaries.sort((left, right) => left - right);
-            const segments = range.endCycle > range.startCycle ? boundaries.slice(0, -1).map((startCycle, index) => ({
-                startCycle,
-                endCycle: boundaries[index + 1],
-            })) : [{ startCycle: range.startCycle, endCycle: range.endCycle }];
+            const segments =
+                range.endCycle > range.startCycle
+                    ? boundaries.slice(0, -1).map((startCycle, index) => ({
+                          startCycle,
+                          endCycle: boundaries[index + 1]
+                      }))
+                    : [{ startCycle: range.startCycle, endCycle: range.endCycle }];
             return segments.map((segment) => {
                 let node: string;
                 if (allocationCycle === null || segment.startCycle < allocationCycle) {
-                    node = frontNodeByName.get(range.name) ?? frontNodes[Math.min(
-                        frontNodes.length - 1,
-                        Math.floor(rangeIndex * frontNodes.length / Math.max(1, ranges.length)),
-                    )].id;
-                }
-                else if (issueCycle === null || segment.startCycle < issueCycle) {
+                    node =
+                        frontNodeByName.get(range.name) ??
+                        frontNodes[
+                            Math.min(
+                                frontNodes.length - 1,
+                                Math.floor((rangeIndex * frontNodes.length) / Math.max(1, ranges.length))
+                            )
+                        ].id;
+                } else if (issueCycle === null || segment.startCycle < issueCycle) {
                     node = "issue";
-                }
-                else if (kind === "memory" && memoryReadyCycle !== null) {
-                    if (memoryWaitStartCycle !== undefined && segment.startCycle >= memoryWaitStartCycle &&
-                        segment.startCycle < memoryReadyCycle) {
+                } else if (kind === "memory" && memoryReadyCycle !== null) {
+                    if (
+                        memoryWaitStartCycle !== undefined &&
+                        segment.startCycle >= memoryWaitStartCycle &&
+                        segment.startCycle < memoryReadyCycle
+                    ) {
                         node = memoryWait?.id ?? executionNode;
-                    }
-                    else if (segment.startCycle < memoryReadyCycle) {
+                    } else if (segment.startCycle < memoryReadyCycle) {
                         node = executionNode;
-                    }
-                    else if (terminalRange === range) {
+                    } else if (terminalRange === range) {
                         node = "commit";
-                    }
-                    else {
+                    } else {
                         node = "rob";
                     }
-                }
-                else if (completionCycle === null || segment.startCycle < completionCycle) {
+                } else if (completionCycle === null || segment.startCycle < completionCycle) {
                     node = executionNode;
-                }
-                else if (terminalRange === range) {
+                } else if (terminalRange === range) {
                     node = "commit";
-                }
-                else {
+                } else {
                     node = "rob";
                 }
                 // RSD は発行の受け渡し、レジスタ読み出し、実行、書き戻しを明示的に区別する。
                 // メモリアクセスの再試行時も、そのステージ区分を維持する。
-                if(explicitRsdStages){
-                    if(range.name==="Is"||range.name==="Rr")node="register-read";
-                    else if(["X","Mt","Ma"].includes(range.name))node=executionNode;
-                    else if(range.name==="Rw")node=memoryReadyCycle!==null&&segment.startCycle<memoryReadyCycle?"memory-wait":"rob";
+                if (explicitRsdStages) {
+                    if (range.name === "Is" || range.name === "Rr") node = "register-read";
+                    else if (["X", "Mt", "Ma"].includes(range.name)) node = executionNode;
+                    else if (range.name === "Rw")
+                        node =
+                            memoryReadyCycle !== null && segment.startCycle < memoryReadyCycle ? "memory-wait" : "rob";
                 }
                 return [range.name, node, segment.startCycle, Math.max(segment.startCycle + 0.72, segment.endCycle)];
             });
@@ -640,7 +689,7 @@ export async function buildSample(source: TraceSource) {
             issueCycle,
             memoryReadyCycle,
             executionNode,
-            flushCycles.get(op.id) ?? null,
+            flushCycles.get(op.id) ?? null
         ];
     });
 
@@ -649,14 +698,14 @@ export async function buildSample(source: TraceSource) {
         firstCycle,
         lastCycle,
         (op) => observations.get(op.id)?.allocationCycle ?? null,
-        (op) => observations.get(op.id)?.issueCycle ?? effectiveEndCycle(op),
+        (op) => observations.get(op.id)?.issueCycle ?? effectiveEndCycle(op)
     );
     const robPeak = peakOccupancy(
         sampleOps,
         firstCycle,
         lastCycle,
         (op) => observations.get(op.id)?.allocationCycle ?? null,
-        effectiveEndCycle,
+        effectiveEndCycle
     );
     const fetchCounts = new Map<number, number>();
     const retireCounts = new Map<number, number>();
@@ -669,39 +718,84 @@ export async function buildSample(source: TraceSource) {
             retireCounts.set(op.retiredCycle, (retireCounts.get(op.retiredCycle) ?? 0) + 1);
         }
     }
-    let topDown=null;
-    if(source.includeTopDown){
-        const data=await buildCycleNavigatorData(trace,{binCycleCount:1});
-        if(data?.topDown){
-            const start=Math.max(0,firstCycle-8),slots:number[][]=[];
-            for(let cycle=start;cycle<=lastCycle;cycle++){
-                const s=getCycleNavigatorTopDown(data,cycle,cycle+1);
-                if(!s)throw new Error(`Top-down sample missing at ${cycle}.`);
-                const row=[s.retiringSlots,s.squashedSlots,s.recoveryBubbleSlots,s.frontendBound,s.backendBound,s.unresolvedSlots];
-                if(row.some(n=>!Number.isFinite(n)||n<0)||row.reduce((sum,n)=>sum+n,0)!==s.totalSlots)throw new Error(`Top-down slots do not sum at ${cycle}.`);
+    let topDown = null;
+    if (source.includeTopDown) {
+        const data = await buildCycleNavigatorData(trace, { binCycleCount: 1 });
+        if (data?.topDown) {
+            const start = Math.max(0, firstCycle - 8),
+                slots: number[][] = [];
+            for (let cycle = start; cycle <= lastCycle; cycle++) {
+                const s = getCycleNavigatorTopDown(data, cycle, cycle + 1);
+                if (!s) throw new Error(`Top-down sample missing at ${cycle}.`);
+                const row = [
+                    s.retiringSlots,
+                    s.squashedSlots,
+                    s.recoveryBubbleSlots,
+                    s.frontendBound,
+                    s.backendBound,
+                    s.unresolvedSlots
+                ];
+                if (
+                    row.some((n) => !Number.isFinite(n) || n < 0) ||
+                    row.reduce((sum, n) => sum + n, 0) !== s.totalSlots
+                )
+                    throw new Error(`Top-down slots do not sum at ${cycle}.`);
                 slots.push(row);
             }
-            topDown={method:"Konata Top-down-like",firstCycle:start,windowCycles:8,
-                observationTimes:topDownObservationTimes(data.topDown,allOps,start,lastCycle,slots,effectiveEndCycle),
-                categories:["retiring","squashed","recovery","frontend","backend","unresolved"],slots,
-                allocationWidth:data.topDown.allocationWidth,allocationStage:data.topDown.allocationStage.label,
-                executionStage:data.topDown.executionStage.label,transitionCoverage:data.topDown.transitionCoverage};
-            for(const cycle of [firstCycle,Math.floor((firstCycle+lastCycle)/2),lastCycle]){
-                const s=getCycleNavigatorTopDown(data,cycle-7,cycle+1)!;
-                const actual=slots.slice(cycle-7-start,cycle-start+1).reduce((sum,row)=>sum.map((v,i)=>v+row[i]),[0,0,0,0,0,0]);
-                const expected=[s.retiringSlots,s.squashedSlots,s.recoveryBubbleSlots,s.frontendBound,s.backendBound,s.unresolvedSlots];
-                if(actual.some((v,i)=>v!==expected[i]))throw new Error(`Embedded Top-down window differs from the analysis at ${cycle}.`);
+            topDown = {
+                method: "Konata Top-down-like",
+                firstCycle: start,
+                windowCycles: 8,
+                observationTimes: topDownObservationTimes(
+                    data.topDown,
+                    allOps,
+                    start,
+                    lastCycle,
+                    slots,
+                    effectiveEndCycle
+                ),
+                categories: ["retiring", "squashed", "recovery", "frontend", "backend", "unresolved"],
+                slots,
+                allocationWidth: data.topDown.allocationWidth,
+                allocationStage: data.topDown.allocationStage.label,
+                executionStage: data.topDown.executionStage.label,
+                transitionCoverage: data.topDown.transitionCoverage
+            };
+            for (const cycle of [firstCycle, Math.floor((firstCycle + lastCycle) / 2), lastCycle]) {
+                const s = getCycleNavigatorTopDown(data, cycle - 7, cycle + 1)!;
+                const actual = slots
+                    .slice(cycle - 7 - start, cycle - start + 1)
+                    .reduce((sum, row) => sum.map((v, i) => v + row[i]), [0, 0, 0, 0, 0, 0]);
+                const expected = [
+                    s.retiringSlots,
+                    s.squashedSlots,
+                    s.recoveryBubbleSlots,
+                    s.frontendBound,
+                    s.backendBound,
+                    s.unresolvedSlots
+                ];
+                if (actual.some((v, i) => v !== expected[i]))
+                    throw new Error(`Embedded Top-down window differs from the analysis at ${cycle}.`);
             }
         }
     }
-    let evidence=null;
-    if(source.includeEvidence){
-        evidence=source.fileName.endsWith("/rsd/mshr.log")?readRsdRegisterEvidence(source.fileName,firstCycle,lastCycle,new Set(sampleOps.map(o=>o.id))):{
-            scheduling:buildSchedulingEvidence(allOps,sampleOps,{allocation:op=>observations.get(op.id)?.allocationCycle??null,
-                ready:op=>memoryReadyCycles.get(op.id)??observations.get(op.id)?.completionCycle??null,end:effectiveEndCycle}),registers:null};
+    let evidence = null;
+    if (source.includeEvidence) {
+        evidence = source.fileName.endsWith("/rsd/mshr.log")
+            ? readRsdRegisterEvidence(source.fileName, firstCycle, lastCycle, new Set(sampleOps.map((o) => o.id)))
+            : {
+                  scheduling: buildSchedulingEvidence(allOps, sampleOps, {
+                      allocation: (op) => observations.get(op.id)?.allocationCycle ?? null,
+                      ready: (op) => memoryReadyCycles.get(op.id) ?? observations.get(op.id)?.completionCycle ?? null,
+                      end: effectiveEndCycle
+                  }),
+                  registers: null
+              };
     }
-    if(source.includeEvidence&&source.parser==="gem5"){
-        evidence.registers=source.fileName.includes("/detailed/")?readGem5Registers(source.fileName,allOps,firstCycle,lastCycle,source.prefixBytes):configuredGem5Registers();
+    if (source.includeEvidence && source.parser === "gem5") {
+        evidence.registers = source.fileName.includes("/detailed/")
+            ? readGem5Registers(source.fileName, allOps, firstCycle, lastCycle, source.prefixBytes)
+            : configuredGem5Registers();
     }
     const sample = {
         key: source.key,
@@ -715,12 +809,20 @@ export async function buildSample(source: TraceSource) {
         firstCycle,
         lastCycle,
         initialCycle,
-        ...(source.includeTopDown?{topDown}:{}),
-        ...(source.includeEvidence?{evidence}:{}),
+        ...(source.includeTopDown ? { topDown } : {}),
+        ...(source.includeEvidence ? { evidence } : {}),
         fetchWidth: Math.max(...fetchCounts.values()),
         retireWidth: Math.max(...retireCounts.values()),
         structure: {
-            ...(explicitRsdStages?{registerRead:{id:"register-read",names:["Is","Rr"],description:"Issue handoff, then recorded register read before X"}}:{}),
+            ...(explicitRsdStages
+                ? {
+                      registerRead: {
+                          id: "register-read",
+                          names: ["Is", "Rr"],
+                          description: "Issue handoff, then recorded register read before X"
+                      }
+                  }
+                : {}),
             detectionMethod,
             allocationLaneID: laneID,
             allocationStageNames: [...detected.allocationStage.stageNames],
@@ -738,9 +840,9 @@ export async function buildSample(source: TraceSource) {
             queuePeak,
             queueCapacity: roundedCapacity(queuePeak, 16),
             robPeak,
-            robCapacity: roundedCapacity(robPeak, 32),
+            robCapacity: roundedCapacity(robPeak, 32)
         },
-        ops: compactOps,
+        ops: compactOps
     };
     trace.close();
     return sample;

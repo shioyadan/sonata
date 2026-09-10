@@ -1,8 +1,8 @@
 "use strict";
-const assert=require("node:assert/strict");
+const assert = require("node:assert/strict");
 
-module.exports=async function reviewGroundedPieces(window){
-    const result=await window.webContents.executeJavaScript(`(()=>{
+module.exports = async function reviewGroundedPieces(window) {
+    const result = await window.webContents.executeJavaScript(`(()=>{
         const gl=document.getElementById('scene').getContext('webgl2'),draw=gl.drawArraysInstanced;
         const original=sonata.cycle,batches=[];
         // 診断値だけでなく、実際の描画と影へ渡したインスタンスの中心座標を読む。
@@ -35,11 +35,17 @@ module.exports=async function reviewGroundedPieces(window){
             return {pieces:pieces.length,moved,grounded,transferring,maximumGap,gpuError,batches:batches.length,returned:first===JSON.stringify(sonata.pieces),error:gl.getError()};
         }finally{gl.drawArraysInstanced=draw;sonata.captureAt(original);}
     })()`);
-    assert.ok(result.pieces>0&&result.moved>20,`Cut crystal: instructions still use hovering heights`);
-    assert.ok(result.grounded>20&&result.transferring>0,`Cut crystal: stage contact and airborne transfer were not both exercised`);
-    assert.ok(result.maximumGap<1e-6,`Cut crystal: instruction does not touch its support`);
-    assert.ok(result.batches>0&&result.gpuError<2e-6,`Cut crystal: rendered positions differ from grounded positions`);
-    assert.ok(result.returned,`Cut crystal: seeking changed grounded positions`);
-    assert.equal(result.error,0);
+    assert.ok(result.pieces > 0 && result.moved > 20, `Cut crystal: instructions still use hovering heights`);
+    assert.ok(
+        result.grounded > 20 && result.transferring > 0,
+        `Cut crystal: stage contact and airborne transfer were not both exercised`
+    );
+    assert.ok(result.maximumGap < 1e-6, `Cut crystal: instruction does not touch its support`);
+    assert.ok(
+        result.batches > 0 && result.gpuError < 2e-6,
+        `Cut crystal: rendered positions differ from grounded positions`
+    );
+    assert.ok(result.returned, `Cut crystal: seeking changed grounded positions`);
+    assert.equal(result.error, 0);
     return result;
 };

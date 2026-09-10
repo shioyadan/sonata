@@ -1,8 +1,8 @@
 "use strict";
-const assert=require("node:assert/strict");
+const assert = require("node:assert/strict");
 
-module.exports=async function reviewStageTransfers(window){
-    const result=await window.webContents.executeJavaScript(`(()=>{
+module.exports = async function reviewStageTransfers(window) {
+    const result = await window.webContents.executeJavaScript(`(()=>{
         const saved={style:sonata.visualStyle,cycle:sonata.cycle},trace=sonata.trace,cases=new Map();
         const choose=key=>document.getElementById('style-'+key).click();
         for(const op of sonata.ops){
@@ -37,13 +37,25 @@ module.exports=async function reviewStageTransfers(window){
             return {trace:trace.key,transfers,error:sonata.renderer.error};
         }finally{choose(saved.style);sonata.captureAt(saved.cycle);}
     })()`);
-    assert.ok(result.transfers.length>=5,`${result.trace}: too few stage transitions exercised`);
-    assert.ok(result.transfers.some(t=>t.airborne>0),`${result.trace}: transitions still follow the board`);
-    for(const transfer of result.transfers){
-        assert.ok(transfer.minimum>=transfer.lower,`${result.trace}: ${transfer.key} fell below the stage heights (${transfer.minimum} < ${transfer.lower})`);
-        assert.ok(transfer.biggestStep<.4,`${result.trace}: ${transfer.key} jumps vertically between samples: ${JSON.stringify(transfer)}`);
-        assert.ok(transfer.returned&&transfer.sameHorizontalPath,`${result.trace}: ${transfer.key} changed with seek order or left its horizontal path`);
+    assert.ok(result.transfers.length >= 5, `${result.trace}: too few stage transitions exercised`);
+    assert.ok(
+        result.transfers.some((t) => t.airborne > 0),
+        `${result.trace}: transitions still follow the board`
+    );
+    for (const transfer of result.transfers) {
+        assert.ok(
+            transfer.minimum >= transfer.lower,
+            `${result.trace}: ${transfer.key} fell below the stage heights (${transfer.minimum} < ${transfer.lower})`
+        );
+        assert.ok(
+            transfer.biggestStep < 0.4,
+            `${result.trace}: ${transfer.key} jumps vertically between samples: ${JSON.stringify(transfer)}`
+        );
+        assert.ok(
+            transfer.returned && transfer.sameHorizontalPath,
+            `${result.trace}: ${transfer.key} changed with seek order or left its horizontal path`
+        );
     }
-    assert.equal(result.error,0);
+    assert.equal(result.error, 0);
     return result;
 };

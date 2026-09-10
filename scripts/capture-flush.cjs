@@ -1,28 +1,37 @@
 "use strict";
 // ビルド済み HTML で Jump to flush を実行し、通常再生中の画面を撮影する。
 // xvfb-run -a -s '-screen 0 1600x1100x24' node_modules/.bin/electron --no-sandbox scripts/capture-flush.cjs
-const {app,BrowserWindow}=require("electron");
-const fs=require("node:fs");
-const path=require("node:path");
-const {createHash}=require("node:crypto");
-const root=path.resolve(__dirname,"..");
-const entry=path.join(root,"dist/sonata.html");
-const output=path.join(root,"artifacts/screenshots/flush-capture");
-app.commandLine.appendSwitch("use-gl","angle");
-app.commandLine.appendSwitch("use-angle","swiftshader");
+const { app, BrowserWindow } = require("electron");
+const fs = require("node:fs");
+const path = require("node:path");
+const { createHash } = require("node:crypto");
+const root = path.resolve(__dirname, "..");
+const entry = path.join(root, "dist/sonata.html");
+const output = path.join(root, "artifacts/screenshots/flush-capture");
+app.commandLine.appendSwitch("use-gl", "angle");
+app.commandLine.appendSwitch("use-angle", "swiftshader");
 app.commandLine.appendSwitch("enable-unsafe-swiftshader");
-app.whenReady().then(async()=>{
-    fs.mkdirSync(output,{recursive:true});
-    const window=new BrowserWindow({width:1440,height:1000,show:true,webPreferences:{contextIsolation:true,sandbox:true,backgroundThrottling:false}});
-    const js=source=>window.webContents.executeJavaScript(source);
-    await window.loadFile(entry);
-    const settings=await js(`({reducedMotion:matchMedia('(prefers-reduced-motion: reduce)').matches,
+app.whenReady()
+    .then(async () => {
+        fs.mkdirSync(output, { recursive: true });
+        const window = new BrowserWindow({
+            width: 1440,
+            height: 1000,
+            show: true,
+            webPreferences: { contextIsolation: true, sandbox: true, backgroundThrottling: false }
+        });
+        const js = (source) => window.webContents.executeJavaScript(source);
+        await window.loadFile(entry);
+        const settings = await js(`({reducedMotion:matchMedia('(prefers-reduced-motion: reduce)').matches,
         instructionStream:document.getElementById('instruction-stream').getAttribute('aria-pressed'),
         autoOrbit:document.getElementById('auto-camera').getAttribute('aria-pressed')})`);
-    await js("document.getElementById('next-flush').click()");
-    const captures=[];
-    for(const [name,age] of [["rewind",.6],["unravel",2.1]]){
-        await js(`new Promise((resolve,reject)=>{
+        await js("document.getElementById('next-flush').click()");
+        const captures = [];
+        for (const [name, age] of [
+            ["rewind", 0.6],
+            ["unravel", 2.1]
+        ]) {
+            await js(`new Promise((resolve,reject)=>{
             const deadline=performance.now()+30000;
             function frame(){
                 if(sonata.codeRewind.time!==null && sonata.codeRewind.age>=${age}){
@@ -32,21 +41,35 @@ app.whenReady().then(async()=>{
             }
             frame();
         })`);
-        await js("new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))");
-        await js("document.getElementById('scene').getContext('webgl2').finish()");
-        fs.writeFileSync(path.join(output,`${name}.png`),(await window.webContents.capturePage()).toPNG());
-        if(name==="unravel"){
-            const rect=await js(`(()=>{const r=document.getElementById('scene').getBoundingClientRect();
+            await js("new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))");
+            await js("document.getElementById('scene').getContext('webgl2').finish()");
+            fs.writeFileSync(path.join(output, `${name}.png`), (await window.webContents.capturePage()).toPNG());
+            if (name === "unravel") {
+                const rect = await js(`(()=>{const r=document.getElementById('scene').getBoundingClientRect();
                 return {x:Math.round(r.left),y:Math.round(r.top+165),width:440,height:470};})()`);
-            fs.writeFileSync(path.join(output,"unravel-detail.png"),(await window.webContents.capturePage(rect)).toPNG());
-        }
-        captures.push(await js(`({name:${JSON.stringify(name)},cycle:sonata.cycle,phase:sonata.codeRewind.phase,
+                fs.writeFileSync(
+                    path.join(output, "unravel-detail.png"),
+                    (await window.webContents.capturePage(rect)).toPNG()
+                );
+            }
+            captures.push(
+                await js(`({name:${JSON.stringify(name)},cycle:sonata.cycle,phase:sonata.codeRewind.phase,
             canceledRows:sonata.instructionFeed.filter(r=>r.canceled).length,glyphs:sonata.codeFragments.length,
-            label:document.getElementById('instruction-stream-label').textContent,error:sonata.renderer.error})`));
-        if(name==="rewind")await js("document.getElementById('play').click()");
-    }
-    const report={entry,sha256:createHash("sha256").update(fs.readFileSync(entry)).digest("hex"),settings,captures};
-    fs.writeFileSync(path.join(output,"capture.json"),JSON.stringify(report,null,2)+"\n");
-    console.log(JSON.stringify(report,null,2));
-    app.quit();
-}).catch(error=>{console.error(error);app.exit(1)});
+            label:document.getElementById('instruction-stream-label').textContent,error:sonata.renderer.error})`)
+            );
+            if (name === "rewind") await js("document.getElementById('play').click()");
+        }
+        const report = {
+            entry,
+            sha256: createHash("sha256").update(fs.readFileSync(entry)).digest("hex"),
+            settings,
+            captures
+        };
+        fs.writeFileSync(path.join(output, "capture.json"), JSON.stringify(report, null, 2) + "\n");
+        console.log(JSON.stringify(report, null, 2));
+        app.quit();
+    })
+    .catch((error) => {
+        console.error(error);
+        app.exit(1);
+    });

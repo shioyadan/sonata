@@ -68,7 +68,7 @@ git worktree list
 
 ## 境界
 
-`src/` は TypeScript 6個・CSS 3個・HTML 1個にまとめます。各ファイルの責務と状態の所有者は [ソースの構造](architecture.md) を参照してください。
+現在の `src/` は TypeScript 6個・CSS 3個・HTML 1個です。ファイル数は固定せず、責務と変更のまとまりに応じて見直します。各ファイルの責務と状態の所有者は [ソースの構造](architecture.md) を参照してください。
 
 - `src/sonata.cts`: 起動、再生時計、入力・カメラ、DOM と診断 API。
 - `src/replay-model.cts` / `src/geometry.cts`: トレース準備と再生状態、経路・回転・接地。DOM / GPU から独立して検査可能。
@@ -78,6 +78,17 @@ git worktree list
 - `vendor/konata-core/`: 抽出にだけ使う解析器の固定スナップショット。
 
 描画ライブラリやフレームワークの実行時依存はありません。`window.sonata` は決定的な時刻シークと状態参照のための診断 API です。テストはこれを通して実データと画面を照合します。
+
+## 整形
+
+```sh
+npm run format
+npm run format:check
+```
+
+`src/` と自作の `scripts/` を、開発依存に固定した Prettier で整形します。設定は `.prettierrc.json` の4スペース・行幅120文字を目安とし、長い文字列やHTMLの空白の意味を保つために例外を許容します。文・型の項目・長い引数列を適切に改行し、行数を減らすために詰め直しません。データ・vendor・ライセンス原文・生成物・作業用worktreeは整形対象外です。
+
+文字列内のスクリプトやGLSLは自動整形の対象外です。GLSLを編集するときも文ごとの改行と字下げを保ち、`#version`・補間・演算子の意味を変えないようにします。HTMLやCSSの整形は空白の意味が変わり得るため、描画検査も行います。フォーマッターは通常ビルドには使いません。
 
 ## ビルド
 

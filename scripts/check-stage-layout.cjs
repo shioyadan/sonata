@@ -1,8 +1,8 @@
 "use strict";
-const assert=require("node:assert/strict");
+const assert = require("node:assert/strict");
 
-module.exports=async function reviewStageLayout(window){
-    const result=await window.webContents.executeJavaScript(`(()=>{
+module.exports = async function reviewStageLayout(window) {
+    const result = await window.webContents.executeJavaScript(`(()=>{
         const original=sonata.cycle,trace=sonata.trace,grid=sonata.schedulerGrid,layout=sonata.instructionLayout;
         const entries=trace.ops.flatMap(op=>op[6].filter(s=>s[0]==='Rn').map(s=>({id:op[0],start:s[2],end:Math.min(s[3],op[4]?(op[11]??op[3]):op[3])}))).filter(e=>e.start<e.end);
         // 入場の補間が終わった時点から、実トレースで最も多くの命令が滞在する場面を選ぶ。
@@ -43,14 +43,20 @@ module.exports=async function reviewStageLayout(window){
                 gpuMatches:[...grid.rows,...grid.columns].map(matches),rename:{cycle:peak.cycle,expected:peak.entries.length,rendered:pieces.length,slots:layout.rename.length,minimum,overlaps,returned},error:gl.getError()};
         }finally{gl.drawArrays=draw;sonata.captureAt(original);}
     })()`);
-    assert.equal(result.rows,result.capacity,`${result.key}: scheduler row lines do not match capacity`);
-    assert.equal(result.columns,result.capacity,`${result.key}: scheduler column lines do not match capacity`);
-    assert.ok(result.rowAligned,`${result.key}: scheduler lines miss waiting entries`);
-    assert.ok(result.gpuMatches.every(count=>count===1),`${result.key}: scheduler entry lines are missing or duplicated in GPU geometry`);
-    assert.ok(result.rename.expected>0&&result.rename.rendered===result.rename.expected,`${result.key} @ ${result.rename.cycle}: Rn expected ${result.rename.expected}, rendered ${result.rename.rendered}`);
-    assert.ok(result.rename.minimum>.24,`${result.key}: resident Rn instructions overlap`);
-    assert.equal(result.rename.overlaps,0,`${result.key}: Rn slots overlap in another residence interval`);
-    assert.ok(result.rename.returned,`${result.key}: seeking changed Rn positions`);
-    assert.equal(result.error,0);
+    assert.equal(result.rows, result.capacity, `${result.key}: scheduler row lines do not match capacity`);
+    assert.equal(result.columns, result.capacity, `${result.key}: scheduler column lines do not match capacity`);
+    assert.ok(result.rowAligned, `${result.key}: scheduler lines miss waiting entries`);
+    assert.ok(
+        result.gpuMatches.every((count) => count === 1),
+        `${result.key}: scheduler entry lines are missing or duplicated in GPU geometry`
+    );
+    assert.ok(
+        result.rename.expected > 0 && result.rename.rendered === result.rename.expected,
+        `${result.key} @ ${result.rename.cycle}: Rn expected ${result.rename.expected}, rendered ${result.rename.rendered}`
+    );
+    assert.ok(result.rename.minimum > 0.24, `${result.key}: resident Rn instructions overlap`);
+    assert.equal(result.rename.overlaps, 0, `${result.key}: Rn slots overlap in another residence interval`);
+    assert.ok(result.rename.returned, `${result.key}: seeking changed Rn positions`);
+    assert.equal(result.error, 0);
     return result;
 };
