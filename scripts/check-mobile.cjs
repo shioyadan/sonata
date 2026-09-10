@@ -2,7 +2,7 @@
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
-const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const { createBrowserTest, waitFor: waitUntil, delay } = require("./load-test.cjs")("browser-test.cts");
 
 module.exports = async function reviewMobile(window, screenshots, visualStyle = "neon") {
     const js = (source) => window.webContents.executeJavaScript(source);
@@ -14,7 +14,7 @@ module.exports = async function reviewMobile(window, screenshots, visualStyle = 
             path.join(screenshots, `sonata-mobile${visualStyle === "neon" ? "" : "-" + visualStyle}${name}.png`),
             (await window.webContents.capturePage()).toPNG()
         );
-    const settle = () => js("new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))");
+    const { settle } = createBrowserTest(window);
     const layouts = [];
     let result;
     try {
@@ -238,24 +238,28 @@ module.exports = async function reviewMobile(window, screenshots, visualStyle = 
     }
     // ネイティブウィンドウ、viewport、media query の反映を実状態で待つ。
     // 本体の検査が失敗した場合はここへ進まず、後始末の assertion で原因を隠さない。
-    const deadline = Date.now() + 5000;
     let desktop;
-    do {
-        desktop = await js(`({width:innerWidth,height:innerHeight,compact:sonata.camera.compact,
+    await waitUntil(
+        async () => {
+            desktop = await js(`({width:innerWidth,height:innerHeight,compact:sonata.camera.compact,
             sidebarInMain:document.querySelector('main').contains(document.querySelector('.telemetry')),
             panelOpen:document.getElementById('mobile-panel').open,
             focusInClosedPanel:document.getElementById('mobile-panel').contains(document.activeElement)})`);
-        if (
-            desktop.width === 1440 &&
-            desktop.height === 1000 &&
-            !desktop.compact &&
-            desktop.sidebarInMain &&
-            !desktop.panelOpen &&
-            !desktop.focusInClosedPanel
-        ) {
-            return { ...result, desktopRestore: desktop };
+            return (
+                desktop.width === 1440 &&
+                desktop.height === 1000 &&
+                !desktop.compact &&
+                desktop.sidebarInMain &&
+                !desktop.panelOpen &&
+                !desktop.focusInClosedPanel
+            );
+        },
+        "Desktop sidebar did not return after rotation / resize",
+        {
+            timeout: 5000,
+            interval: 60,
+            diagnostics: () => desktop
         }
-        await delay(60);
-    } while (Date.now() < deadline);
-    assert.fail(`Desktop sidebar did not return after rotation / resize: ${JSON.stringify(desktop)}`);
+    );
+    return { ...result, desktopRestore: desktop };
 };

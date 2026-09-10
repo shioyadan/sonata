@@ -2,22 +2,19 @@
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
-const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const { createBrowserTest, waitFor: waitUntil, delay } = require("./load-test.cjs")("browser-test.cts");
 
 module.exports = async function reviewStyles(window, entry, screenshots) {
     const js = (source) => window.webContents.executeJavaScript(source);
-    const settle = () => js("new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))");
-    const waitFor = async (source, message, timeout = 10000) => {
-        const deadline = Date.now() + timeout;
-        do {
-            if (await js(source)) return;
-            await delay(50);
-        } while (Date.now() < deadline);
-        const state = await js(
-            "({camera:globalThis.sonata?.camera,style:globalThis.sonata?.visualStyle,renderer:document.getElementById('renderer-status')?.textContent,hidden:document.hidden})"
-        );
-        assert.fail(`${message}: ${JSON.stringify(state)}`);
-    };
+    const { settle } = createBrowserTest(window);
+    const waitFor = (source, message, timeout = 10000) =>
+        waitUntil(() => js(source), message, {
+            timeout,
+            diagnostics: () =>
+                js(
+                    "({camera:globalThis.sonata?.camera,style:globalThis.sonata?.visualStyle,renderer:document.getElementById('renderer-status')?.textContent,hidden:document.hidden})"
+                )
+        });
     const capture = async (name) => {
         await settle();
         fs.writeFileSync(

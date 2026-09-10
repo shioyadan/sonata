@@ -10,7 +10,7 @@ const assert = require("node:assert/strict");
 app.commandLine.appendSwitch("use-gl", "angle");
 app.commandLine.appendSwitch("use-angle", "swiftshader");
 app.commandLine.appendSwitch("enable-unsafe-swiftshader");
-const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const { createBrowserTest, waitFor: waitUntil, delay } = require("./load-test.cjs")("browser-test.cts");
 const errors = [];
 const root = path.resolve(__dirname, "..");
 const screenshots = path.join(root, "artifacts/screenshots");
@@ -38,18 +38,9 @@ app.whenReady()
         });
         window.webContents.on("preload-error", (_event, _path, error) => errors.push(String(error)));
         const js = (source) => window.webContents.executeJavaScript(source);
-        const settle = async () => {
-            await js("new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))");
-            await js("document.getElementById('scene').getContext('webgl2').finish()");
-        };
-        const waitFor = async (source, message) => {
-            const deadline = Date.now() + 5000;
-            while (Date.now() < deadline) {
-                if (await js(source)) return;
-                await delay(60);
-            }
-            assert.fail(message);
-        };
+        const browserTest = createBrowserTest(window);
+        const settle = () => browserTest.settle({ finish: true });
+        const waitFor = (source, message) => waitUntil(() => js(source), message, { timeout: 5000, interval: 60 });
         await window.loadFile(entry);
         if (process.argv.includes("--styles")) {
             const styles = await require("./check-styles.cjs")(window, entry, screenshots);
@@ -61,7 +52,7 @@ app.whenReady()
             return;
         }
         if (process.argv.includes("--browser")) {
-            const browser = await require("./check-browser.cjs")(window, entry, screenshots);
+            const browser = await require("./load-test.cjs")("check-browser.cts")(window, entry, screenshots);
             assert.deepEqual(errors, []);
             assert.deepEqual(unexpectedRequests, []);
             console.log(JSON.stringify({ browser, errors, externalRequests: unexpectedRequests }, null, 2));
@@ -988,7 +979,7 @@ app.whenReady()
             "Reload did not restore the default animation and playback"
         );
         window.webContents.debugger.detach();
-        const browser = await require("./check-browser.cjs")(window, entry, screenshots);
+        const browser = await require("./load-test.cjs")("check-browser.cts")(window, entry, screenshots);
         const styles = await require("./check-styles.cjs")(window, entry, screenshots);
         assert.deepEqual(errors, [], `Browser errors: ${errors.join("; ")}`);
         assert.deepEqual(unexpectedRequests, [], "The copied HTML tried to fetch another resource");
