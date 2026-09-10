@@ -7,10 +7,11 @@ const delay=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 module.exports=async function reviewStyles(window,entry,screenshots){
     const js=source=>window.webContents.executeJavaScript(source);
     const settle=()=>js("new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))");
-    const waitFor=async(source,message)=>{
-        const deadline=Date.now()+10000;
+    const waitFor=async(source,message,timeout=10000)=>{
+        const deadline=Date.now()+timeout;
         do{if(await js(source))return;await delay(50);}while(Date.now()<deadline);
-        assert.fail(message);
+        const state=await js("({camera:globalThis.sonata?.camera,style:globalThis.sonata?.visualStyle,renderer:document.getElementById('renderer-status')?.textContent,hidden:document.hidden})");
+        assert.fail(`${message}: ${JSON.stringify(state)}`);
     };
     const capture=async name=>{
         await settle();
@@ -117,12 +118,13 @@ module.exports=async function reviewStyles(window,entry,screenshots){
         return {before,after:reviewState()};})()`);
     assert.deepEqual(selected.after,selected.before,"Repeated switching lost the selection or camera target");
     await js("sonata.setCamera('plan')");
-    await waitFor("Math.abs(sonata.camera.elevation-1.49)<.001","Top view did not settle");
+    // 補間に使う dt は1フレーム75msまで。低速な描画でも、精度を保って実際の収束を待つ。
+    await waitFor("Math.abs(sonata.camera.elevation-1.49)<.001","Top view did not settle",30000);
     await capture("blocks-top");
     const cameraShadowUpdates=await js("sonata.renderer.pieceShadows.updates");
     // 全体表示と最大拡大の間で、丸い角・部品の重なり・レジスタ表面を比較できる画像を残す。
     await js("sonata.setCamera('orbit');for(let i=0;i<4;i++)document.getElementById('zoom-in').click()");
-    await waitFor("Math.abs(sonata.camera.radius-sonata.camera.targetRadius)<.01&&Math.abs(sonata.camera.elevation-.73)<.001","Material close-up did not settle");
+    await waitFor("Math.abs(sonata.camera.radius-sonata.camera.targetRadius)<.01&&Math.abs(sonata.camera.elevation-.73)<.001","Material close-up did not settle",30000);
     await capture("blocks-materials");
     assert.equal(await js("sonata.renderer.pieceShadows.updates"),cameraShadowUpdates,"Camera movement unnecessarily regenerated instruction shadows");
     const pieceShadows=await require("./check-piece-shadows.cjs")(window);
@@ -148,7 +150,7 @@ module.exports=async function reviewStyles(window,entry,screenshots){
     assert.ok(posePixels.restored,"Motion effects ON did not restore the trace-derived orientation");
     assert.deepEqual(posePixels.errors,[0,0,0]);
     await js("sonata.setCamera('orbit');for(let i=0;i<30;i++)document.getElementById('zoom-in').click()");
-    await waitFor("sonata.camera.radius<3.01&&Math.abs(sonata.camera.elevation-.73)<.001","Blocks detail zoom did not settle");
+    await waitFor("sonata.camera.radius<3.01&&Math.abs(sonata.camera.elevation-.73)<.001","Blocks detail zoom did not settle",30000);
     await capture("blocks-detail");
     await js("sonata.setCamera('orbit');sonata.captureAt(sonata.trace.firstCycle+2);sonata.setPlaying(true)");
     const running=await js(`(()=>{const before=reviewState();reviewStyle('neon');return {before,after:reviewState()};})()`);
