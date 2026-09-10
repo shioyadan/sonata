@@ -46,6 +46,27 @@ function pageContext() {
 type PageContext = ReturnType<typeof pageContext>;
 type PageFunction<Args extends unknown[], Result> = (page: PageContext, ...args: Args) => Result;
 const delay = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+const expired = Symbol("expired");
+
+// 応答しない Promise も期限で打ち切る。ブラウザ側の処理自体は取り消さない。
+// 同じ deadline を使い、ポーリングや描画の段階ごとに待機時間を延ばさない。
+async function beforeDeadline<T>(operation: () => T | Promise<T>, deadline: number): Promise<T | typeof expired> {
+    const remaining = deadline - performance.now();
+    if (remaining <= 0) return expired;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+        const result = await Promise.race([
+            new Promise<typeof expired>((resolve) => {
+                timer = setTimeout(() => resolve(expired), remaining);
+            }),
+            Promise.resolve().then(operation)
+        ]);
+        // タイマーの配送が遅れても、期限後の成功を受け入れない。
+        return performance.now() < deadline ? result : expired;
+    } finally {
+        clearTimeout(timer);
+    }
+}
 
 async function waitFor(
     condition: () => unknown | Promise<unknown>,
@@ -53,19 +74,34 @@ async function waitFor(
     {
         timeout = 10000,
         interval = 50,
-        diagnostics
+        diagnostics,
+        diagnosticsTimeout = 1000
     }: {
         timeout?: number;
         interval?: number;
         diagnostics?: () => unknown | Promise<unknown>;
+        diagnosticsTimeout?: number;
     } = {}
 ) {
-    const deadline = Date.now() + timeout;
-    do {
-        if (await condition()) return;
-        await delay(interval);
-    } while (Date.now() < deadline);
-    assert.fail(diagnostics ? `${message}: ${JSON.stringify(await diagnostics())}` : message);
+    const deadline = performance.now() + timeout;
+    let failure = message;
+    while (performance.now() < deadline) {
+        const ready = await beforeDeadline(condition, deadline);
+        if (ready === expired) break;
+        if (ready) return;
+        const remaining = deadline - performance.now();
+        if (remaining > 0) await delay(Math.min(interval, remaining));
+    }
+    if (diagnostics) {
+        // 診断の失敗・無応答で、本来の待機失敗を隠さない。
+        try {
+            const state = await beforeDeadline(diagnostics, performance.now() + diagnosticsTimeout);
+            failure += state === expired ? " (diagnostics timed out)" : `: ${JSON.stringify(state)}`;
+        } catch (error) {
+            failure += ` (diagnostics failed: ${error instanceof Error ? error.message : String(error)})`;
+        }
+    }
+    assert.fail(failure);
 }
 
 function createBrowserTest(window: Pick<BrowserWindow, "webContents">) {
@@ -75,11 +111,21 @@ function createBrowserTest(window: Pick<BrowserWindow, "webContents">) {
         const source = `(${fn.toString()})((${pageContext.toString()})(),...${JSON.stringify(args)})`;
         return window.webContents.executeJavaScript(source) as Promise<Awaited<Result>>;
     }
-    async function settle({ finish = false }: { finish?: boolean } = {}) {
-        await evaluate(
-            () => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve())))
+    async function settle({ finish = false, timeout = 10000 }: { finish?: boolean; timeout?: number } = {}) {
+        const deadline = performance.now() + timeout;
+        const frames = await beforeDeadline(
+            () =>
+                evaluate(
+                    () =>
+                        new Promise<void>((resolve) =>
+                            requestAnimationFrame(() => requestAnimationFrame(() => resolve()))
+                        )
+                ),
+            deadline
         );
-        if (finish) await evaluate(({ gl }) => gl.finish());
+        if (frames === expired) assert.fail(`Animation frames did not settle within ${timeout} ms`);
+        if (finish && (await beforeDeadline(() => evaluate(({ gl }) => gl.finish()), deadline)) === expired)
+            assert.fail(`GPU completion did not settle within ${timeout} ms`);
     }
     return { evaluate, settle };
 }
