@@ -83,6 +83,14 @@ for (const [index, sample] of samples.entries()) {
     second.load(sample.key);
     assert.equal(first.replay.ops.length, sample.ops.length);
     assert.ok(first.placement.nodes.size > 0);
+    const registers = first.placement.nodes.get("register-read");
+    if (registers)
+        for (const connection of first.placement.connections.filter((c) => c.from === "register-read"))
+            for (const lane of connection.lanes)
+                assert.ok(
+                    Math.abs(lane.source[2] - registers.z) < registers.d / 2,
+                    `${sample.key}: ${connection.to} port is outside the register housing`
+                );
     const expected = snapshot(first);
     assert.equal(snapshot(second), expected);
     assert.notEqual(first.replay.ops, second.replay.ops);

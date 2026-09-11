@@ -480,8 +480,11 @@ function createScene({ gpu, replay, session }: SceneOptions) {
         // 駒を縮めずに置けるよう、待機列の行間と筐体の奥行きを確保する。
         scheduler.matrixDepth = Math.max(scheduler.w * 0.68, replay.trace.structure.queueCapacity * 0.14);
         scheduler.d = Math.max(scheduler.d, scheduler.matrixDepth / 0.84);
+        // STORE より下で LOAD と LOAD WAIT をまとめる。再生側の経路順は変更しない。
+        const order = ["exec-integer", "exec-branch", "exec-store", "exec-load", "exec-memory"];
+        const units = [...replay.memory.executionNodes].sort((a, b) => order.indexOf(a.id) - order.indexOf(b.id));
         let executionEdge = -5.725;
-        for (const n of replay.memory.executionNodes) {
+        for (const n of units) {
             const memory = n.kind === "memory";
             const latency = n.latency;
             const width = 0.78 + 1.17 * latency;
@@ -570,20 +573,27 @@ function createScene({ gpu, replay, session }: SceneOptions) {
             session.style.palette.integer,
             `${replay.trace.retireWidth} SLOTS / CYCLE`
         );
-        if (hasRegisters)
+        if (hasRegisters) {
+            // 実行 pipe を並べ替えても、レジスタ側の端子を筐体内に収める。
+            const ports = [...scene.nodes.values()]
+                .filter((n) => n.pipeCount)
+                .flatMap((n) => [executionLane(n, 0).inlet[2], executionLane(n, n.pipeCount! - 1).inlet[2]]);
+            const minZ = Math.min(-5.65, ...ports.map((z) => z - 0.35)),
+                maxZ = Math.max(5.65, ...ports.map((z) => z + 0.35));
             makeNode(
                 "register-read",
                 "PHYSICAL REGISTERS",
                 -1.65,
-                0,
+                (minZ + maxZ) / 2,
                 2.2,
-                11.3,
+                maxZ - minZ,
                 0.4,
                 session.style.palette.blue,
                 replay.trace.evidence!.registers!.origin === "gem5"
                     ? `${replay.registerTags.length} INT · ${replay.trace.evidence!.registers!.kind === "configuration" ? "CONFIG ONLY" : "RECORDED ACCESSES"}`
                     : `${replay.registerTags.length} OBSERVED · READ AT Rr`
             );
+        }
         front.slice(1).forEach((n, i) => addConnection(front[i].id, n.id, scene.nodes.get(front[i].id)!.color));
         addConnection(front.at(-1)!.id, "issue", session.style.palette.integer);
         if (hasRegisters) addConnection("issue", "register-read", session.style.palette.blue);
