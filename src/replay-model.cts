@@ -14,6 +14,7 @@ interface StageRange {
     names: string[];
     displaySlot?: number;
     entryCycles?: number;
+    waiting?: boolean;
 }
 interface Instruction {
     id: number;

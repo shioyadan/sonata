@@ -38,6 +38,7 @@ interface SceneNode {
     pipeCount?: number;
     compact?: boolean;
     latency?: number;
+    waitingDepth?: number;
     matrixDepth?: number;
     mapWords?: number;
     instructionSlots?: number;
@@ -143,11 +144,12 @@ function createScene({ gpu, replay, session }: SceneOptions) {
         transferProfile: ReturnType<typeof sonataReplay.measureTransfers>;
     } = { nodes: new Map(), connections: [], transferProfile: new Map() };
     function executionLane(
-        node: Pick<SceneNode, "x" | "z" | "h" | "w" | "d" | "pipeCount">,
+        node: Pick<SceneNode, "x" | "z" | "h" | "w" | "d" | "pipeCount" | "waitingDepth">,
         index: number
     ): { inlet: Vector; outlet: Vector; radius: number } {
-        const pitch = Math.min(0.72, (node.d - 0.65) / node.pipeCount!),
-            z = node.z + (index - (node.pipeCount! - 1) / 2) * pitch;
+        const waitingDepth = node.waitingDepth ?? 0,
+            pitch = Math.min(0.72, (node.d - waitingDepth - 0.65) / node.pipeCount!),
+            z = node.z - waitingDepth / 2 + (index - (node.pipeCount! - 1) / 2) * pitch;
         const y = node.h + 0.34,
             half = (node.w - 0.78) / 2;
         return { inlet: [node.x - half, y, z], outlet: [node.x + half, y, z], radius: Math.min(0.19, pitch * 0.31) };
@@ -189,15 +191,14 @@ function createScene({ gpu, replay, session }: SceneOptions) {
         // 並列幅はモジュールのラベルと同じ情報から決める。抜粋内で実際に使う
         // 管路はこれより少ない場合があるため、観測ピークは別の診断値に保持する。
         const execution = scene.nodes.get(from)?.pipeCount ?? scene.nodes.get(to)?.pipeCount;
-        const memoryPath = [from, to].some((id) => id === "memory-wait" || id === "store-wait");
+        const memoryPath = from === "memory-wait" || to === "memory-wait";
         const retiring = from === "commit" || to === "commit";
         const count =
             from === "issue" && to === "register-read"
                 ? replay.memory.executionNodes.reduce((sum, n) => sum + n.pipeCount, 0)
                 : (execution ??
                   (memoryPath
-                      ? (scene.nodes.get(from === "store-wait" || to === "store-wait" ? "exec-store" : "exec-load")
-                            ?.pipeCount ?? 1)
+                      ? (scene.nodes.get("exec-load")?.pipeCount ?? 1)
                       : retiring
                         ? replay.trace.retireWidth
                         : to === "issue"
@@ -325,6 +326,12 @@ function createScene({ gpu, replay, session }: SceneOptions) {
 
     function memoryWaitPosition(id: string, slot: number): Vector {
         const n = scene.nodes.get(id)!;
+        if (id === "exec-store") {
+            // 管路の横に退避し、通過中の命令と重ならず筐体内の出口付近で待つ。
+            // 表示位置の数は物理SQの容量を表さない。
+            const outlet = executionLane(n, n.pipeCount! - 1).outlet;
+            return [outlet[0] + 0.12, n.h + 0.34, outlet[2] + 0.5 + slot * 0.32];
+        }
         const columns = 3,
             rows = Math.max(1, Math.floor((n.d - 0.4) / 0.3));
         return [
@@ -478,7 +485,8 @@ function createScene({ gpu, replay, session }: SceneOptions) {
             const memory = n.kind === "memory";
             const latency = n.latency;
             const width = 0.78 + 1.17 * latency;
-            const depth = memory ? Math.max(1.25, n.pipeCount * 0.38 + 0.65) : 3.05;
+            const waitingDepth = n.id === "exec-store" ? replay.memory.waitSlots.store * 0.32 : 0;
+            const depth = (memory ? Math.max(1.25, n.pipeCount * 0.38 + 0.65) : 3.05) + waitingDepth;
             const z =
                 n.id === "exec-integer"
                     ? -4.2
@@ -513,29 +521,23 @@ function createScene({ gpu, replay, session }: SceneOptions) {
             node.pipeCount = n.pipeCount;
             node.compact = latency <= 1;
             node.latency = latency;
+            node.waitingDepth = waitingDepth;
         }
-        for (const [id, execution, label, slots] of [
-            ["memory-wait", "exec-load", "LOAD WAIT", replay.memory.waitSlots.load],
-            ["store-wait", "exec-store", "STORE WAIT", replay.memory.waitSlots.store]
-        ] as const) {
-            const pipe = scene.nodes.get(execution);
-            if (!pipe || (!slots && id === "memory-wait")) continue;
+        const load = scene.nodes.get("exec-load"),
+            slots = replay.memory.waitSlots.load;
+        if (load && slots) {
             const width = 1.15,
-                depth = Math.max(1.25, Math.ceil(Math.max(1, slots) / 3) * 0.3 + 0.4);
+                depth = Math.max(1.25, Math.ceil(slots / 3) * 0.3 + 0.4);
             makeNode(
-                id,
-                label,
-                pipe.x + pipe.w / 2 + width / 2 + 0.24,
-                pipe.z,
+                "memory-wait",
+                "LOAD WAIT",
+                load.x + load.w / 2 + width / 2 + 0.24,
+                load.z,
                 width,
                 depth,
                 0.5,
                 session.style.palette.memory,
-                id === "store-wait"
-                    ? replay.trace.storeCompletions?.length
-                        ? "RINGS: POST-COMMIT WRITES"
-                        : "WRITE COMPLETION NOT LOGGED"
-                    : "INFERRED RESPONSE WAIT"
+                "INFERRED RESPONSE WAIT"
             );
         }
         // 左端を保って右へ広げ、メモリ待ちからの接続線が逆向きになるのを避ける。
@@ -543,7 +545,7 @@ function createScene({ gpu, replay, session }: SceneOptions) {
         const robLeft = Math.max(
             5.575,
             ...[...scene.nodes.values()]
-                .filter((n) => n.id.startsWith("exec") || n.id === "memory-wait" || n.id === "store-wait")
+                .filter((n) => n.id.startsWith("exec") || n.id === "memory-wait")
                 .map((n) => n.x + n.w / 2 + 0.3)
         );
         makeNode(
@@ -589,14 +591,9 @@ function createScene({ gpu, replay, session }: SceneOptions) {
             addConnection(hasRegisters ? "register-read" : "issue", n.id, session.style.palette[n.kind]);
             addConnection(n.id, "rob", session.style.palette[n.kind]);
         }
-        for (const [execution, wait] of [
-            ["exec-load", "memory-wait"],
-            ["exec-store", "store-wait"]
-        ]) {
-            if (!scene.nodes.has(wait)) continue;
-            addConnection(execution, wait, session.style.palette.memory);
-            if (wait === "memory-wait" || replay.ops.some((op) => op.stages.some((s) => s.node === wait)))
-                addConnection(wait, "rob", session.style.palette.memory);
+        if (scene.nodes.has("memory-wait")) {
+            addConnection("exec-load", "memory-wait", session.style.palette.memory);
+            addConnection("memory-wait", "rob", session.style.palette.memory);
         }
         addConnection("rob", "commit", session.style.palette.integer);
         addConnection("input", front[0].id, session.style.palette.integer);
@@ -1364,8 +1361,7 @@ function createScene({ gpu, replay, session }: SceneOptions) {
         for (const n of scene.nodes.values()) {
             const el = document.createElement("div");
             el.className = `stage-label${n.id.startsWith("front") ? " front-label" : ""}${n.id.startsWith("exec") ? " execution-label" : ""}`;
-            if (["exec-load", "exec-store", "memory-wait", "store-wait"].includes(n.id))
-                el.classList.add("memory-label");
+            if (["exec-load", "exec-store", "memory-wait"].includes(n.id)) el.classList.add("memory-label");
             el.style.setProperty("--stage-color", rgb(n.color));
             const index = document.createElement("span");
             index.className = "stage-index";

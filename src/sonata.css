@@ -721,6 +721,12 @@ main {
     box-shadow: 0 0 8px #71f5db80;
 }
 
+.op-write {
+    margin: 8px 0;
+    color: var(--muted);
+    font: 9px/1.5 monospace;
+}
+
 .spotlight-bottom {
     display: flex;
     align-items: center;

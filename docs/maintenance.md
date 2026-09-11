@@ -95,4 +95,5 @@ Neon / Blocks の切り替えは描画の変更に限定し、トレースを読
 - メモリ命令を一つの固定長 pipe に正規化しない。短い STORE と長い LOAD の速度差が過大になるため、経路を分け、正常アクセスの最短時間に比例した長さと超過分の静止待機を使う。RSD の Is / Rr / X 再試行と completion は保持する。
 - 分類は `src/memory.cts` を抽出器と再生側で共有する。`sb` の前方一致では ARM `sbfm` まで STORE になるため、短い命令名には完全一致を使う。
 - `storeCompletions` は optional な独立記録。既存の短い実行時間や retire から推測せず、gem5 の `Store Tick` を fetch tick / cycle の対応で校正する。0、欠落、squash、未retire、排他的 store / RMW は通常ストアの完了値にしない。
-- `scripts/check-memory.cjs` は速度、静止、再試行、途中終了、配置、時刻保持を検査する。`check-store-evidence.cjs` は実parserを通した小さなfixtureで校正と未観測を検査する。描画検査の `check-memory-render.cjs` はコミット前後・記録された完了・逆シークで書込み待ちの輪と ROB を確認する。
+- STORE の実行待機は `exec-store` の `waiting` 区間とし、筐体内の出口へ配置する。RSD には6命令同時待機があるため1点へ重ねない。待機位置への移動で物理レジスタへ戻らず、管路の通過速度・長さを保つ。コミット後の記録は詳細表示へ置き、独立した台・輪・表示スロットを作らない。
+- `scripts/check-memory.cjs` は速度、静止、再試行、途中終了、配置、時刻保持を検査する。`check-store-evidence.cjs` は実parserを通した小さなfixtureで校正と未観測を検査する。描画検査の `check-memory-render.cjs` はコミット前後・記録された完了・逆シークで命令詳細と ROB、STORE出口の同時待機を確認する。

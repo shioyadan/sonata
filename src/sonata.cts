@@ -406,7 +406,7 @@ function start(gl: WebGL2RenderingContext) {
         for (const n of scene.nodes.values()) {
             const memoryPipe = n.id === "exec-load" || n.id === "exec-store";
             const side = n.id.startsWith("exec") && !memoryPipe,
-                below = n.id === "memory-wait" || n.id === "store-wait" || (n.id === "issue" && n.d > 6);
+                below = n.id === "issue" && n.d > 6;
             const p = camera.project(
                 below
                     ? [n.x, n.h, n.z + n.d * 0.7]
@@ -416,14 +416,7 @@ function start(gl: WebGL2RenderingContext) {
                         ? [n.x + n.w / 2 + 0.5, n.h + 0.6, n.z]
                         : [n.x, n.h + 0.7, n.z - n.d * 0.52]
             );
-            // 右下の計測表示に重ならないよう、ストア待機の名前を左へ寄せる。
-            const alignment = below
-                ? n.id === "store-wait"
-                    ? "-90%,8px"
-                    : "-50%,8px"
-                : side
-                  ? "0,-50%"
-                  : "-50%,-100%";
+            const alignment = below ? "-50%,8px" : side ? "0,-50%" : "-50%,-100%";
             n.element!.style.transform = `translate(${p[0].toFixed(1)}px,${p[1].toFixed(1)}px) translate(${alignment})`;
             n.element!.classList.toggle("below-label", below);
             n.element!.style.display = p[2] < 0 ? "none" : "";
@@ -665,6 +658,21 @@ function start(gl: WebGL2RenderingContext) {
             candidates[Math.floor(session.cycle / 5) % Math.max(1, candidates.length)] ||
             activity.frame.stats.active.at(-1);
         $("unpin").hidden = session.selectedID === null;
+        const write = $("op-write");
+        write.hidden = op?.memoryKind !== "store";
+        write.textContent = "";
+        if (op?.memoryKind === "store") {
+            const completion = replay.trace.storeCompletions?.find(([id]) => id === op.id)?.[1];
+            // 完了時刻は到達後に表示し、コミット前から書込み待ちや完了を先取りしない。
+            write.textContent =
+                completion == null || op.flush
+                    ? "WRITE COMPLETION · NOT LOGGED"
+                    : session.cycle < op.end
+                      ? "WRITE · AWAITING COMMIT"
+                      : session.cycle < completion
+                        ? "WRITE · PENDING"
+                        : `WRITE · COMPLETE @ ${completion}`;
+        }
         if (op) {
             const stage = paths.stageAt(op, session.cycle),
                 stageIndex = op.stages.indexOf(stage as sonataReplay.Stage);
@@ -678,7 +686,9 @@ function start(gl: WebGL2RenderingContext) {
                       ? op.flush
                           ? "SQUASHED"
                           : "COMMITTED"
-                      : scene.nodes.get(stage?.node!)?.label || "IN FLIGHT";
+                      : stage?.waiting
+                        ? "STORE · WAIT ≈"
+                        : scene.nodes.get(stage?.node!)?.label || "IN FLIGHT";
             $("op-state").textContent = selected ? "Pinned instruction" : "Click an instruction to pin";
             $("spotlight").style.borderLeftColor = rgb(
                 op.flush && session.cycle >= op.end
@@ -862,7 +872,9 @@ function start(gl: WebGL2RenderingContext) {
                 return { minimum: replay.memory.minimum, sharedPipes: replay.memory.sharedPipes };
             },
             get pendingStores() {
-                return activity.pendingStores;
+                return replay.memory.pendingStores
+                    .filter((store) => session.cycle >= store.start && session.cycle < store.end)
+                    .map(({ id, start, end }) => ({ id, start, end }));
             },
             get executionPipes() {
                 return [...scene.nodes.values()]

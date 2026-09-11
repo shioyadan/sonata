@@ -11,6 +11,7 @@ interface PathStage {
     end: number;
     displaySlot?: number;
     entryCycles?: number;
+    waiting?: boolean;
 }
 interface PathOperation {
     id: number;
@@ -460,10 +461,12 @@ function stageAt<T extends PathOperation>(op: T, t: number): T["stages"][number]
     }
     return last;
 }
-function stageTransition(stage: Pick<PathStage, "node" | "start" | "end" | "entryCycles">) {
+function stageTransition(stage: Pick<PathStage, "node" | "start" | "end" | "entryCycles" | "waiting">) {
     if (stage.entryCycles != null) return stage.entryCycles;
     const duration = Math.max(0.001, stage.end - stage.start);
-    return stage.node.startsWith("exec") ? Math.min(0.35, duration * 0.22) : Math.min(0.82, Math.max(0.08, duration));
+    return stage.node.startsWith("exec") && !stage.waiting
+        ? Math.min(0.35, duration * 0.22)
+        : Math.min(0.82, Math.max(0.08, duration));
 }
 // 生成は loadTrace 前でもよい。経路の参照前にトレースと配置、接地計算前に setGround を準備する。
 function createPaths<T extends PathOperation>({
@@ -489,7 +492,7 @@ function createPaths<T extends PathOperation>({
             return [mix(n.x - n.w * 0.44, p[0], progress), p[1], p[2]];
         } else if (n.id === "rob" || (n.id === "commit" && op.robSlot !== undefined)) {
             return scene.robCell(op.robSlot ?? 0, 0.19);
-        } else if (n.id === "memory-wait" || n.id === "store-wait") {
+        } else if (n.id === "memory-wait" || stage.waiting) {
             return scene.memoryWaitPosition(n.id, stage.displaySlot ?? 0);
         } else if (n.id.startsWith("exec")) {
             const lane = scene.executionLane(n, (op.pipeLane ?? op.index) % n.pipeCount!),
@@ -543,10 +546,21 @@ function createPaths<T extends PathOperation>({
         const index = op.stages.indexOf(stage),
             previous = op.stages[index - 1];
         const source: Vec3 = previous ? location(op, previous, previous.end - 0.001) : [-15.5, 0.8, target[2]];
+        if (stage.waiting && previous?.node === stage.node) {
+            // 待機列の手前を通り、先に待っている命令を横切らずに各位置へ入る。
+            const corridor = target[0] - 0.4,
+                a: Vec3 = [corridor, source[1], source[2]],
+                b: Vec3 = [corridor, target[1], target[2]];
+            return progress < 0.2
+                ? (source.map((v, i) => mix(v, a[i], smooth(progress / 0.2))) as Vec3)
+                : progress < 0.8
+                  ? (a.map((v, i) => mix(v, b[i], smooth((progress - 0.2) / 0.6))) as Vec3)
+                  : (b.map((v, i) => mix(v, target[i], smooth((progress - 0.8) / 0.2))) as Vec3);
+        }
         if (previous?.node === "issue") {
             const exit = scene.issueRowExit(op.issueSlot ?? 0),
                 port =
-                    scene.nodes.has("register-read") && stage.node.startsWith("exec")
+                    scene.nodes.has("register-read") && stage.node.startsWith("exec") && !stage.waiting
                         ? scene.registerReadPort(op)
                         : target;
             if (progress < 0.48) return source.map((v, i) => mix(v, exit[i], smooth(progress / 0.48))) as Vec3;
@@ -555,7 +569,12 @@ function createPaths<T extends PathOperation>({
                 ? route(exit, port, smooth((progress - 0.48) / 0.32))
                 : route(port, target, smooth((progress - 0.8) / 0.2));
         }
-        if (scene.nodes.has("register-read") && stage.node.startsWith("exec") && previous?.node !== "register-read") {
+        if (
+            scene.nodes.has("register-read") &&
+            stage.node.startsWith("exec") &&
+            !stage.waiting &&
+            previous?.node !== "register-read"
+        ) {
             const port = scene.registerReadPort(op);
             return progress < 0.65
                 ? route(source, port, smooth(progress / 0.65))
@@ -589,10 +608,11 @@ function createPaths<T extends PathOperation>({
         t: number
     ): { state: InstructionState; brightness: number; size: number } {
         if (t >= op.end) return { state: op.flush ? "squashed" : "retiring", brightness: 1.2, size: 28 };
-        const node = stageAt(op, t)?.node;
+        const stage = stageAt(op, t),
+            node = stage?.node;
         if (node === "register-read") return { state: "reading", brightness: 1.05, size: 25 };
         if (node === "issue") return { state: "waiting", brightness: 0.48, size: 20 };
-        if (node === "memory-wait" || node === "store-wait") return { state: "waiting", brightness: 0.22, size: 14 };
+        if (node === "memory-wait" || stage?.waiting) return { state: "waiting", brightness: 0.22, size: 14 };
         if (node === "rob" || node === "commit") {
             const ready = op.completion != null && t >= op.completion;
             const completion = ready ? 1 - smooth((t - op.completion!) / 0.7) : 0;

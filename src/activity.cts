@@ -45,7 +45,6 @@ interface FrameState {
 interface ActivityState {
     readonly frame: FrameState;
     visiblePieces: geometry.Pose[];
-    pendingStores: { id: number; start: number; end: number; position: Vector }[];
     visibleParticles: {
         op: Operation;
         position: Vector;
@@ -119,7 +118,6 @@ function createActivity({ camera, clock, scene, gpu, paths, replay, session }: A
             return frame;
         },
         visiblePieces: [],
-        pendingStores: [],
         visibleParticles: [],
         activeBranches: [],
         activeNotifications: [],
@@ -140,19 +138,6 @@ function createActivity({ camera, clock, scene, gpu, paths, replay, session }: A
         };
         activity.visibleParticles = [];
         activity.visiblePieces = [];
-        activity.pendingStores = replay.memory.pendingStores
-            .filter((store) => session.cycle >= store.start && session.cycle < store.end)
-            .map((store) => {
-                const position = scene.memoryWaitPosition("store-wait", store.slot);
-                position[1] = scene.nodes.get("store-wait")!.h + 0.025;
-                return { id: store.id, start: store.start, end: store.end, position };
-            });
-        // 命令は COMMIT へ進め、記録のある未完了書き込みだけを別の輪で残す。
-        for (const store of activity.pendingStores) {
-            const [x, y, z] = store.position;
-            scene.ring(lines, x, y, z, 0.1, session.style.palette.memory, 0.95, 0, TAU, 20);
-            scene.point(points, store.position, session.style.palette.memory, 5, 0.8);
-        }
         activity.activeBranches = replay.branchRecoveries.filter(
             (e) => session.cycle >= e.cycle && session.cycle < e.until && paths.positionAt(e.op, session.cycle)
         );
@@ -178,7 +163,7 @@ function createActivity({ camera, clock, scene, gpu, paths, replay, session }: A
             if (!s) continue;
             activeNodes.set(s.node, (activeNodes.get(s.node) || 0) + 1);
             const n = scene.nodes.get(s.node)!;
-            if (n?.pipeCount) {
+            if (n?.pipeCount && !s.waiting) {
                 const key = `${n.id}:${(op.pipeLane ?? op.index) % n.pipeCount}`;
                 activeLanes.set(key, (activeLanes.get(key) || 0) + 1);
             }

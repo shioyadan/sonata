@@ -160,7 +160,7 @@ app.whenReady()
                     const counts=new Map();for(const op of sonata.ops){
                         const stages=trace.structure.registerRead?op.stages.filter(s=>s.node.startsWith('exec')):[op.stages.find(s=>s.node.startsWith('exec'))];
                         for(const s of stages){
-                        if(s?.node===node.id&&s.start<op.end&&s.start>=trace.firstCycle&&s.start<trace.lastCycle+1&&op.allocation!=null){
+                        if(s?.node===node.id&&!s.waiting&&s.start<op.end&&s.start>=trace.firstCycle&&s.start<trace.lastCycle+1&&op.allocation!=null){
                             const c=Math.floor(s.start);counts.set(c,(counts.get(c)||0)+1);
                         }}
                     }
@@ -169,9 +169,9 @@ app.whenReady()
             const pipeCount=pipes.length===sonata.executionNodes.reduce((sum,n)=>sum+n.pipeCount,0);
             const pipeAxes=pipes.every(p=>p.outlet[0]>p.inlet[0] && p.outlet[1]===p.inlet[1] && p.outlet[2]===p.inlet[2]);
             const pipeMotion=sonata.executionNodes.every(node=>{
-                const op=sonata.ops.find(o=>o.stages.some(s=>s.node===node.id && s.start>=trace.firstCycle && s.end<=trace.lastCycle && s.end>s.start));
+                const op=sonata.ops.find(o=>o.stages.some(s=>s.node===node.id && !s.waiting && s.start>=trace.firstCycle && s.end<=trace.lastCycle && s.end>s.start));
                 if(!op)return false;
-                const stage=op.stages.find(s=>s.node===node.id && s.start>=trace.firstCycle && s.end<=trace.lastCycle && s.end>s.start);
+                const stage=op.stages.find(s=>s.node===node.id && !s.waiting && s.start>=trace.firstCycle && s.end<=trace.lastCycle && s.end>s.start);
                 const lane=pipes.find(p=>p.node===node.id && p.index===(op.pipeLane??op.index)%node.pipeCount);
                 const positions=[.3,.6,.9].map(f=>{
                     sonata.captureAt(stage.start+(stage.end-stage.start)*f);
@@ -182,10 +182,11 @@ app.whenReady()
                     && Math.abs(p[1]-lane.inlet[1])<1e-6 && Math.abs(p[2]-lane.inlet[2])<1e-6)
                     && positions[0][0]<positions[1][0] && positions[1][0]<positions[2][0];
             });
-            const lightContrast=['issue','memory-wait','store-wait'].every(node=>{
-                const op=sonata.ops.find(o=>o.stages.some(s=>s.node===node && s.start>=trace.firstCycle && s.end<=trace.lastCycle && s.end>s.start));
+            const lightContrast=['issue','memory-wait','exec-store'].every(node=>{
+                const matches=s=>s.node===node && (node!=='exec-store'||s.waiting) && s.start>=trace.firstCycle && s.end<=trace.lastCycle && s.end>s.start;
+                const op=sonata.ops.find(o=>o.stages.some(matches));
                 if(!op)return true;
-                const stage=op.stages.find(s=>s.node===node && s.start>=trace.firstCycle && s.end<=trace.lastCycle && s.end>s.start);
+                const stage=op.stages.find(matches);
                 sonata.captureAt((stage.start+stage.end)/2);
                 const particle=sonata.particles.find(p=>p.id===op.id);
                 return particle?.state==='waiting' && (node==='issue'?particle.brightness>=.4&&particle.brightness<=.6:particle.brightness<.35);

@@ -59,7 +59,11 @@ function prepareMemory(ops: Operation[], trace: replayModel.Trace) {
     for (const [op, groups] of accesses) {
         const base = minimum[op.memoryKind as AccessKind];
         if (op.memoryKind === "store")
-            for (const stage of op.stages) if (stage.node === "memory-wait") stage.node = "store-wait";
+            for (const stage of op.stages)
+                if (stage.node === "memory-wait") {
+                    stage.node = "exec-store";
+                    stage.waiting = true;
+                }
         if (base == null) continue;
         for (const group of groups) {
             const duration = Math.min(base, group.end - group.start);
@@ -69,12 +73,17 @@ function prepareMemory(ops: Operation[], trace: replayModel.Trace) {
                     ...first,
                     end: group.start + duration,
                     entryCycles: Math.min(duration, base * 0.22),
-                    names: [...new Set(group.stages.filter((s) => s.node === first.node).flatMap((s) => s.names))]
+                    names: [
+                        ...new Set(
+                            group.stages.filter((s) => s.node === first.node && !s.waiting).flatMap((s) => s.names)
+                        )
+                    ]
                 }
             ];
             if (group.end > group.start + duration + 1e-9) {
                 replacement.push({
-                    node: op.memoryKind === "load" ? "memory-wait" : "store-wait",
+                    node: op.memoryKind === "load" ? "memory-wait" : "exec-store",
+                    ...(op.memoryKind === "store" ? { waiting: true } : {}),
                     start: group.start + duration,
                     end: group.end,
                     names: [...new Set(group.stages.flatMap((s) => s.names))]
@@ -84,11 +93,11 @@ function prepareMemory(ops: Operation[], trace: replayModel.Trace) {
             op.stages.splice(index, group.stages.length, ...replacement);
         }
     }
-    // 待機の印は物理SQの番号ではなく、同時に見せるアクセスへ割り当てる表示位置。
+    // 待機位置は物理SQの番号ではなく、同時に見せる命令へ割り当てる表示位置。
     const waits = ops.flatMap((op) =>
-        op.stages.filter((s) => s.node === "memory-wait" || s.node === "store-wait").map((stage) => ({ op, stage }))
+        op.stages.filter((s) => s.node === "memory-wait" || s.waiting).map((stage) => ({ op, stage }))
     );
-    const ends: Record<string, number[]> = { "memory-wait": [], "store-wait": [] };
+    const ends: Record<string, number[]> = { "memory-wait": [], "exec-store": [] };
     for (const { op, stage } of waits.sort((a, b) => a.stage.start - b.stage.start || a.op.id - b.op.id)) {
         const slots = ends[stage.node];
         let slot = slots.findIndex((end) => end <= stage.start);
@@ -141,17 +150,10 @@ function prepareMemory(ops: Operation[], trace: replayModel.Trace) {
         .flatMap((op) => {
             const complete = storeTimes.get(op.id);
             return op.memoryKind === "store" && !op.flush && complete != null && complete > op.end
-                ? [{ op, id: op.id, start: op.end, end: complete, slot: 0 }]
+                ? [{ op, id: op.id, start: op.end, end: complete }]
                 : [];
         })
         .sort((a, b) => a.start - b.start || a.id - b.id);
-    const pendingEnds: number[] = [];
-    for (const store of pendingStores) {
-        let slot = pendingEnds.findIndex((end) => end <= store.start);
-        if (slot < 0) slot = pendingEnds.length;
-        store.slot = ends["store-wait"].length + slot;
-        pendingEnds[slot] = store.end;
-    }
     return {
         minimum,
         sharedPipes,
@@ -159,7 +161,7 @@ function prepareMemory(ops: Operation[], trace: replayModel.Trace) {
         pendingStores,
         waitSlots: {
             load: ends["memory-wait"].length,
-            store: ends["store-wait"].length + pendingEnds.length
+            store: ends["exec-store"].length
         }
     };
 }

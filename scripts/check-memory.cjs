@@ -114,9 +114,26 @@ assert.deepEqual(
     [{ id: 3, start: 22, end: 23.006 }]
 );
 assert.equal(op(3).end, 22, "Pending writes delayed instruction commit");
+assert.equal(replay.memory.waitSlots.store, 0, "Post-commit records reserved visible store slots");
 const unknown = setup({ ...trace, ops: [operation(1, "ldr x0, [x1]", null)], storeCompletions: undefined });
 assert.equal(unknown.replay.memory.minimum.load, null);
 assert.deepEqual(unknown.replay.memory.pendingStores, []);
+// 実行開始が抜粋にない待機を、レジスタ読み出しや新しい実行として補完しない。
+const partial = setup({
+    ...samples.find((s) => s.key === "memory-tide"),
+    ops: [
+        operation(20, "sw x1, 0(x2)", null, {
+            stages: [
+                ["Is", "issue", 5, 6],
+                ["Mc", "memory-wait", 6, 22]
+            ]
+        })
+    ],
+    storeCompletions: undefined
+});
+assert.ok(partial.scene.nodes.has("register-read"));
+partial.scene.registerReadPort = () => assert.fail("Partial store wait invented a register read");
+assert.ok(partial.paths.positionAt(partial.replay.ops[0], 6.6).every(Number.isFinite));
 for (const label of ["str x0, [x1]", "amoadd.w x0, x1, (x2)"]) {
     const { replay, scene, paths } = setup({
         ...trace,
@@ -150,7 +167,7 @@ for (const sample of samples) {
         }
     const launches = new Map();
     for (const o of replay.ops) {
-        for (const stage of o.stages.filter((s) => s.node === "exec-load" || s.node === "exec-store")) {
+        for (const stage of o.stages.filter((s) => (s.node === "exec-load" || s.node === "exec-store") && !s.waiting)) {
             const key = `${stage.node}:${stage.start}`;
             const lanes = launches.get(key) ?? new Set();
             assert.ok(!lanes.has(o.pipeLane), `${sample.key}: coincident memory launch ${key}`);
@@ -161,9 +178,45 @@ for (const sample of samples) {
         assert.equal(o.issue, raw[8]);
         assert.equal(o.completion, raw[9]);
         assert.equal(o.end, raw[4] ? (raw[11] ?? raw[3]) : raw[3]);
-        for (const s of o.stages.filter((s) => s.node === "memory-wait" || s.node === "store-wait")) {
+        for (const s of o.stages.filter((s) => s.node === "memory-wait" || s.waiting)) {
             if (s.end - s.start > 2)
                 assert.deepEqual(paths.positionAt(o, s.start + 1), paths.positionAt(o, s.end - 0.01));
+        }
+    }
+    assert.ok(!scene.nodes.has("store-wait"), `${sample.key}: separate STORE WAIT platform remained`);
+    assert.ok(scene.connections.every((c) => c.from !== "store-wait" && c.to !== "store-wait"));
+    const stores = replay.ops.flatMap((o) => o.stages.filter((s) => s.waiting).map((s) => ({ op: o, stage: s })));
+    if (sample.key === "memory-tide") {
+        const simultaneous = stores.filter(({ stage: s }) => s.start <= 3970 && s.end > 3970);
+        assert.equal(simultaneous.length, 6, "RSD concurrent store waits were lost");
+    }
+    for (const { op: o, stage: s } of stores) {
+        assert.equal(s.node, "exec-store");
+        const n = scene.nodes.get(s.node),
+            position = scene.memoryWaitPosition(s.node, s.displaySlot),
+            outlet = scene.executionLane(n, o.pipeLane).outlet;
+        assert.ok(Math.abs(position[0] - outlet[0]) <= 0.21, "Store wait left the outlet area");
+        assert.ok(Math.abs(position[0] - n.x) + 0.12 < n.w / 2, "Store wait left the housing width");
+        assert.ok(Math.abs(position[2] - n.z) + 0.12 < n.d / 2, "Store wait left the housing depth");
+        assert.equal(paths.instructionLight(o, s.start).state, "waiting");
+        // 筐体内で待機位置へ移るとき、物理レジスタを経由して逆戻りしない。
+        for (let i = 0; i <= 32; i++) {
+            const cycle = s.start + (Math.min(0.82, s.end - s.start - 0.001) * i) / 32,
+                p = paths.positionAt(o, cycle);
+            assert.ok(p[0] > n.x && p[0] + 0.12 < n.x + n.w / 2, "Waiting store left the outlet half of the housing");
+            for (const other of stores) {
+                if (other.op === o || other.stage.start > cycle || other.stage.end <= cycle) continue;
+                const q = paths.positionAt(other.op, cycle);
+                assert.ok(
+                    Math.hypot(p[0] - q[0], p[2] - q[2]) >= 0.24,
+                    `Store #${o.id} crossed #${other.op.id} at ${cycle}`
+                );
+            }
+        }
+        for (const other of stores) {
+            if (other.stage === s || other.stage.end <= s.start || s.end <= other.stage.start) continue;
+            const p = scene.memoryWaitPosition(other.stage.node, other.stage.displaySlot);
+            assert.ok(Math.hypot(position[0] - p[0], position[2] - p[2]) >= 0.3, "Concurrent store waits overlap");
         }
     }
     for (const link of scene.connections)
