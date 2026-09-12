@@ -46,7 +46,6 @@ interface SceneNode {
     pipeCount?: number;
     compact?: boolean;
     latency?: number;
-    waitingDepth?: number;
     matrixDepth?: number;
     mapWords?: number;
     instructionSlots?: number;
@@ -178,12 +177,11 @@ function createScene({ gpu, replay, session }: SceneOptions) {
         transferProfile: ReturnType<typeof sonataReplay.measureTransfers>;
     } = { nodes: new Map(), connections: [], transferProfile: new Map() };
     function executionLane(
-        node: Pick<SceneNode, "x" | "z" | "h" | "w" | "d" | "pipeCount" | "waitingDepth">,
+        node: Pick<SceneNode, "x" | "z" | "h" | "w" | "d" | "pipeCount">,
         index: number
     ): { inlet: Vector; outlet: Vector; radius: number } {
-        const waitingDepth = node.waitingDepth ?? 0,
-            pitch = Math.min(0.72, (node.d - waitingDepth - 0.65) / node.pipeCount!),
-            z = node.z - waitingDepth / 2 + (index - (node.pipeCount! - 1) / 2) * pitch;
+        const pitch = Math.min(0.72, (node.d - 0.65) / node.pipeCount!),
+            z = node.z + (index - (node.pipeCount! - 1) / 2) * pitch;
         const y = node.h + 0.34,
             half = (node.w - 0.78) / 2;
         return { inlet: [node.x - half, y, z], outlet: [node.x + half, y, z], radius: Math.min(0.19, pitch * 0.31) };
@@ -358,14 +356,8 @@ function createScene({ gpu, replay, session }: SceneOptions) {
         ];
     }
 
-    function memoryWaitPosition(id: string, slot: number): Vector {
-        const n = scene.nodes.get(id)!;
-        if (id === "exec-store") {
-            // 管路の横に退避し、通過中の命令と重ならず筐体内の出口付近で待つ。
-            // 表示位置の数は物理SQの容量を表さない。
-            const outlet = executionLane(n, n.pipeCount! - 1).outlet;
-            return [outlet[0] + 0.12, n.h + 0.34, outlet[2] + 0.5 + slot * 0.32];
-        }
+    function memoryWaitPosition(slot: number): Vector {
+        const n = scene.nodes.get("memory-wait")!;
         const columns = 3,
             rows = Math.max(1, Math.floor((n.d - 0.4) / 0.3));
         return [
@@ -522,8 +514,7 @@ function createScene({ gpu, replay, session }: SceneOptions) {
             const memory = n.kind === "memory";
             const latency = n.latency;
             const width = 0.78 + 1.17 * latency;
-            const waitingDepth = n.id === "exec-store" ? replay.memory.waitSlots.store * 0.32 : 0;
-            const depth = (memory ? Math.max(1.25, n.pipeCount * 0.38 + 0.65) : 3.05) + waitingDepth;
+            const depth = memory ? Math.max(1.25, n.pipeCount * 0.38 + 0.65) : 3.05;
             const z =
                 n.id === "exec-integer"
                     ? -4.2
@@ -558,7 +549,6 @@ function createScene({ gpu, replay, session }: SceneOptions) {
             node.pipeCount = n.pipeCount;
             node.compact = latency <= 1;
             node.latency = latency;
-            node.waitingDepth = waitingDepth;
         }
         const load = scene.nodes.get("exec-load"),
             slots = replay.memory.waitSlots.load;

@@ -62,7 +62,7 @@ module.exports = async function reviewMemory(window, screenshots) {
                 });
                 if (!record) throw new Error("No recorded pending store in " + key);
                 const op = sonata.ops.find((op) => op.id === record[0]);
-                const stage = op.stages.find((s) => s.node === "exec-store" && !s.waiting);
+                const stage = op.stages.find((s) => s.node === "exec-store");
                 return {
                     id: op.id,
                     start: op.end,
@@ -130,28 +130,77 @@ module.exports = async function reviewMemory(window, screenshots) {
     }
 
     const waiting = await sampleFrame(() =>
-        evaluate(({ sonata }) => {
+        evaluate(({ sonata, gl }) => {
             sonata.loadTrace("memory-tide");
-            sonata.captureAt(3970.9);
+            const draw = gl.drawArraysInstanced,
+                batches = [];
+            // ROB の診断座標だけでなく、駒と影の描画に渡したインスタンス座標も照合する。
+            gl.drawArraysInstanced = function (mode, first, vertices, count) {
+                if (vertices === 6 && count > 0 && gl.getVertexAttrib(0, gl.VERTEX_ATTRIB_ARRAY_DIVISOR) === 1) {
+                    const binding = gl.getParameter(gl.ARRAY_BUFFER_BINDING),
+                        buffer = gl.getVertexAttrib(0, gl.VERTEX_ATTRIB_ARRAY_BUFFER_BINDING),
+                        data = new Float32Array(count * 12);
+                    gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
+                    gl.getBufferSubData(gl.ARRAY_BUFFER, 0, data);
+                    gl.bindBuffer(gl.ARRAY_BUFFER, binding);
+                    batches.push(data);
+                }
+                return draw.call(this, mode, first, vertices, count);
+            };
+            try {
+                sonata.captureAt(3970.9);
+            } finally {
+                gl.drawArraysInstanced = draw;
+            }
             if (sonata.pendingStores.length) throw new Error("Unrecorded RSD store writes were invented");
             if (sonata.connections.some((c) => [c.from, c.to].includes("store-wait")))
                 throw new Error("An independent STORE WAIT connection remains");
+            const pieces = sonata.pieces;
             return sonata.ops
                 .filter(
                     (op) =>
                         op.memoryKind === "store" &&
-                        op.stages.some((s) => s.waiting && s.start <= sonata.cycle && s.end > sonata.cycle)
+                        (op.completion === null || op.completion > sonata.cycle) &&
+                        op.stages.some((s) => s.node === "rob" && s.start <= sonata.cycle && s.end > sonata.cycle)
                 )
-                .map((op) => ({ id: op.id, piece: sonata.pieces.find((p) => p.id === op.id) }));
+                .map((op) => {
+                    const index = pieces.findIndex((p) => p.id === op.id),
+                        particle = sonata.particles.find((p) => p.id === op.id);
+                    return {
+                        id: op.id,
+                        piece: pieces[index],
+                        entry: sonata.rob.entries.find((e) => e.id === op.id),
+                        cell: sonata.instructionLayout.rob[op.robSlot],
+                        light: particle && { state: particle.state, brightness: particle.brightness },
+                        gpuPositions: batches.map((batch) => [...batch.slice(index * 12, index * 12 + 3)]),
+                        error: gl.getError()
+                    };
+                });
         })
     );
     assert.deepEqual(
         waiting.map((s) => s.id),
         [4318, 4323, 4328, 4333, 4338, 4343]
     );
+    assert.deepEqual(
+        waiting.map((s) => s.entry?.slot),
+        [14, 19, 24, 29, 34, 39]
+    );
     for (const [index, store] of waiting.entries()) {
         assert.ok(store.piece?.contact, `Waiting STORE #${store.id} is not grounded`);
         assert.equal(store.piece.transfer, null, `Waiting STORE #${store.id} is still moving`);
+        assert.deepEqual(store.piece.pathPosition, store.cell, `Waiting STORE #${store.id} did not enter its ROB cell`);
+        assert.equal(store.piece.position[0], store.cell[0]);
+        assert.equal(store.piece.position[2], store.cell[2]);
+        assert.equal(store.entry.ready, false, `Waiting STORE #${store.id} became ready early`);
+        assert.ok(store.light?.state === "waiting" && store.light.brightness < 0.35);
+        assert.ok(store.gpuPositions.length > 0, `Waiting STORE #${store.id} was not drawn`);
+        for (const position of store.gpuPositions)
+            assert.ok(
+                position.every((v, i) => Math.abs(v - store.piece.position[i]) < 2e-6),
+                `Rendered STORE #${store.id} is outside its ROB cell`
+            );
+        assert.equal(store.error, 0);
         for (const other of waiting.slice(index + 1)) {
             assert.ok(other.piece, `Waiting STORE #${other.id} is missing`);
             assert.ok(
@@ -161,6 +210,68 @@ module.exports = async function reviewMemory(window, screenshots) {
             );
         }
     }
+    // #4318 の初回移動は表示範囲より前。範囲内で移動する #4333 で STORE → ROB を検査する。
+    const arrival = await sampleFrame(() =>
+        evaluate(({ sonata }) => {
+            sonata.captureAt(3965.4);
+            return { cycle: sonata.cycle, piece: sonata.pieces.find((p) => p.id === 4333) };
+        })
+    );
+    assert.equal(arrival.cycle, 3965.4);
+    assert.ok(arrival.piece?.transfer, "STORE-to-ROB transfer was not rendered");
+    const retryTimes = [3964, 3970.9, 3981, 3983, 3985.9, 3986, 3986.9];
+    const retryStates = [];
+    for (const cycle of [...retryTimes, ...retryTimes.toReversed()]) {
+        retryStates.push(
+            await sampleFrame(() =>
+                evaluate(({ sonata, gl }, cycle) => {
+                    sonata.captureAt(cycle);
+                    const op = sonata.ops.find((o) => o.id === 4318),
+                        particle = sonata.particles.find((p) => p.id === op.id);
+                    return {
+                        cycle: sonata.cycle,
+                        stage: op.stages.find((s) => s.start <= cycle && s.end > cycle).node,
+                        piece: sonata.pieces.find((p) => p.id === op.id),
+                        state: particle?.state,
+                        rob: sonata.rob,
+                        error: gl.getError()
+                    };
+                }, cycle)
+            )
+        );
+    }
+    const forward = retryStates.slice(0, retryTimes.length);
+    assert.deepEqual(
+        forward.map((s) => s.cycle),
+        retryTimes,
+        "STORE retry samples left the visible trace range"
+    );
+    assert.deepEqual(
+        retryStates.slice(retryTimes.length).toReversed(),
+        forward,
+        "Reverse seek changed STORE retry rendering"
+    );
+    assert.deepEqual(
+        forward.map((s) => s.stage),
+        ["rob", "rob", "register-read", "exec-store", "exec-store", "rob", "rob"]
+    );
+    assert.equal(forward[1].state, "waiting");
+    assert.equal(forward[2].state, "reading");
+    assert.equal(forward[3].state, "executing");
+    assert.equal(forward[5].state, "ready");
+    assert.equal(forward[6].piece.transfer, null);
+    assert.deepEqual(
+        forward[6].piece.position,
+        forward[1].piece.position,
+        "Retried STORE returned to another ROB cell"
+    );
+    for (const state of forward) {
+        const entry = state.rob.entries.find((e) => e.id === 4318);
+        assert.equal(entry?.slot, 14, "A retry changed the allocated ROB slot");
+        assert.equal(entry.ready, state.cycle >= 3986, "A retry anticipated STORE completion");
+        assert.equal(state.error, 0);
+    }
+    results.push({ key: "memory-tide", waits: waiting.map(({ id, entry }) => ({ id, ...entry })), retryTimes });
     await pinInstruction(waiting[0].id, 3970.9);
     const unknown = await sampleFrame(() =>
         evaluate(({ sonata, $ }) => {
@@ -168,10 +279,10 @@ module.exports = async function reviewMemory(window, screenshots) {
             return { stage: $("op-stage").textContent, hidden: $("op-write").hidden, text: $("op-write").textContent };
         })
     );
-    assert.deepEqual(unknown, { stage: "STORE · WAIT ≈", hidden: false, text: "WRITE COMPLETION · NOT LOGGED" });
+    assert.deepEqual(unknown, { stage: "REORDER BUFFER", hidden: false, text: "WRITE COMPLETION · NOT LOGGED" });
     await settle({ finish: true });
     fs.writeFileSync(
-        path.join(screenshots, "memory-tide-store-outlet.png"),
+        path.join(screenshots, "memory-tide-store-rob.png"),
         (await window.webContents.capturePage()).toPNG()
     );
 

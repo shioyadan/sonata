@@ -3,7 +3,7 @@
 const assert = require("node:assert/strict");
 const fs = require("node:fs"),
     vm = require("node:vm");
-const { createReplay } = require("../src/replay-model.cts");
+const { createReplay, createRobReplay } = require("../src/replay-model.cts");
 const { instructionType } = require("../src/memory.cts");
 const { createScene, styles } = require("../src/scene.cts");
 const { createPaths } = require("../src/geometry.cts");
@@ -21,7 +21,19 @@ function operation(id, label, complete, options = {}) {
     const end = options.end ?? 22;
     const stages = options.stages ?? [["Is", "exec-memory", 5, complete ?? end]];
     if (complete != null && complete < end) stages.push(["Cm", "rob", complete, end]);
-    return [id, id, 0, end, options.flush ? 1 : 0, label, stages, options.flush ? null : 4, 5, complete, "exec-memory"];
+    return [
+        id,
+        id,
+        0,
+        end,
+        options.flush ? 1 : 0,
+        label,
+        stages,
+        options.allocation === undefined ? (options.flush ? null : 4) : options.allocation,
+        5,
+        complete,
+        "exec-memory"
+    ];
 }
 const trace = {
     ...samples[0],
@@ -51,7 +63,18 @@ const trace = {
                 ["Rr", "register-read", 14, 15],
                 ["X", "exec-memory", 15, 18]
             ]
-        })
+        }),
+        operation(13, "str x0, [x1]", 15),
+        operation(14, "str x0, [x1]", 13, {
+            stages: [
+                ["X", "exec-memory", 5, 6],
+                ["Rw", "memory-wait", 6, 10],
+                ["Is", "issue", 10, 11],
+                ["Rr", "register-read", 11, 12],
+                ["X", "exec-memory", 12, 13]
+            ]
+        }),
+        operation(15, "str x0, [x1]", null, { end: 10, flush: true, allocation: 4 })
     ],
     storeCompletions: [
         [3, 23.006],
@@ -114,7 +137,37 @@ assert.deepEqual(
     [{ id: 3, start: 22, end: 23.006 }]
 );
 assert.equal(op(3).end, 22, "Pending writes delayed instruction commit");
-assert.equal(replay.memory.waitSlots.store, 0, "Post-commit records reserved visible store slots");
+assert.deepEqual(Object.keys(replay.memory.waitSlots), ["load"], "STORE retained a separate waiting-slot allocator");
+assert.deepEqual(
+    op(13).stages.map((s) => [s.node, s.start, s.end]),
+    [
+        ["exec-store", 5, 6],
+        ["rob", 6, 15],
+        ["rob", 15, 22]
+    ],
+    "A long STORE response remained in the pipe"
+);
+assert.deepEqual(paths.positionAt(op(13), 7), scene.robCell(op(13).robSlot, 0.19));
+assert.equal(paths.instructionLight(op(13), 14.99).state, "waiting");
+assert.equal(paths.instructionLight(op(13), 15).state, "ready", "Moving to ROB anticipated STORE completion");
+assert.deepEqual(
+    op(14).stages.map((s) => [s.node, s.start, s.end]),
+    [
+        ["exec-store", 5, 6],
+        ["rob", 6, 10],
+        ["issue", 10, 11],
+        ["register-read", 11, 12],
+        ["exec-store", 12, 13],
+        ["rob", 13, 22]
+    ],
+    "Moving a STORE wait to ROB changed the retry sequence"
+);
+assert.equal(paths.stageAt(op(15), 9.99).node, "rob");
+assert.equal(paths.instructionLight(op(15), 9.99).state, "waiting", "A squashed STORE became ready");
+assert.ok(replay.robReplay.stateAt(9.99).entries.some((e) => e.op.id === 15));
+assert.ok(!replay.robReplay.stateAt(10).entries.some((e) => e.op.id === 15), "A squashed STORE retained its ROB entry");
+assert.equal(paths.instructionLight(op(15), 10).state, "squashed");
+assert.deepEqual(paths.positionAt(op(15), 9.99), scene.robCell(op(15).robSlot, 0.19));
 const unknown = setup({ ...trace, ops: [operation(1, "ldr x0, [x1]", null)], storeCompletions: undefined });
 assert.equal(unknown.replay.memory.minimum.load, null);
 assert.deepEqual(unknown.replay.memory.pendingStores, []);
@@ -133,7 +186,12 @@ const partial = setup({
 });
 assert.ok(partial.scene.nodes.has("register-read"));
 partial.scene.registerReadPort = () => assert.fail("Partial store wait invented a register read");
-assert.ok(partial.paths.positionAt(partial.replay.ops[0], 6.6).every(Number.isFinite));
+const partialStore = partial.replay.ops[0];
+assert.equal(partialStore.stages.at(-1).node, "rob", "A partial STORE wait remained in the pipe");
+assert.equal(partialStore.completion, null, "A partial STORE wait invented completion");
+assert.ok(partial.paths.positionAt(partialStore, 6.6).every(Number.isFinite));
+assert.deepEqual(partial.paths.positionAt(partialStore, 10), partial.scene.robCell(partialStore.robSlot, 0.19));
+assert.equal(partial.paths.instructionLight(partialStore, 10).state, "waiting");
 for (const label of ["str x0, [x1]", "amoadd.w x0, x1, (x2)"]) {
     const { replay, scene, paths } = setup({
         ...trace,
@@ -167,7 +225,7 @@ for (const sample of samples) {
         }
     const launches = new Map();
     for (const o of replay.ops) {
-        for (const stage of o.stages.filter((s) => (s.node === "exec-load" || s.node === "exec-store") && !s.waiting)) {
+        for (const stage of o.stages.filter((s) => s.node === "exec-load" || s.node === "exec-store")) {
             const key = `${stage.node}:${stage.start}`;
             const lanes = launches.get(key) ?? new Set();
             assert.ok(!lanes.has(o.pipeLane), `${sample.key}: coincident memory launch ${key}`);
@@ -175,48 +233,119 @@ for (const sample of samples) {
             launches.set(key, lanes);
         }
         const raw = sample.ops.find((t) => t[0] === o.id);
+        assert.equal(o.allocation, raw[7]);
         assert.equal(o.issue, raw[8]);
         assert.equal(o.completion, raw[9]);
         assert.equal(o.end, raw[4] ? (raw[11] ?? raw[3]) : raw[3]);
-        for (const s of o.stages.filter((s) => s.node === "memory-wait" || s.waiting)) {
+        for (const s of o.stages.filter((s) => s.node === "memory-wait")) {
             if (s.end - s.start > 2)
                 assert.deepEqual(paths.positionAt(o, s.start + 1), paths.positionAt(o, s.end - 0.01));
         }
     }
     assert.ok(!scene.nodes.has("store-wait"), `${sample.key}: separate STORE WAIT platform remained`);
     assert.ok(scene.connections.every((c) => c.from !== "store-wait" && c.to !== "store-wait"));
-    const stores = replay.ops.flatMap((o) => o.stages.filter((s) => s.waiting).map((s) => ({ op: o, stage: s })));
-    if (sample.key === "memory-tide") {
-        const simultaneous = stores.filter(({ stage: s }) => s.start <= 3970 && s.end > 3970);
-        assert.equal(simultaneous.length, 6, "RSD concurrent store waits were lost");
+    assert.deepEqual(Object.keys(replay.memory.waitSlots), ["load"]);
+    assert.ok(
+        replay.ops.every((o) => o.stages.every((s) => !("waiting" in s))),
+        "An outlet-wait marker remained"
+    );
+    const stores = replay.ops.filter((o) => o.memoryKind === "store");
+    assert.ok(
+        stores.every((o) => o.stages.every((s) => s.node !== "memory-wait")),
+        "A STORE occupied LOAD WAIT"
+    );
+    // 表示先を変えても、割当・コミットから作る ROB の順序と占有は元記録と一致する。
+    const recordedRob = createRobReplay(
+        sample.ops.map((raw) => ({
+            id: raw[0],
+            allocation: raw[7],
+            completion: raw[9],
+            end: raw[4] ? (raw[11] ?? raw[3]) : raw[3],
+            flush: !!raw[4]
+        })),
+        sample.structure.robCapacity
+    );
+    const robState = (rob, cycle) => {
+        const state = rob.stateAt(cycle);
+        return {
+            head: state.head,
+            tail: state.tail,
+            entries: state.entries.map(({ op, slot }) => ({
+                id: op.id,
+                slot,
+                ready: op.completion != null && cycle >= op.completion
+            }))
+        };
+    };
+    const waits = stores.flatMap((op) =>
+        op.stages
+            .filter((s) => s.node === "rob" && (op.completion == null || s.start < op.completion))
+            .map((stage) => ({ op, stage }))
+    );
+    for (const { op, stage } of waits) {
+        const stationary = stage.start + Math.min(0.9, stage.end - stage.start - 0.001);
+        const cycles = [stage.start, stationary, stage.end - 0.001, stage.end, op.completion ?? op.end, op.end];
+        for (const cycle of [...cycles, ...cycles.toReversed()])
+            assert.deepEqual(robState(replay.robReplay, cycle), robState(recordedRob, cycle));
+        assert.equal(paths.instructionLight(op, stage.start).state, "waiting");
+        if (stage.end - stage.start > 0.9) {
+            const position = scene.robCell(op.robSlot, 0.19);
+            assert.deepEqual(paths.positionAt(op, stationary), position, `STORE #${op.id} did not reach its ROB cell`);
+            assert.deepEqual(paths.positionAt(op, stage.end - 0.001), position, `STORE #${op.id} moved while waiting`);
+        }
     }
-    for (const { op: o, stage: s } of stores) {
-        assert.equal(s.node, "exec-store");
-        const n = scene.nodes.get(s.node),
-            position = scene.memoryWaitPosition(s.node, s.displaySlot),
-            outlet = scene.executionLane(n, o.pipeLane).outlet;
-        assert.ok(Math.abs(position[0] - outlet[0]) <= 0.21, "Store wait left the outlet area");
-        assert.ok(Math.abs(position[0] - n.x) + 0.12 < n.w / 2, "Store wait left the housing width");
-        assert.ok(Math.abs(position[2] - n.z) + 0.12 < n.d / 2, "Store wait left the housing depth");
-        assert.equal(paths.instructionLight(o, s.start).state, "waiting");
-        // 筐体内で待機位置へ移るとき、物理レジスタを経由して逆戻りしない。
-        for (let i = 0; i <= 32; i++) {
-            const cycle = s.start + (Math.min(0.82, s.end - s.start - 0.001) * i) / 32,
-                p = paths.positionAt(o, cycle);
-            assert.ok(p[0] > n.x && p[0] + 0.12 < n.x + n.w / 2, "Waiting store left the outlet half of the housing");
-            for (const other of stores) {
-                if (other.op === o || other.stage.start > cycle || other.stage.end <= cycle) continue;
-                const q = paths.positionAt(other.op, cycle);
+    if (sample.key === "memory-tide") {
+        const simultaneous = waits.filter(({ stage: s }) => s.start <= 3970.9 && s.end > 3970.9);
+        assert.deepEqual(
+            Array.from(simultaneous, ({ op }) => op.id),
+            [4318, 4323, 4328, 4333, 4338, 4343]
+        );
+        assert.deepEqual(
+            Array.from(simultaneous, ({ op }) => op.robSlot),
+            [14, 19, 24, 29, 34, 39]
+        );
+        for (const { op } of simultaneous) {
+            const position = paths.positionAt(op, 3970.9);
+            assert.deepEqual(position, scene.robCell(op.robSlot, 0.19));
+            for (const { op: other } of simultaneous) {
+                if (op === other) continue;
+                const otherPosition = paths.positionAt(other, 3970.9);
                 assert.ok(
-                    Math.hypot(p[0] - q[0], p[2] - q[2]) >= 0.24,
-                    `Store #${o.id} crossed #${other.op.id} at ${cycle}`
+                    Math.hypot(...position.map((v, i) => v - otherPosition[i])) >= 0.24,
+                    "STORE ROB cells overlap"
                 );
             }
         }
-        for (const other of stores) {
-            if (other.stage === s || other.stage.end <= s.start || s.end <= other.stage.start) continue;
-            const p = scene.memoryWaitPosition(other.stage.node, other.stage.displaySlot);
-            assert.ok(Math.hypot(position[0] - p[0], position[2] - p[2]) >= 0.3, "Concurrent store waits overlap");
+        const retry = stores.find((o) => o.id === 4318),
+            times = [3962.9, 3963.4, 3970.9, 3981, 3982.9, 3983, 3985.9, 3986, 3986.9, 3987.9];
+        const states = times.map((cycle) => ({
+            cycle,
+            position: paths.positionAt(retry, cycle),
+            stage: paths.stageAt(retry, cycle).node,
+            light: paths.instructionLight(retry, cycle),
+            rob: robState(replay.robReplay, cycle)
+        }));
+        assert.equal(states[3].stage, "register-read");
+        assert.equal(states[5].stage, "exec-store");
+        assert.equal(states[7].stage, "rob");
+        assert.equal(states[6].light.state, "executing");
+        assert.equal(states[7].light.state, "ready");
+        assert.deepEqual(states[8].position, states[2].position, "A retried STORE returned to another ROB cell");
+        assert.notDeepEqual(states[1].position, states[2].position, "STORE-to-ROB transfer was not exercised");
+        for (const state of states.toReversed()) {
+            const entry = state.rob.entries.find((e) => e.id === retry.id);
+            assert.equal(entry.slot, 14, "A retry changed the allocated ROB slot");
+            assert.equal(entry.ready, state.cycle >= 3986, "A retry anticipated completion");
+            assert.deepEqual(
+                paths.positionAt(retry, state.cycle),
+                state.position,
+                "Reverse seek changed the STORE path"
+            );
+            assert.deepEqual(
+                robState(replay.robReplay, state.cycle),
+                state.rob,
+                "Reverse seek changed STORE ROB state"
+            );
         }
     }
     for (const link of scene.connections)

@@ -163,7 +163,7 @@ function createActivity({ camera, clock, scene, gpu, paths, replay, session }: A
             if (!s) continue;
             activeNodes.set(s.node, (activeNodes.get(s.node) || 0) + 1);
             const n = scene.nodes.get(s.node)!;
-            if (n?.pipeCount && !s.waiting) {
+            if (n?.pipeCount) {
                 const key = `${n.id}:${(op.pipeLane ?? op.index) % n.pipeCount}`;
                 activeLanes.set(key, (activeLanes.get(key) || 0) + 1);
             }

@@ -58,12 +58,11 @@ function prepareMemory(ops: Operation[], trace: replayModel.Trace) {
     }
     for (const [op, groups] of accesses) {
         const base = minimum[op.memoryKind as AccessKind];
-        if (op.memoryKind === "store")
-            for (const stage of op.stages)
-                if (stage.node === "memory-wait") {
-                    stage.node = "exec-store";
-                    stage.waiting = true;
-                }
+        if (op.memoryKind === "store") {
+            for (const stage of op.stages) {
+                if (stage.node === "memory-wait") stage.node = "rob";
+            }
+        }
         if (base == null) continue;
         for (const group of groups) {
             const duration = Math.min(base, group.end - group.start);
@@ -73,17 +72,13 @@ function prepareMemory(ops: Operation[], trace: replayModel.Trace) {
                     ...first,
                     end: group.start + duration,
                     entryCycles: Math.min(duration, base * 0.22),
-                    names: [
-                        ...new Set(
-                            group.stages.filter((s) => s.node === first.node && !s.waiting).flatMap((s) => s.names)
-                        )
-                    ]
+                    names: [...new Set(group.stages.filter((s) => s.node === first.node).flatMap((s) => s.names))]
                 }
             ];
             if (group.end > group.start + duration + 1e-9) {
                 replacement.push({
-                    node: op.memoryKind === "load" ? "memory-wait" : "exec-store",
-                    ...(op.memoryKind === "store" ? { waiting: true } : {}),
+                    // STORE は未完了のまま既存の ROB セルへ置き、記録された再発行時刻に実行へ戻す。
+                    node: op.memoryKind === "load" ? "memory-wait" : "rob",
                     start: group.start + duration,
                     end: group.end,
                     names: [...new Set(group.stages.flatMap((s) => s.names))]
@@ -93,17 +88,16 @@ function prepareMemory(ops: Operation[], trace: replayModel.Trace) {
             op.stages.splice(index, group.stages.length, ...replacement);
         }
     }
-    // 待機位置は物理SQの番号ではなく、同時に見せる命令へ割り当てる表示位置。
+    // LOAD WAIT は同時に見せる命令の表示位置。STORE は既存の ROB スロットを使う。
     const waits = ops.flatMap((op) =>
-        op.stages.filter((s) => s.node === "memory-wait" || s.waiting).map((stage) => ({ op, stage }))
+        op.stages.filter((s) => s.node === "memory-wait").map((stage) => ({ op, stage }))
     );
-    const ends: Record<string, number[]> = { "memory-wait": [], "exec-store": [] };
+    const ends: number[] = [];
     for (const { op, stage } of waits.sort((a, b) => a.stage.start - b.stage.start || a.op.id - b.op.id)) {
-        const slots = ends[stage.node];
-        let slot = slots.findIndex((end) => end <= stage.start);
-        if (slot < 0) slot = slots.length;
+        let slot = ends.findIndex((end) => end <= stage.start);
+        if (slot < 0) slot = ends.length;
         stage.displaySlot = slot;
-        slots[slot] = Math.min(op.end, stage.end + 0.82);
+        ends[slot] = Math.min(op.end, stage.end + 0.82);
     }
     const sharedPipes = trace.structure.executionNodes.find((n) => n.kind === "memory")?.pipeCount ?? 0;
     const loadCount = ops.filter((op) => op.memoryKind === "load").length;
@@ -160,8 +154,7 @@ function prepareMemory(ops: Operation[], trace: replayModel.Trace) {
         executionNodes,
         pendingStores,
         waitSlots: {
-            load: ends["memory-wait"].length,
-            store: ends["exec-store"].length
+            load: ends.length
         }
     };
 }

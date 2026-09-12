@@ -685,9 +685,7 @@ function start(gl: WebGL2RenderingContext) {
                       ? op.flush
                           ? "SQUASHED"
                           : "COMMITTED"
-                      : stage?.waiting
-                        ? "STORE · WAIT ≈"
-                        : scene.nodes.get(stage?.node!)?.label || "IN FLIGHT";
+                      : scene.nodes.get(stage?.node!)?.label || "IN FLIGHT";
             $("op-state").textContent = selected ? "Pinned instruction" : "Click an instruction to pin";
             $("spotlight").style.borderLeftColor = rgb(
                 op.flush && session.cycle >= op.end
