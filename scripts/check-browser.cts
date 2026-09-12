@@ -22,10 +22,11 @@ interface Frame {
 
 async function reviewBrowser(window: BrowserWindow, entry: string, screenshots?: string) {
     const { evaluate, settle } = createBrowserTest(window);
-    const matteStyles = ["paper"];
+    const matteStyles = ["aluminum", "paper"];
     const instructionShape = (style: string) => {
         if (style === "neon") return "glow";
         if (style === "paper") return "paper-box";
+        if (style === "aluminum") return "metal-puck";
         throw new Error("Unknown visual style: " + style);
     };
     const waitFor = (condition: () => Promise<unknown>, message: string) =>
@@ -365,7 +366,7 @@ async function reviewBrowser(window: BrowserWindow, entry: string, screenshots?:
             frame.colored > 1000 && frame.particles > 0,
             `Restored graphics left an empty frame: ${JSON.stringify(frame)}`
         );
-        if (visualStyle === "paper")
+        if (visualStyle === "paper" || visualStyle === "aluminum")
             assert.ok(frame.upright, `${visualStyle}: context recovery rotated a sliding instruction`);
         if (visualStyle !== "neon") {
             await evaluate(({ sonata }) => {
@@ -376,7 +377,7 @@ async function reviewBrowser(window: BrowserWindow, entry: string, screenshots?:
         }
         contextRecoveries.push({ style: visualStyle, ...frame });
     }
-    // MSAAなしでも紙の折り面・投影影を描画できる。
+    // MSAAなしでも紙の折り面・金属パック・投影影を描画できる。
     const withoutMSAA = [];
     debuggerAPI.attach("1.3");
     injected = null;
@@ -397,7 +398,7 @@ async function reviewBrowser(window: BrowserWindow, entry: string, screenshots?:
         await evaluate(({ sonata, $ }) => {
             sonata.setPlaying(false);
             if ($("auto-camera").getAttribute("aria-pressed") === "true") $("auto-camera").click();
-            $("style-paper").click();
+            $("style-aluminum").click();
             for (let i = 0; i < 4; i++) $("zoom-in").click();
         });
         await waitFor(
@@ -415,7 +416,8 @@ async function reviewBrowser(window: BrowserWindow, entry: string, screenshots?:
                 })))
             };
             assert.equal(frame.samples, 0, "MSAA fallback was not exercised");
-            if (style === "paper") assert.ok(frame.upright, `${style}: MSAA fallback rotated a sliding instruction`);
+            if (style === "paper" || style === "aluminum")
+                assert.ok(frame.upright, `${style}: MSAA fallback rotated a sliding instruction`);
             assert.equal(frame.error, 0, "Instruction rendering without MSAA returned a WebGL error");
             assert.ok(
                 frame.colored > 1000 && frame.particles > 0 && frame.pieces > 0,
@@ -480,7 +482,7 @@ async function reviewPieceOpacity(window: BrowserWindow) {
     const { evaluate, sampleFrame } = createBrowserTest(window);
     const originalPieces = await evaluate(({ sonata }) => sonata.pieces);
     const frames = [];
-    for (const style of ["paper"]) {
+    for (const style of ["aluminum", "paper"]) {
         const frame = await sampleFrame(() =>
             evaluate(({ sonata, gl, $ }, key) => {
                 const original = { style: sonata.visualStyle, cycle: sonata.cycle };
@@ -492,7 +494,7 @@ async function reviewPieceOpacity(window: BrowserWindow) {
                     const program = gl.getParameter(gl.CURRENT_PROGRAM) as WebGLProgram;
                     if (
                         vertices !== 6 ||
-                        gl.getAttribLocation(program, "aSphere") !== 0 ||
+                        !gl.getUniformLocation(program, "uPuck") ||
                         !gl.getUniformLocation(program, "uLight")
                     )
                         return draw.call(this, mode, first, vertices, count);

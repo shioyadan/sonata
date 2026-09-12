@@ -53,7 +53,7 @@ module.exports = async function reviewMemory(window, screenshots) {
         const selected = await sampleFrame(() =>
             evaluate(({ sonata, $ }, key) => {
                 sonata.loadTrace(key);
-                $("style-paper").click();
+                $("style-aluminum").click();
                 const record = sonata.trace.storeCompletions.find(([id, end]) => {
                     const op = sonata.ops.find((op) => op.id === id);
                     return (

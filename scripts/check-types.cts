@@ -39,6 +39,8 @@ replay.createRobReplay([], "4");
 // @ts-expect-error 接触点がない場合の null を無視してはならない。
 const lower: number = geometry.lowerAt(2, 2, [0, 0, 0, 1]);
 const paperLower: number | null = geometry.lowerAt(0, 0, [0, 0, 0, 1], "paper-box");
+const puckLower: number | null = geometry.lowerAt(0, 0, [0, 0, 0, 1], "metal-puck");
+const puckNormal: geometry.Vector = geometry.metalPuckPlanes[0].n;
 // @ts-expect-error 接地の形状指定は外接球か既知の命令形状に限る。
 geometry.lowerAt(0, 0, [0, 0, 0, 1], "unknown");
 // @ts-expect-error 形状は真偽値ではなく名前で指定する。
@@ -60,7 +62,7 @@ if (registers.available) {
     void observed;
 }
 
-void [clamped, rotation, rotated, head, speed, pathReplay, lower, paperLower];
+void [clamped, rotation, rotated, head, speed, pathReplay, lower, paperLower, puckLower, puckNormal];
 
 // 型の境界をまたいでも、命令やステージの詳しい記録を保持する。
 declare const paths: geometry.Paths<replay.Operation>;

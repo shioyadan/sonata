@@ -1089,3 +1089,56 @@ body.cinema .cinema-caption {
 [data-theme="light"] :is(.flush-button, .flush-button > span:first-child) {
     color: var(--red);
 }
+
+/* 金属の台には青灰色のUIを合わせ、命令の意味を持つ色は共通に保つ。 */
+:root[data-style="aluminum"] {
+    --bg: #ecf0f3;
+    --panel: #f6f8fa;
+    --border: #4a5b6829;
+    --muted: #63717c;
+    --text: #33414b;
+}
+[data-style="aluminum"] :is(.topbar, .transport, .statusbar) {
+    background: #f7f9fa;
+}
+[data-style="aluminum"] .world {
+    background: var(--bg);
+}
+[data-style="aluminum"] .telemetry {
+    background: linear-gradient(150deg, #f7f9fa, #e8edf1);
+    scrollbar-color: #bac4cc transparent;
+}
+[data-style="aluminum"] :is(#trace-select, .view-controls, .touch-camera, .spotlight, .motion-notice) {
+    background: #f8fafbea;
+}
+[data-style="aluminum"] #bound-scene-context,
+[data-style="aluminum"]
+    :is(
+        .view-controls button,
+        .touch-camera button,
+        .legend,
+        .legend .link-key,
+        .gesture-hint,
+        .stage-label small,
+        .cycle-number span,
+        .bound-scene-heading small,
+        .bound-scene-key b
+    ) {
+    color: var(--muted);
+}
+[data-style="aluminum"] .view-controls button[aria-pressed="true"] {
+    background: #dde7eb;
+    color: #345365;
+}
+[data-style="aluminum"] :is(.cell-meter i, .op-progress i):not(.on, .current, .done),
+[data-style="aluminum"] .bound-bar {
+    background: #d7dfe2;
+}
+[data-style="aluminum"]
+    :is(.trace-event-notice > div, .memory-notice, .recovery-branch, .register-readout, .fifo-label) {
+    background: #f8fafbee;
+    box-shadow: 0 2px 6px #35445120;
+}
+[data-style="aluminum"] :is(#license-panel, #mobile-panel)::backdrop {
+    background: #29394366;
+}

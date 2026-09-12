@@ -17,7 +17,7 @@ module.exports = async function reviewGroundedPieces(window) {
         try{
             sonata.captureAt(459.4);
             const pieces=sonata.pieces,shape=sonata.renderer.instructionShape;
-            if(shape!=='paper-box')throw Error('Unexpected grounded instruction shape '+shape);
+            if(!['paper-box','metal-puck'].includes(shape))throw Error('Unexpected grounded instruction shape '+shape);
             let maximumGap=0,gpuError=0,moved=0,grounded=0,transferring=0;
             for(let i=0;i<pieces.length;i++){
                 const p=pieces[i],q=p.rotation;

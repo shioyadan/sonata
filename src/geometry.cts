@@ -5,7 +5,7 @@
 type Vec3 = [number, number, number];
 type Quat = [number, number, number, number];
 type Triangle = [Vec3, Vec3, Vec3];
-type GroundShape = "paper-box" | "sphere";
+type GroundShape = "paper-box" | "metal-puck" | "sphere";
 interface PathStage {
     node: string;
     start: number;
@@ -63,7 +63,7 @@ interface PathReplay<T extends PathOperation = PathOperation> {
     trace: { firstCycle: number; fetchWidth: number };
 }
 interface PathSession {
-    style: { palette: Record<string, Vec3> };
+    style: { palette: Record<string, Vec3>; surface?: { paper?: true; aluminum?: true } };
     reducedMotion?: boolean;
 }
 interface Seat {
@@ -105,6 +105,7 @@ interface Surface {
 
 const TAU = Math.PI * 2;
 const paperBoxHalfExtent = 1 / Math.sqrt(3);
+const metalPuck = { sides: 16, radius: 0.94, halfHeight: 0.32, bevel: 0.08 };
 const clamp = (n: number, lo = 0, hi = 1) => Math.max(lo, Math.min(hi, n));
 const mix = (a: number, b: number, t: number) => a + (b - a) * t;
 const smooth = (t: number) => {
@@ -218,20 +219,32 @@ const rotate = (v: Vec3, q: Quat): Vec3 => {
         u = cross(q, t);
     return v.map((x, i) => x + q[3] * t[i] + u[i]) as Vec3;
 };
+// パックの側面・面取り・上下を、描画と接地で共有する同じ半空間として定義する。
+const metalPuckPlanes: { n: Vec3; d: number }[] = [];
+for (let i = 0; i < metalPuck.sides; i++) {
+    const angle = (i * TAU) / metalPuck.sides,
+        x = Math.cos(angle),
+        z = Math.sin(angle),
+        side = metalPuck.radius * Math.cos(Math.PI / metalPuck.sides);
+    metalPuckPlanes.push({ n: [x, 0, z], d: side });
+    for (const y of [-1, 1]) metalPuckPlanes.push({ n: [x, y, z], d: side + metalPuck.halfHeight - metalPuck.bevel });
+}
+for (const y of [-1, 1]) metalPuckPlanes.push({ n: [0, y, 0], d: metalPuck.halfHeight });
 // シェーダーと同じ凸多面体の面。支持点は面同士の交点から求める。
-function polyhedron() {
-    const planes: { n: Vec3; d: number }[] = [],
+function polyhedron(shape: Exclude<GroundShape, "sphere">) {
+    const planes: { n: Vec3; d: number }[] = shape === "metal-puck" ? metalPuckPlanes : [],
         vertices: Vec3[] = [];
-    for (let x = -1; x <= 1; x++)
-        for (let y = -1; y <= 1; y++)
-            for (let z = -1; z <= 1; z++) {
-                const axes = Math.abs(x) + Math.abs(y) + Math.abs(z);
-                if (axes !== 1) continue;
-                planes.push({
-                    n: [x, y, z],
-                    d: paperBoxHalfExtent
-                });
-            }
+    if (shape !== "metal-puck")
+        for (let x = -1; x <= 1; x++)
+            for (let y = -1; y <= 1; y++)
+                for (let z = -1; z <= 1; z++) {
+                    const axes = Math.abs(x) + Math.abs(y) + Math.abs(z);
+                    if (axes !== 1) continue;
+                    planes.push({
+                        n: [x, y, z],
+                        d: paperBoxHalfExtent
+                    });
+                }
     for (let i = 0; i < planes.length; i++)
         for (let j = i + 1; j < planes.length; j++)
             for (let k = j + 1; k < planes.length; k++) {
@@ -251,7 +264,8 @@ function polyhedron() {
     return { planes, vertices };
 }
 const polyhedra = {
-    "paper-box": polyhedron()
+    "paper-box": polyhedron("paper-box"),
+    "metal-puck": polyhedron("metal-puck")
 };
 function support(direction: Vec3, shape: GroundShape = "paper-box"): Vec3 {
     if (shape === "sphere") {
@@ -635,14 +649,15 @@ function createPaths<T extends PathOperation>({
             cache = new Map();
             poses.piecePoseCache.set(op, cache);
         }
-        const shape: GroundShape = "paper-box";
-        const key = String(t);
+        const surface = session.style.surface;
+        const shape: GroundShape = surface?.aluminum ? "metal-puck" : "paper-box";
+        const key = `${t}/${shape}`;
         if (cache.has(key)) return cache.get(key)!;
         // 場所や待機・実行・退場で大きさを変えず、同じ命令の形を保つ。
         const radius = instructionRadius;
-        // 紙箱は、演出設定によらず上面を上に保って滑らせる。
+        // 紙箱と金属パックは、演出設定によらず上面を上に保って滑らせる。
         const rotation: Quat = [0, 0, 0, 1];
-        const poseKey = JSON.stringify([path[0], path[2], radius, rotation]);
+        const poseKey = JSON.stringify([path[0], path[2], radius, rotation, shape]);
         if (cache.poseKey !== poseKey) {
             cache.poseKey = poseKey;
             cache.seat = poses.pieceGround!.seat(path, radius, rotation, shape);
@@ -652,7 +667,7 @@ function createPaths<T extends PathOperation>({
         const transfer = pieceTransfer(op, t);
         if (transfer) {
             const { from, to, progress } = transfer,
-                bridgeKey = JSON.stringify([from, to, radius, rotation]);
+                bridgeKey = JSON.stringify([from, to, radius, rotation, shape]);
             if (cache.bridgeKey !== bridgeKey) {
                 cache.bridgeKey = bridgeKey;
                 cache.bridgeSeats = [from, to].map((p) => poses.pieceGround!.seat(p, radius, rotation, shape));
@@ -731,6 +746,8 @@ const geometry = {
     crossesBox,
     instructionRadius,
     paperBoxHalfExtent,
+    metalPuck,
+    metalPuckPlanes,
     createGround,
     support,
     lowerAt,

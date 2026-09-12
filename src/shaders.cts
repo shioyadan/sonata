@@ -1,10 +1,10 @@
 "use strict";
 import geometry = require("./geometry.cts");
-const { paperBoxHalfExtent } = geometry;
+const { paperBoxHalfExtent, metalPuck, metalPuckPlanes } = geometry;
 // 材質ごとの GLSL。プログラムの生成は呼び出し元へ委ね、GPU 資源を所有しない。
 type ProgramFactory<Program> = (vertex: string, fragment: string) => Program;
 
-// 固定面・紙の材質と影を受ける面。
+// 固定面・紙とアルミの材質と影を受ける面。
 function createSurfaceShaders<Program>(program: ProgramFactory<Program>) {
     const solidProgram = program(
         `#version 300 es
@@ -146,6 +146,7 @@ function createSurfaceShaders<Program>(program: ProgramFactory<Program>) {
         flat in float vMaterial;
         in vec4 vShadow;
         uniform float uRoughness;
+        uniform float uGrain;
         out vec4 frag;
 
         // sRGB の区分関数で塗料を線形化し、照明計算後に表示用の値へ戻す。
@@ -156,9 +157,20 @@ function createSurfaceShaders<Program>(program: ProgramFactory<Program>) {
                  light = normalize(uLight * 26. - vPosition);
             vec3 color = vColor.rgb;
             float rough = uRoughness;
-            bool paper = vMaterial > .5;
+            bool paper = vMaterial > .5 && vMaterial < 3.5, aluminum = vMaterial > 3.5;
             // サンプリングの分岐は部品単位に揃え、上面と側面の境界でも mipmap の微分を保つ。
-            if (paper) {
+            if (aluminum) {
+                // 長手方向へ伸ばした研磨筋。面を切り替える前の微分を投影し、角のLODを保つ。
+                vec3 dx = dFdx(vLocal), dy = dFdy(vLocal);
+                bool sideX = abs(n.x) > .5, top = abs(n.y) > .5;
+                vec2 uv = top ? vLocal.xz : sideX ? vLocal.zy : vLocal.xy;
+                vec2 ux = top ? dx.xz : sideX ? dx.zy : dx.xy;
+                vec2 uy = top ? dy.xz : sideX ? dy.zy : dy.xy;
+                vec2 scale = vec2(.025, 2.);
+                float brush = textureGrad(uSurfaceTexture, uv * scale, ux * scale, uy * scale).g - .5;
+                color *= 1. + brush * uGrain;
+                rough += brush * .04;
+            } else if (paper) {
                 // 紙面の粒と繊維も既存テクスチャを使い、縮小時は mipmap で平均する。
                 vec2 uv = abs(n.y) > .5 ? vLocal.xz : abs(n.x) > .5 ? vLocal.zy : vLocal.xy;
                 vec2 fiber = texture(uSurfaceTexture, uv * vec2(.65, 1.8)).bg - .5;
@@ -194,6 +206,22 @@ function createSurfaceShaders<Program>(program: ProgramFactory<Program>) {
             float fresnel = .04 + .35 * pow(1. - max(dot(n, view), 0.), 5.);
             vec3 linear = toLinear(max(color, vec3(0.))) * illumination * seat;
             linear += vec3(1., .96, .89) * sheen * (.14 + fresnel) * diffuse * lit * seat * (paper ? .06 : 1.);
+            if (aluminum) {
+                // 広い明暗の映り込みを解析的に近似し、追加の環境画像や描画パスを使わない。
+                vec3 reflected = reflect(-view, n);
+                float sky = smoothstep(-.3, .8, reflected.y);
+                float softbox = pow(max(dot(reflected, normalize(vec3(-.5, .8, -.35))), 0.), 6.);
+                vec3 environment = mix(vec3(.19, .23, .28), vec3(.83, .87, .91), sky);
+                // 研磨方向に沿って広がる反射。平面と面取りで明暗を分ける。
+                vec3 axis = abs(n.y) <= .5 && abs(n.x) > .5 ? vec3(0., 0., 1.) : vec3(1., 0., 0.);
+                vec3 tangent = normalize(axis - n * dot(axis, n));
+                vec3 bitangent = cross(n, tangent);
+                float along = dot(halfway, tangent), across = dot(halfway, bitangent);
+                float highlight = exp(-(along * along * 14. + across * across * 90.) / max(rough, .15))
+                    * max(dot(n, halfway), 0.);
+                linear = toLinear(color) * (environment + softbox * .35 + illumination * .12
+                    + highlight * lit * .7) * seat;
+            }
             // 明るい反射だけを緩やかに圧縮し、通常の塗料の色と暗部は保つ。
             float peak = max(linear.r, max(linear.g, linear.b));
             if (peak > .8)
@@ -206,7 +234,7 @@ function createSurfaceShaders<Program>(program: ProgramFactory<Program>) {
     return { solidProgram, surfaceLighting, pieceReceiverProgram, materialProgram };
 }
 
-// 命令の紙箱の材質と投影影。
+// 命令の紙箱・金属パックの材質と投影影。
 function createPieceShaders<Program>(program: ProgramFactory<Program>, surfaceLighting: string) {
     // 命令は六頂点の外接領域内で視線と面の交点を求め、輪郭と深度を描く。
     const pieceVertex = `#version 300 es
@@ -243,6 +271,7 @@ function createPieceShaders<Program>(program: ProgramFactory<Program>, surfaceLi
         flat in vec4 vRotation;
         uniform mat4 uMatrix;
         uniform mat4 uLightMatrix;
+        uniform bool uPuck;
         out vec4 frag;
 
         ${surfaceLighting}
@@ -276,19 +305,27 @@ function createPieceShaders<Program>(program: ProgramFactory<Program>, surfaceLi
                 interval.y = min(interval.y, t);
         }
 
-        // 紙箱の寸法はCPU接地と共用し、本体と影で同じ交点を使う。
+        // パックの面はCPU接地と共用し、紙箱も本体と影で同じ交点を使う。
         float pieceIntersection(vec3 start, vec3 direction, out vec3 normal, out float coverage) {
             normal = vec3(0., 1., 0.);
             vec2 interval = vec2(-100., 100.);
-            for (int x = -1; x <= 1; x++)
-                for (int y = -1; y <= 1; y++)
-                    for (int z = -1; z <= 1; z++) {
-                        int axes = abs(x) + abs(y) + abs(z);
-                        if (axes != 1)
-                            continue;
-                        clipPiece(start, direction, vec3(float(x), float(y), float(z)),
-                            ${paperBoxHalfExtent}, interval, normal);
-                    }
+            if (uPuck) {
+                const vec4 planes[${metalPuckPlanes.length}] = vec4[](
+                    ${metalPuckPlanes.map(({ n, d }) => `vec4(${[...n, d].map((v) => v.toFixed(12)).join(", ")})`).join(",\n                    ")}
+                );
+                for (int i = 0; i < ${metalPuckPlanes.length}; i++)
+                    clipPiece(start, direction, planes[i].xyz, planes[i].w, interval, normal);
+            } else {
+                for (int x = -1; x <= 1; x++)
+                    for (int y = -1; y <= 1; y++)
+                        for (int z = -1; z <= 1; z++) {
+                            int axes = abs(x) + abs(y) + abs(z);
+                            if (axes != 1)
+                                continue;
+                            clipPiece(start, direction, vec3(float(x), float(y), float(z)),
+                                ${paperBoxHalfExtent}, interval, normal);
+                        }
+            }
             float span = interval.y - interval.x;
             coverage = smoothstep(0., max(fwidth(span), .00001), span);
             return span > 0. && interval.x >= 0. ? interval.x : -1.;
@@ -304,7 +341,7 @@ function createPieceShaders<Program>(program: ProgramFactory<Program>, surfaceLi
             float distance = -dot(offset, ray) - sqrt(hit);
             if (distance <= 0.)
                 discard;
-            vec3 position = uEye + ray * distance, n = normalize(position - vSphere.xyz);
+            vec3 position = uEye + ray * distance, n = normalize(position - vSphere.xyz), view = -ray;
             vec3 start = pieceLocal(n) * 1.0001, direction = pieceLocal(ray), localNormal;
             float coverage, t = pieceIntersection(start, direction, localNormal, coverage);
             if (t < 0.)
@@ -324,6 +361,34 @@ function createPieceShaders<Program>(program: ProgramFactory<Program>, surfaceLi
         #else
             vec3 light = normalize(uLight * 26. - position);
             float diffuse = max(dot(n, light), 0.), lit = visibility(uLightMatrix * vec4(position, 1.), diffuse);
+            if (uPuck) {
+                // 面取り円盤の側面は滑らかにし、上面の広い色と細い銀縁を区別する。
+                float radial = length(localPosition.xz);
+                vec2 outward = localPosition.xz / max(radial, .0001);
+                vec3 smoothNormal = vec3(outward.x * length(localNormal.xz), localNormal.y,
+                    outward.y * length(localNormal.xz));
+                n = pieceWorld(smoothNormal);
+                diffuse = max(dot(n, light), 0.);
+                vec3 reflected = reflect(ray, n), halfway = normalize(light + view);
+                float aa = max(fwidth(radial), .002);
+                float inset = ${metalPuck.radius - metalPuck.bevel - 0.035};
+                float colored = smoothstep(.75, .95, localNormal.y)
+                    * (1. - smoothstep(inset - aa, inset + aa, radial));
+                // 縮小時に研磨筋を平均し、顔料の色を広い反射で白く飛ばさない。
+                vec2 uv = localPosition.xz * vec2(.06, 1.6);
+                float brush = texture(uSurfaceTexture, uv).g - .5;
+                float fill = max(dot(n, normalize(vec3(.65, .35, .6))), 0.);
+                float sheen = pow(max(dot(n, halfway), 0.), 28.);
+                vec3 pigment = toLinear(vColor.rgb) * (.72 + .48 * diffuse * lit + .12 * fill);
+                pigment *= 1. + brush * .04;
+                pigment += vec3(.06) * sheen * lit;
+                float sky = smoothstep(-.3, .8, reflected.y);
+                vec3 silver = mix(vec3(.18, .23, .29), vec3(.74, .8, .86), sky);
+                silver = silver * (.9 + brush * .06) + vec3(.3) * sheen * lit;
+                vec3 linear = mix(silver, pigment, colored);
+                frag = vec4(toSRGB(clamp(linear, vec3(0.), vec3(1.))), vColor.a * edge);
+                return;
+            }
             // ふたの継ぎ目・折り返し・白い断面を紙面に固定し、縮小時は模様を薄める。
             vec3 face = abs(localNormal);
             // 面の境界でUVが飛んでも、同じ面へ投影した座標の微分で線幅とmipmapを求める。

@@ -38,7 +38,7 @@ module.exports = async function reviewStageTransfers(window) {
         return { saved, trace: trace.key, cases: [...cases] };
     });
     const transfers = [];
-    await sampleFrame(() => evaluate(({ $ }) => $("style-paper").click()));
+    await sampleFrame(() => evaluate(({ $ }) => $("style-aluminum").click()));
     for (const [key, { id, start, end }] of setup.cases) {
         const frames = [];
         for (let i = 0; i <= 8; i++) {

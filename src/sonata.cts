@@ -1027,7 +1027,11 @@ function start(gl: WebGL2RenderingContext) {
                     fps: clock.fps,
                     contextLost: gpu.contextLost,
                     style: session.visualStyle,
-                    instructionShape: session.style.matte ? "paper-box" : "glow",
+                    instructionShape: session.style.matte
+                        ? session.style.surface.paper
+                            ? "paper-box"
+                            : "metal-puck"
+                        : "glow",
                     pieceVertices: gpu.instructionPieces.count * gpu.instructionPieces.vertices,
                     pieceInstances: gpu.instructionPieces.count,
                     materialInstances: gpu.staticMaterials!.count,

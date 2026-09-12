@@ -61,8 +61,11 @@ interface GpuState {
 }
 interface SurfaceStyle {
     floor: Vec3;
+    paper?: true;
+    aluminum?: true;
     light: Vec3;
     roughness: number;
+    grain: number;
     pieceShadow: number;
 }
 type RenderStyle = { background: Vec3 } & (
@@ -410,7 +413,7 @@ function createRenderer({
     };
     const { gl } = gpu;
     function createSurfaceTexture() {
-        // 紙の繊維と塗膜の粒を初期化時に生成し、毎画素でのノイズ計算を省く。
+        // 紙の繊維・研磨筋と塗膜の粒を初期化時に生成し、毎画素でのノイズ計算を省く。
         // 周期的な格子を使い、繰り返し境界と縮小表示の継ぎ目をなくす。
         const width = 256,
             height = 512,
@@ -539,8 +542,8 @@ function createRenderer({
     }
 
     function updatePieceShadow() {
-        // 紙箱の向きは固定なので、カメラ操作・演出変更・一時停止中は影を再利用する。
-        const key = String(session.cycle);
+        // カメラ操作と一時停止中は再利用。シーク・外観・演出の変更時だけ描き直す。
+        const key = `${session.cycle}/${session.reducedMotion}/${!!session.style.surface!.paper}/${!!session.style.surface!.aluminum}`;
         if (shadowPass.pieceShadowKey === key) return;
         shadowPass.pieceShadow ??= shadowTarget(true);
         gl.bindFramebuffer(gl.FRAMEBUFFER, shadowPass.pieceShadow.fbo);
@@ -552,6 +555,7 @@ function createRenderer({
         gl.clearColor(0, 0, 0, 0);
         gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
         gl.useProgram(programs.pieceShadowProgram.p);
+        gl.uniform1i(programs.pieceShadowProgram.u("uPuck"), session.style.surface!.aluminum ? 1 : 0);
         gl.uniformMatrix4fv(programs.pieceShadowProgram.u("uMatrix"), false, shadowPass.lightProjection!);
         gl.uniform3fv(
             programs.pieceShadowProgram.u("uEye"),
@@ -581,6 +585,7 @@ function createRenderer({
             gl.uniform3fv(p.u("uEye"), camera.eye);
             gl.uniform3fv(p.u("uLight"), session.style.surface!.light);
             gl.uniform1f(p.u("uRoughness"), session.style.surface!.roughness);
+            gl.uniform1f(p.u("uGrain"), session.style.surface!.grain);
             gl.uniformMatrix4fv(p.u("uLightMatrix"), false, shadowPass.lightProjection!);
             gl.activeTexture(gl.TEXTURE2);
             gl.bindTexture(gl.TEXTURE_2D, shadowPass.materialShadow!.texture);
@@ -589,6 +594,9 @@ function createRenderer({
             gl.activeTexture(gl.TEXTURE3);
             gl.bindTexture(gl.TEXTURE_2D, shadowPass.surfaceTexture);
             gl.uniform1i(p.u("uSurfaceTexture"), 3);
+        }
+        if (p === programs.pieceProgram) {
+            gl.uniform1i(p.u("uPuck"), session.style.surface!.aluminum ? 1 : 0);
         }
         if (p === programs.pointProgram) {
             gl.uniform1f(p.u("uScale"), gpu.renderHeight * 0.042);

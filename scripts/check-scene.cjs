@@ -75,15 +75,22 @@ function snapshot(scene) {
         positions
     });
 }
-const withoutColors = (value) => {
-    const state = JSON.parse(value);
-    state.nodes = state.nodes.map(([id, { color, ...node }]) => [id, node]);
-    state.connections = state.connections.map(({ color, ...connection }) => connection);
-    return state;
-};
-const matteStyles = ["paper"];
+const matteStyles = ["aluminum", "paper"];
 assert.deepEqual(Object.keys(styles), ["neon", ...matteStyles], "Available styles or their order changed");
 for (const style of matteStyles) assert.equal(styles[style].matte, true, `${style} did not use grounded instructions`);
+for (const style of matteStyles.slice(1)) {
+    for (const kind of ["integer", "memory", "branch", "red", "blue"])
+        assert.deepEqual(
+            styles[style].palette[kind],
+            styles.aluminum.palette[kind],
+            `${kind}: ${style} changed instruction colors`
+        );
+    assert.notDeepEqual(
+        styles[style].structure,
+        styles.aluminum.structure,
+        `${style} kept the Aluminum material palette`
+    );
+}
 const first = createFixture(),
     second = createFixture();
 let instructions = 0;
@@ -104,14 +111,14 @@ for (const [index, sample] of samples.entries()) {
     assert.equal(snapshot(second), expected);
     assert.notEqual(first.replay.ops, second.replay.ops);
     assert.notEqual(first.placement.nodes, second.placement.nodes);
+    let aluminum;
     for (const style of matteStyles) {
         first.session.style = styles[style];
         first.load(sample.key);
-        assert.deepEqual(
-            withoutColors(snapshot(first)),
-            withoutColors(expected),
-            `${sample.key}: Paper changed the layout or instruction paths`
-        );
+        const current = snapshot(first);
+        if (style === "aluminum") aluminum = current;
+        else
+            assert.equal(current, aluminum, `${sample.key}: ${style} changed the Aluminum layout or instruction paths`);
         first.load(samples[(index + 1) % samples.length].key);
         snapshot(first);
         assert.equal(snapshot(second), expected, "Loading another scene changed an existing scene");

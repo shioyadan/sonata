@@ -1,6 +1,14 @@
 "use strict";
 const assert = require("node:assert/strict");
-const { createGround, createPaths, lowerAt, support, paperBoxHalfExtent } = require("../src/geometry.cts");
+const {
+    createGround,
+    createPaths,
+    lowerAt,
+    support,
+    paperBoxHalfExtent,
+    metalPuck,
+    metalPuckPlanes
+} = require("../src/geometry.cts");
 const identity = [0, 0, 0, 1],
     near = (a, b, message, tolerance = 1e-7) => assert.ok(Math.abs(a - b) < tolerance, `${message}: ${a} / ${b}`);
 const plane = (height, x0 = -3, x1 = 3) => [
@@ -131,7 +139,67 @@ near(
     "Triangle order changed paper contact"
 );
 
-// 停止位置とステージ移動両端の接地は同じ時刻へ戻ると再利用できる。
+// 金属パックは16角の側面を上下45度で面取りし、平らな底面を保つ。
+const puck = "metal-puck",
+    sideDistance = 0.94 * Math.cos(Math.PI / 16),
+    capRadius = (sideDistance - 0.08) / Math.cos(Math.PI / 16);
+assert.deepEqual(metalPuck, { sides: 16, radius: 0.94, halfHeight: 0.32, bevel: 0.08 });
+assert.equal(metalPuckPlanes.length, 50, "Puck side, bevel or cap planes are missing");
+near(lowerAt(0, 0, identity, puck), -0.32, "Puck bottom is not flat");
+near(lowerAt(sideDistance - 0.04, 0, identity, puck), -0.28, "Puck bevel does not slope at 45 degrees");
+near(lowerAt(sideDistance, 0, identity, puck), -0.24, "Puck side meets the bevel at the wrong height");
+assert.equal(lowerAt(sideDistance + 1e-6, 0, identity, puck), null, "Puck extends beyond its side");
+for (let i = 0; i < 16; i++) {
+    const angle = ((i + 0.5) * Math.PI * 2) / 16,
+        x = Math.cos(angle),
+        z = Math.sin(angle);
+    for (const y of [-3, 0, 3]) {
+        const vertex = support([x, y, z], puck);
+        near(Math.hypot(vertex[0], vertex[2]), y === 0 ? 0.94 : capRadius, "Puck rim radius changed");
+        near(Math.abs(vertex[1]), y === 0 ? 0.24 : 0.32, "Puck rim height changed");
+        assert.ok(Math.hypot(...vertex) < 1, "Puck exceeds the shared bounding sphere");
+    }
+}
+const puckSeat = ground.seat([0.3, 7, 0.2], 0.2, identity, puck);
+near(puckSeat.position[1], 0.4 + 0.2 * 0.32, "Puck does not rest on its bottom cap");
+assert.deepEqual(puckSeat, ground.seat([0.3, -7, 0.2], 0.2, identity, puck));
+near(
+    slope.seat([0, 10, 0], 0.2, identity, puck).position[1],
+    0.2 * (0.32 + 0.5 * (sideDistance - 0.08)),
+    "Puck penetrates the slope"
+);
+near(
+    edge.seat([0.2 * (sideDistance - 0.04), 8, 0], 0.2, identity, puck).position[1],
+    0.4 + 0.2 * 0.28,
+    "Puck bevel floats at a ledge",
+    2e-6
+);
+near(
+    edge.seat([0.2 * (sideDistance + 1e-4), 8, 0], 0.2, identity, puck).position[1],
+    0.2 * 0.32,
+    "Puck did not reach the lower surface"
+);
+const puckCorner = createGround(plane(0.6, 8, 12)).seat([9.655, 5, 1.0119565217391302], 0.12, identity, puck);
+const puckLower = lowerAt(
+    (puckCorner.contact[0] - puckCorner.position[0]) / 0.12,
+    (puckCorner.contact[2] - puckCorner.position[2]) / 0.12,
+    identity,
+    puck
+);
+assert.notEqual(puckLower, null, "Rounding placed the puck contact outside its rim");
+near(
+    puckCorner.position[1] + puckLower * 0.12,
+    puckCorner.contact[1],
+    "Puck lost contact after coordinate conversion",
+    1e-12
+);
+near(
+    createGround(plane(0.4).reverse(), -0.8).seat([0.3, 7, 0.2], 0.2, identity, puck).position[1],
+    puckSeat.position[1],
+    "Triangle order changed puck contact"
+);
+
+// 同時刻と同じ停止位置のキャッシュ、移動両端のキャッシュをスタイル間で混同しない。
 const op = {
     id: 1,
     index: 0,
@@ -145,7 +213,12 @@ const op = {
     ]
 };
 const palette = { integer: [0.2, 0.8, 0.6] };
-const session = { style: { palette }, reducedMotion: true };
+const styles = {
+    [paper]: { palette, surface: { paper: true } },
+    [puck]: { palette, surface: { aluminum: true } }
+};
+const heights = { [paper]: half, [puck]: 0.32 };
+const session = { style: styles[paper], reducedMotion: true };
 const paths = createPaths({
     session,
     replay: { ops: [op], trace: { firstCycle: 0, fetchWidth: 2 } },
@@ -156,19 +229,27 @@ const paths = createPaths({
 });
 paths.setGround(ground);
 for (const time of [2, 2.1, 4.3, 4.4]) {
-    const piece = paths.groundedPiece(op, time);
-    near(piece.position[1], 0.4 + 0.12 * half, "Cached pose lost paper contact");
-    assert.equal(piece.radius, 0.12);
-    near(piece.position[0], piece.pathPosition[0], "Grounding changed horizontal travel");
-    near(piece.position[2], piece.pathPosition[2], "Grounding changed lane");
-    assert.equal(paths.groundedPiece(op, time), piece, "Same time did not reuse the pose");
-    if (time >= 4) assert.ok(piece.transfer, "Transfer cache was not exercised");
+    let referencePiece;
+    for (const shape of [paper, puck, paper, puck]) {
+        session.style = styles[shape];
+        const piece = paths.groundedPiece(op, time);
+        near(piece.position[1], 0.4 + 0.12 * heights[shape], "Cached pose used another shape");
+        assert.equal(piece.radius, 0.12);
+        near(piece.position[0], piece.pathPosition[0], "Changing shape changed horizontal travel");
+        near(piece.position[2], piece.pathPosition[2], "Changing shape changed lane");
+        if (!referencePiece) referencePiece = piece;
+        else {
+            assert.deepEqual(piece.rotation, referencePiece.rotation, "Changing shape changed orientation");
+            assert.deepEqual(piece.transfer, referencePiece.transfer, "Changing shape changed transfer timing or path");
+        }
+        if (time >= 4) assert.ok(piece.transfer, "Transfer cache was not exercised");
+    }
 }
 session.reducedMotion = false;
-// 紙箱は移動・待機・COMMIT・squash後も、演出設定にかかわらず正立のまま滑る。
+// 紙箱と金属パックは移動・待機・COMMIT・squash後も、演出設定にかかわらず正立のまま滑る。
 const squashed = { ...op, id: 2, flush: true };
-{
-    const shape = paper;
+for (const shape of [paper, puck]) {
+    session.style = styles[shape];
     const initial = paths.groundedPiece(op, 2);
     assert.deepEqual(initial.rotation, identity, `${shape}: changed the upright orientation`);
     for (const current of [op, squashed]) {
@@ -210,5 +291,5 @@ const squashed = { ...op, id: 2, flush: true };
     assert.deepEqual(paths.groundedPiece(structuredClone(op), 2), initial, `${shape}: reloading changed the pose`);
 }
 console.log(
-    "Piece grounding: paper box and clearance sphere; slopes; ledges; fixed sliding; pose caches; deterministic seeks"
+    "Piece grounding: paper box, beveled metal puck and clearance sphere; slopes; ledges; fixed sliding; shape caches; deterministic seeks"
 );

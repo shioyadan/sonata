@@ -24,8 +24,11 @@ type SceneStyle = StyleBase &
               surface: {
                   floor: Vector;
                   roughness: number;
+                  grain: number;
                   light: Vector;
                   pieceShadow: number;
+                  paper?: true;
+                  aluminum?: true;
               };
           }
     );
@@ -95,7 +98,7 @@ const solidColors: Pick<StyleBase, "palette" | "background" | "bounds" | "timeli
     timeline: ["#c8d2ce", "#43836b", "#9aaca4"]
 };
 
-const styles: Record<"neon" | "paper", SceneStyle> = {
+const styles: Record<"neon" | "aluminum" | "paper", SceneStyle> = {
     neon: {
         label: "Neon",
         matte: false,
@@ -121,6 +124,28 @@ const styles: Record<"neon" | "paper", SceneStyle> = {
         },
         timeline: ["#1d3946", "#59bba9", "#31525e"]
     },
+    aluminum: {
+        ...solidColors,
+        label: "Aluminum",
+        matte: true,
+        background: [0.925, 0.943, 0.952],
+        structure: {
+            body: [0.82, 0.85, 0.88],
+            base: [0.55, 0.59, 0.63],
+            rail: [0.76, 0.8, 0.84],
+            recess: [0.39, 0.43, 0.47],
+            wire: [0.42, 0.47, 0.51],
+            ink: [0.28, 0.33, 0.37]
+        },
+        surface: {
+            floor: [0.73, 0.77, 0.81],
+            roughness: 0.34,
+            grain: 0.1,
+            light: [-0.55, 0.85, -0.4],
+            pieceShadow: 0.44,
+            aluminum: true
+        }
+    },
     paper: {
         ...solidColors,
         label: "Paper model",
@@ -136,8 +161,10 @@ const styles: Record<"neon" | "paper", SceneStyle> = {
         surface: {
             floor: [0.9, 0.88, 0.84],
             roughness: 0.95,
+            grain: 0,
             light: [-0.55, 0.85, -0.4],
-            pieceShadow: 0.44
+            pieceShadow: 0.44,
+            paper: true
         }
     }
 };
@@ -838,8 +865,8 @@ function createScene({ gpu, replay, session }: SceneOptions) {
                     : h < 0.2
                       ? session.style.structure.rail
                       : session.style.structure.body;
-            // 形状と支持面を共用し、台の積層と本体の折り筋を材質で描き分ける。
-            const material = floor || base ? 1 : h >= 0.2 ? 2 : 3;
+            // 形状と支持面を共用し、紙の折り筋とアルミの反射を材質で描き分ける。
+            const material = session.style.surface.paper ? (floor || base ? 1 : h >= 0.2 ? 2 : 3) : 4;
             beveledBlock(tris, x, y, z, w, h, d, paint, 1, material, supportY);
             if (tris.shadows && y >= -0.05 && w > 0.4 && d > 0.4 && h > 0.09)
                 contactShadow(tris.shadows, x, Math.min(y, supportY) + 0.002, z, w, d, 0.1, 0.18);
@@ -1247,7 +1274,7 @@ function createScene({ gpu, replay, session }: SceneOptions) {
                     0.07,
                     color,
                     1,
-                    3,
+                    session.style.surface.paper ? 3 : 0,
                     top
                 );
             }

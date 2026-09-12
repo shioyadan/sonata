@@ -16,7 +16,7 @@ module.exports = async function reviewMobile(window, screenshots, visualStyle = 
         );
     const { settle } = createBrowserTest(window);
     const layouts = [];
-    const styleChoices = ["neon", "paper"];
+    const styleChoices = ["neon", "aluminum", "paper"];
     const styleSequence = [...styleChoices.filter((style) => style !== visualStyle), visualStyle];
     let result;
     try {
@@ -59,7 +59,7 @@ module.exports = async function reviewMobile(window, screenshots, visualStyle = 
                 JSON.stringify(layout.controls)
             );
             assert.ok(layout.styleBelowView, "Appearance controls did not fit below the view controls");
-            // 2つのスタイルを同じ行に並べ、ボタン同士や再生・ズーム操作との重なりも検出する。
+            // 3つのスタイルを同じ行に並べ、ボタン同士や再生・ズーム操作との重なりも検出する。
             const styles = layout.controls.filter((control) => control.id.startsWith("style-"));
             assert.deepEqual(
                 styles.map((control) => control.id),
