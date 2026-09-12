@@ -2,11 +2,12 @@
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
-const { createBrowserTest, waitFor: waitUntil, delay } = require("./load-test.cjs")("browser-test.cts");
+const { createBrowserTest, waitFor: waitUntil } = require("./load-test.cjs")("browser-test.cts");
 
 module.exports = async function reviewStyles(window, entry, screenshots) {
     const js = (source) => window.webContents.executeJavaScript(source);
-    const { sampleFrame, settle } = createBrowserTest(window);
+    const { evaluate, sampleFrame, settle } = createBrowserTest(window);
+    const matteStyles = ["paper"];
     const waitFor = (source, message, timeout = 10000) =>
         waitUntil(() => js(source), message, {
             timeout,
@@ -15,7 +16,7 @@ module.exports = async function reviewStyles(window, entry, screenshots) {
                     "({camera:globalThis.sonata?.camera,style:globalThis.sonata?.visualStyle,renderer:document.getElementById('renderer-status')?.textContent,hidden:document.hidden})"
                 )
         });
-    const capture = async (name) => {
+    const capture = async (name, reference) => {
         await settle();
         fs.writeFileSync(
             path.join(screenshots, `sonata-style-${name}.png`),
@@ -35,11 +36,23 @@ module.exports = async function reviewStyles(window, entry, screenshots) {
             total++;
         }
         assert.ok(different / total > 0.015, `${name}: canvas is nearly blank`);
-        return { background, coverage: different / total };
+        let changed = 0;
+        if (reference) {
+            assert.equal(pixels.length, reference.length, "Comparing styles changed the canvas size");
+            for (let i = 0; i < pixels.length; i += 4 * 13)
+                if (Math.max(...[0, 1, 2].map((k) => Math.abs(pixels[i + k] - reference[i + k]))) > 8) changed++;
+            assert.ok(changed / total > 0.015, `${name}: materials did not visibly change`);
+        }
+        return { pixels, metrics: { background, coverage: different / total, changed: changed / total } };
     };
     await window.loadFile(entry);
     await waitFor("!!globalThis.sonata", "Style test did not initialize");
     assert.equal(await js("sonata.visualStyle"), "neon", "Default style changed");
+    assert.deepEqual(
+        await js("[...document.querySelectorAll('[data-style-choice]')].map(el=>el.dataset.styleChoice)"),
+        ["neon", ...matteStyles],
+        "Style controls contain removed styles or changed order"
+    );
     assert.equal(
         await js("document.querySelector('#marble-look,#look-toggle')"),
         null,
@@ -49,10 +62,11 @@ module.exports = async function reviewStyles(window, entry, screenshots) {
         await js(`(()=>{
         const view=document.querySelector('.view-controls').getBoundingClientRect();
         const properties=['fontSize','padding','borderRadius','backgroundColor','color'];
+        const rowTop=document.querySelector('[data-style-choice]').getBoundingClientRect().top;
         return [...document.querySelectorAll('[data-style-choice]')].every(el=>{
             const r=el.getBoundingClientRect(),selected=el.getAttribute('aria-pressed')==='true';
             const reference=document.querySelector('[data-view='+(selected?'orbit':'plan')+']'),a=getComputedStyle(el),b=getComputedStyle(reference);
-            return r.width>=44&&r.height===reference.getBoundingClientRect().height&&r.top>=view.bottom&&r.bottom<=innerHeight
+            return r.width>=44&&r.height===reference.getBoundingClientRect().height&&r.top===rowTop&&r.top>=view.bottom&&r.bottom<=innerHeight
                 &&document.elementFromPoint(r.x+r.width/2,r.y+r.height/2)===el&&properties.every(key=>a[key]===b[key]);
         });})()`),
         "Style buttons do not match the view controls or are unreachable"
@@ -90,88 +104,151 @@ module.exports = async function reviewStyles(window, entry, screenshots) {
             spacing[name] = minimum;
         }
         for (const cycle of checkpoints) {
-            const result = await sampleFrame(() =>
-                js(`(()=>{
-                reviewStyle('neon');sonata.captureAt(${cycle});const before=reviewState(),trace=sonata.trace;
-                reviewStyle('blocks');const blocks=reviewState(),pieces=sonata.renderer.pieceVertices,shape=sonata.renderer.instructionShape,radii=[...new Set(sonata.pieces.map(p=>p.radius))];
-                reviewStyle('neon');return {before,blocks,shape,after:reviewState(),sameTrace:trace===sonata.trace,pieces,radii,error:sonata.renderer.error,contextLost:document.getElementById('scene').getContext('webgl2').isContextLost()};
-            })()`)
-            );
-            assert.equal(result.contextLost, false, `${key} @ ${cycle}: graphics context lost during style switching`);
-            if (fixedRadius === undefined) fixedRadius = result.radii[0];
-            assert.deepEqual(
-                result.radii,
-                [fixedRadius],
-                `${key} @ ${cycle}: instruction size changed with stage or state`
-            );
-            assert.deepEqual(result.blocks, result.before, `${key} @ ${cycle}: Blocks changed replay or camera state`);
-            assert.deepEqual(result.after, result.before, `${key} @ ${cycle}: Neon restoration changed state`);
-            assert.ok(result.sameTrace && result.pieces > 0);
-            assert.equal(result.error, 0);
-            assert.equal(result.shape, "cut-crystal", `${key} @ ${cycle}: instruction shape changed`);
+            for (const style of matteStyles) {
+                const result = await sampleFrame(() =>
+                    js(`(()=>{
+                        reviewStyle('neon');
+                        sonata.captureAt(${cycle});
+                        const before=reviewState(),trace=sonata.trace;
+                        reviewStyle(${JSON.stringify(style)});
+                        const styled=reviewState(),renderer=sonata.renderer;
+                        const geometry={
+                            pieces:sonata.pieces,
+                            colors:sonata.particles.map(p=>({id:p.id,color:p.color})),
+                            layout:sonata.instructionLayout,
+                            instances:renderer.materialInstances,
+                            pieceInstances:renderer.pieceInstances,
+                            vertices:renderer.pieceVertices
+                        };
+                        const radii=[...new Set(sonata.pieces.map(p=>p.radius))];
+                        reviewStyle('neon');
+                        return {
+                            before,styled,geometry,radii,shape:renderer.instructionShape,after:reviewState(),
+                            sameTrace:trace===sonata.trace,error:sonata.renderer.error,
+                            contextLost:document.getElementById('scene').getContext('webgl2').isContextLost()
+                        };
+                    })()`)
+                );
+                const context = `${key} @ ${cycle} / ${style}`;
+                assert.equal(result.contextLost, false, `${context}: graphics context lost during style switching`);
+                if (fixedRadius === undefined) fixedRadius = result.radii[0];
+                assert.deepEqual(
+                    result.radii,
+                    [fixedRadius],
+                    `${context}: instruction size changed with stage or state`
+                );
+                assert.deepEqual(result.styled, result.before, `${context}: style changed replay or camera state`);
+                assert.deepEqual(result.after, result.before, `${context}: Neon restoration changed state`);
+                assert.ok(result.sameTrace && result.geometry.vertices > 0);
+                assert.equal(result.error, 0);
+                assert.equal(result.shape, "paper-box", `${context}: instruction shape changed`);
+                for (const piece of result.geometry.pieces)
+                    assert.deepEqual(
+                        piece.rotation,
+                        [0, 0, 0, 1],
+                        `${context}: sliding instruction ${piece.id} rotated`
+                    );
+            }
         }
         await js(
             `sonata.captureAt(sonata.trace.demo.screenshotCycle);document.querySelector('.telemetry').scrollTop=0`
         );
         const neon = await capture(`${key}-neon`);
-        await js("reviewStyle('blocks')");
-        const blocks = await capture(`${key}-blocks`);
-        assert.ok(
-            blocks.background.reduce((s, v) => s + v, 0) > neon.background.reduce((s, v) => s + v, 0) + 300,
-            "Style did not change the rendered canvas"
-        );
-        scenes.push({ key, checkpoints: checkpoints.length, neon, blocks, spacing, stageLayout, stageTransfers });
+        const appearances = {};
+        for (const style of matteStyles) {
+            await js(`reviewStyle(${JSON.stringify(style)})`);
+            const frame = await capture(`${key}-${style}`, neon.pixels);
+            assert.ok(
+                frame.metrics.background.reduce((s, v) => s + v, 0) >
+                    neon.metrics.background.reduce((s, v) => s + v, 0) + 300,
+                `${style}: style did not change the rendered canvas`
+            );
+            appearances[style] = frame.metrics;
+        }
+        scenes.push({
+            key,
+            checkpoints: checkpoints.length,
+            neon: neon.metrics,
+            ...appearances,
+            spacing,
+            stageLayout,
+            stageTransfers
+        });
     }
     // 実入力で駒をピン留めし、カメラの補間途中でも同期的な切り替えが状態を変えないことを確認。
     await js("sonata.loadTrace('rename-rush');sonata.captureAt(sonata.trace.demo.screenshotCycle)");
-    assert.equal(await js("sonata.visualStyle"), "blocks", "Changing demos reset the style");
+    assert.equal(await js("sonata.visualStyle"), matteStyles.at(-1), "Changing demos reset the style");
+    await js("reviewStyle('paper')");
     // 実際の長い scheduler 待機・pipe 内の移動・commit と squash 後の経路を確認する。
-    const rolling = await js(`(()=>{
-        const sample=t=>{sonata.captureAt(t);return sonata.pieces.find(p=>p.id===761);};
-        const waiting=[sample(448),sample(455)],moving=[sample(459.4),sample(460.4)];
-        const original=sonata.pieces;
-        sonata.captureAt(466.2);const retired=sonata.pieces.find(p=>p.id===761);
-        sonata.captureAt(459.7);sonata.captureAt(460.4);const rewind=sonata.pieces;
-        reviewStyle('neon');reviewStyle('blocks');const style=sonata.pieces;
-        sonata.loadTrace('wide-open');sonata.loadTrace('rename-rush');sonata.captureAt(460.4);const reloaded=sonata.pieces;
-        sonata.captureAt(528.4);const squashed=sonata.pieces.filter(p=>sonata.ops.find(o=>o.id===p.id)?.flush);
-        sonata.captureAt(459.4);
-        return {waiting,moving,retired,rewound:JSON.stringify(original)===JSON.stringify(rewind),
-            stylePreserved:JSON.stringify(original)===JSON.stringify(style),reloaded:JSON.stringify(original)===JSON.stringify(reloaded),
-            squashed:squashed.length,normalized:[...original,...squashed,retired].every(p=>p&&p.rotation.every(Number.isFinite)&&Math.abs(Math.hypot(...p.rotation)-1)<1e-9)};
-    })()`);
-    assert.deepEqual(rolling.waiting[0].position, rolling.waiting[1].position, "Waiting fixture moved");
-    assert.deepEqual(rolling.waiting[0].rotation, rolling.waiting[1].rotation, "Waiting instruction kept rolling");
-    assert.ok(
-        Math.hypot(...rolling.moving[0].position.map((v, i) => v - rolling.moving[1].position[i])) > 0.1,
-        "Moving fixture did not move"
-    );
-    assert.ok(
-        Math.hypot(...rolling.moving[0].rotation.map((v, i) => v - rolling.moving[1].rotation[i])) > 0.1,
-        "Moving instruction did not roll"
-    );
-    assert.ok(
-        rolling.rewound && rolling.stylePreserved && rolling.reloaded && rolling.normalized && rolling.squashed > 0,
-        "Rolling lost deterministic, finite poses"
-    );
-    const pausedPieces = await js("sonata.pieces");
+    const sliding = {};
+    for (const style of matteStyles) {
+        const result = await sampleFrame(() =>
+            js(`(()=>{
+            reviewStyle(${JSON.stringify(style)});
+            const sample=t=>{sonata.captureAt(t);return sonata.pieces.find(p=>p.id===761);};
+            const waiting=[sample(448),sample(455)],moving=[sample(459.4),sample(460.4)];
+            const original=sonata.pieces;
+            sonata.captureAt(466.2);const retired=sonata.pieces.find(p=>p.id===761);
+            sonata.captureAt(459.7);sonata.captureAt(460.4);const rewind=sonata.pieces;
+            reviewStyle('neon');reviewStyle(${JSON.stringify(style)});const restoredStyle=sonata.pieces;
+            sonata.loadTrace('wide-open');sonata.loadTrace('rename-rush');sonata.captureAt(460.4);const reloaded=sonata.pieces;
+            sonata.captureAt(528.4);const squashed=sonata.pieces.filter(p=>sonata.ops.find(o=>o.id===p.id)?.flush);
+            sonata.captureAt(459.4);
+            return {waiting,moving,retired,rewound:JSON.stringify(original)===JSON.stringify(rewind),
+                stylePreserved:JSON.stringify(original)===JSON.stringify(restoredStyle),reloaded:JSON.stringify(original)===JSON.stringify(reloaded),
+                upright:[...original,...squashed,retired,...waiting,...moving].every(p=>p&&JSON.stringify(p.rotation)==='[0,0,0,1]'),
+                squashed:squashed.length,normalized:[...original,...squashed,retired].every(p=>p&&p.rotation.every(Number.isFinite)&&Math.abs(Math.hypot(...p.rotation)-1)<1e-9)};
+        })()`)
+        );
+        assert.deepEqual(result.waiting[0].position, result.waiting[1].position, "Waiting fixture moved");
+        assert.deepEqual(
+            result.waiting[0].rotation,
+            result.waiting[1].rotation,
+            "Waiting instruction changed orientation"
+        );
+        assert.ok(
+            Math.hypot(...result.moving[0].position.map((v, i) => v - result.moving[1].position[i])) > 0.1,
+            "Moving fixture did not move"
+        );
+        assert.ok(result.upright, `${style}: instructions rotated while waiting, moving, retiring or being squashed`);
+        assert.deepEqual(
+            result.moving[0].rotation,
+            result.moving[1].rotation,
+            `${style}: moving instruction changed orientation`
+        );
+        assert.ok(
+            result.rewound && result.stylePreserved && result.reloaded && result.normalized && result.squashed > 0,
+            "Sliding lost deterministic, finite poses"
+        );
+        sliding[style] = result;
+    }
+    await js("reviewStyle('paper')");
     await settle();
-    assert.deepEqual(await js("sonata.pieces"), pausedPieces, "Paused pieces kept rolling with the decorative clock");
     const pick = await js(`(()=>{const r=document.getElementById('scene').getBoundingClientRect();
         const p=sonata.particles.filter(p=>p.screen[0]>r.width*.2&&p.screen[0]<r.width*.7&&p.screen[1]>r.height*.25&&p.screen[1]<r.height*.7)
             .sort((a,b)=>Math.abs(a.screen[0]-r.width*.45)-Math.abs(b.screen[0]-r.width*.45))[0];
         return {x:Math.round(r.x+p.screen[0]),y:Math.round(r.y+p.screen[1])};})()`);
     window.webContents.sendInputEvent({ type: "mouseDown", ...pick, button: "left", clickCount: 1 });
     window.webContents.sendInputEvent({ type: "mouseUp", ...pick, button: "left", clickCount: 1 });
-    await waitFor("sonata.selectedID!==null", "Blocks instruction could not be picked");
-    const selected = await js(`(()=>{document.getElementById('zoom-in').click();const before=reviewState();
-        for(let i=0;i<8;i++){reviewStyle('neon');reviewStyle('blocks');}
-        return {before,after:reviewState()};})()`);
-    assert.deepEqual(selected.after, selected.before, "Repeated switching lost the selection or camera target");
+    await waitFor("sonata.selectedID!==null", "Paper instruction could not be picked");
+    await js("document.getElementById('zoom-in').click()");
+    for (let i = 0; i < 8; i++) {
+        for (const style of ["neon", ...matteStyles]) {
+            const selected = await sampleFrame(() =>
+                js(`(()=>{
+                    const before=reviewState();
+                    reviewStyle(${JSON.stringify(style)});
+                    return {before,after:reviewState()};
+                })()`)
+            );
+            assert.deepEqual(selected.after, selected.before, "Repeated switching lost the selection or camera target");
+        }
+    }
+    await js("reviewStyle('paper')");
     await js("sonata.setCamera('plan')");
     // 補間に使う dt は1フレーム75msまで。低速な描画でも、精度を保って実際の収束を待つ。
     await waitFor("Math.abs(sonata.camera.elevation-1.49)<.001", "Top view did not settle", 30000);
-    await capture("blocks-top");
+    await capture("paper-top");
     const cameraShadowUpdates = await js("sonata.renderer.pieceShadows.updates");
     // 全体表示と最大拡大の間で、丸い角・部品の重なり・レジスタ表面を比較できる画像を残す。
     await js("sonata.setCamera('orbit');for(let i=0;i<4;i++)document.getElementById('zoom-in').click()");
@@ -180,56 +257,93 @@ module.exports = async function reviewStyles(window, entry, screenshots) {
         "Material close-up did not settle",
         30000
     );
-    await capture("blocks-materials");
+    await capture("paper-materials");
     assert.equal(
         await js("sonata.renderer.pieceShadows.updates"),
         cameraShadowUpdates,
         "Camera movement unnecessarily regenerated instruction shadows"
     );
-    const pieceShadows = await require("./check-piece-shadows.cjs")(window);
-    const grounding = await require("./check-grounded-pieces.cjs")(window);
-    // 同じ駒を同じ位置で読み取り、回転が実際の Cut crystal の面に反映されることを検査する。
-    const posePixels = await js(`(()=>{
-        const read=()=>{
-            sonata.captureAt(459.4);
-            const p=sonata.particles.find(p=>p.id===761),m=sonata.pieces.find(p=>p.id===761);
-            const gl=document.getElementById('scene').getContext('webgl2'),dpr=sonata.renderer.pixelRatio;
-            const radius=m.radius*gl.drawingBufferHeight/(2*Math.tan(.33)*p.screen[2]);
-            const size=Math.max(4,Math.floor(radius)),x=Math.round(p.screen[0]*dpr-size/2),y=Math.round(gl.drawingBufferHeight-p.screen[1]*dpr-size/2);
-            const pixels=new Uint8Array(size*size*4);
-            gl.readPixels(x,y,size,size,gl.RGBA,gl.UNSIGNED_BYTE,pixels);return {pixels,pose:m.rotation,error:gl.getError()};
-        };
-        const before=read();document.getElementById('motion-effects').click();const fixed=read();
-        document.getElementById('motion-effects').click();const restored=read();
-        let changed=0;for(let i=0;i<before.pixels.length;i+=4)if(Math.max(...[0,1,2].map(k=>Math.abs(before.pixels[i+k]-fixed.pixels[i+k])))>8)changed++;
-        return {changed,fixed:fixed.pose,restored:JSON.stringify(before.pose)===JSON.stringify(restored.pose),errors:[before.error,fixed.error,restored.error]};
-    })()`);
-    assert.ok(posePixels.changed > 5, "Rotation did not change the rendered crystal");
-    assert.deepEqual(posePixels.fixed, [0, 0, 0, 1], "Motion effects OFF left rotation enabled");
-    assert.ok(posePixels.restored, "Motion effects ON did not restore the trace-derived orientation");
-    assert.deepEqual(posePixels.errors, [0, 0, 0]);
+    const materialChecks = {};
+    for (const style of matteStyles) {
+        await js(`reviewStyle(${JSON.stringify(style)})`);
+        const pausedPieces = await js("sonata.pieces");
+        await settle();
+        assert.deepEqual(
+            await js("sonata.pieces"),
+            pausedPieces,
+            `${style}: paused pieces changed with the decorative clock`
+        );
+        const pieceShadows = await require("./check-piece-shadows.cjs")(window);
+        await settle();
+        const grounding = await require("./check-grounded-pieces.cjs")(window);
+        // 同時刻でMotion effectsを切り替え、紙箱の姿勢と描画が変わらないことを検査する。
+        const posePixels = await js(`(()=>{
+            const read=()=>{
+                sonata.captureAt(459.4);
+                const p=sonata.particles.find(p=>p.id===761),m=sonata.pieces.find(p=>p.id===761);
+                const gl=document.getElementById('scene').getContext('webgl2'),dpr=sonata.renderer.pixelRatio;
+                const radius=m.radius*gl.drawingBufferHeight/(2*Math.tan(.33)*p.screen[2]);
+                // 固定姿勢の駒は内側に絞り、周囲の装飾のON/OFFを画素差へ含めない。
+                const size=Math.max(2,Math.floor(radius*.5));
+                const x=Math.round(p.screen[0]*dpr-size/2),y=Math.round(gl.drawingBufferHeight-p.screen[1]*dpr-size/2);
+                const pixels=new Uint8Array(size*size*4);
+                gl.readPixels(x,y,size,size,gl.RGBA,gl.UNSIGNED_BYTE,pixels);return {pixels,pose:m.rotation,error:gl.getError()};
+            };
+            const before=read();document.getElementById('motion-effects').click();const fixed=read();
+            document.getElementById('motion-effects').click();const restored=read();
+            return {
+                original:before.pose,fixed:fixed.pose,
+                fixedPixels:[...before.pixels].every((v,i)=>v===fixed.pixels[i]),
+                restoredPixels:[...before.pixels].every((v,i)=>v===restored.pixels[i]),
+                restored:JSON.stringify(before.pose)===JSON.stringify(restored.pose),errors:[before.error,fixed.error,restored.error]
+            };
+        })()`);
+        assert.deepEqual(posePixels.original, [0, 0, 0, 1], `${style}: Motion effects ON rotated the instruction`);
+        assert.ok(
+            posePixels.fixedPixels && posePixels.restoredPixels,
+            `${style}: Motion effects changed sliding instruction pixels`
+        );
+        assert.deepEqual(posePixels.fixed, [0, 0, 0, 1], "Motion effects OFF left rotation enabled");
+        assert.ok(posePixels.restored, "Motion effects ON did not restore the trace-derived orientation");
+        assert.deepEqual(posePixels.errors, [0, 0, 0]);
+        materialChecks[style] = { pieceShadows, grounding, posePixels };
+    }
+    const opacity = await require("./load-test.cjs")("check-browser.cts").pieceOpacity(window);
+    for (const frame of opacity) materialChecks[frame.style].opacity = frame;
     await js("sonata.setCamera('orbit');for(let i=0;i<30;i++)document.getElementById('zoom-in').click()");
     await waitFor(
         "sonata.camera.radius<3.01&&Math.abs(sonata.camera.elevation-.73)<.001",
-        "Blocks detail zoom did not settle",
+        "Material detail zoom did not settle",
         30000
     );
-    await capture("blocks-detail");
+    for (const style of matteStyles) {
+        await js(`reviewStyle(${JSON.stringify(style)})`);
+        await capture(`${style}-detail`);
+    }
     await js("sonata.setCamera('orbit');sonata.captureAt(sonata.trace.firstCycle+2);sonata.setPlaying(true)");
-    const running = await js(
-        `(()=>{const before=reviewState();reviewStyle('neon');return {before,after:reviewState()};})()`
-    );
-    assert.deepEqual(running.after, running.before, "Switching stopped or restarted playback");
-    await waitFor(`sonata.cycle>${running.after.cycle + 0.2}`, "Playback did not continue after switching");
+    for (const style of ["neon", ...matteStyles]) {
+        const running = await sampleFrame(() =>
+            js(`(()=>{
+                const before=reviewState();
+                reviewStyle(${JSON.stringify(style)});
+                return {before,after:reviewState()};
+            })()`)
+        );
+        assert.deepEqual(running.after, running.before, "Switching stopped or restarted playback");
+        await waitFor(`sonata.cycle>${running.after.cycle + 0.2}`, "Playback did not continue after switching");
+    }
     await js(
         "document.getElementById('bloom').value='123';document.getElementById('bloom').dispatchEvent(new Event('input'))"
     );
-    await js("sonata.setPlaying(false);reviewStyle('blocks')");
-    assert.equal(
-        await js("document.getElementById('bloom').disabled"),
-        true,
-        "Blocks left an ineffective bloom slider enabled"
-    );
+    await js("sonata.setPlaying(false)");
+    for (const style of matteStyles) {
+        await sampleFrame(() => evaluate(({ $ }, key) => $("style-" + key).click(), style));
+        assert.equal(
+            await js("document.getElementById('bloom').disabled"),
+            true,
+            `${style}: an ineffective bloom slider remained enabled`
+        );
+    }
     await js("reviewStyle('neon')");
     assert.equal(
         await js(
@@ -238,16 +352,18 @@ module.exports = async function reviewStyles(window, entry, screenshots) {
         true,
         "Neon lost the user's bloom setting"
     );
-    const mobile = await require("./check-mobile.cjs")(window, screenshots, "blocks");
-    assert.equal(await js("sonata.visualStyle"), "blocks", "Mobile layout restoration reset the style");
+    const mobile = {};
+    for (const style of matteStyles) {
+        mobile[style] = await require("./check-mobile.cjs")(window, screenshots, style);
+        assert.equal(await js("sonata.visualStyle"), style, "Mobile layout restoration reset the style");
+    }
     await js("reviewStyle('neon')");
     assert.equal(await js("sonata.renderer.pieceShadows.size"), 0, "Neon retained the instruction shadow target");
     return {
         scenes,
         fixedRadius,
-        pieceShadows,
-        grounding,
-        rolling: { ...rolling, paused: true, pixels: posePixels },
+        materialChecks,
+        sliding: { ...sliding, paused: true },
         selectionPreserved: true,
         playingPreserved: true,
         mobile

@@ -38,7 +38,7 @@ module.exports = async function reviewStageTransfers(window) {
         return { saved, trace: trace.key, cases: [...cases] };
     });
     const transfers = [];
-    await sampleFrame(() => evaluate(({ $ }) => $("style-blocks").click()));
+    await sampleFrame(() => evaluate(({ $ }) => $("style-paper").click()));
     for (const [key, { id, start, end }] of setup.cases) {
         const frames = [];
         for (let i = 0; i <= 8; i++) {
@@ -66,7 +66,7 @@ module.exports = async function reviewStageTransfers(window) {
                 )
             );
         }
-        // 回転した形の上下幅ぶんだけ許容し、両端より土台まで落ちる回帰を検出する。
+        // 駒の上下幅ぶんだけ許容し、両端より土台まで落ちる回帰を検出する。
         const lower = Math.min(frames[0].height, frames.at(-1).height) - frames[0].radius * 2 - 0.02;
         const minimum = Math.min(...frames.map((frame) => frame.height));
         const biggestStep = Math.max(...frames.slice(1).map((frame, i) => Math.abs(frame.height - frames[i].height)));

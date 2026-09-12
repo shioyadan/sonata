@@ -15,11 +15,19 @@ interface Frame {
     colored: number;
     error: number;
     particles: number;
+    shape: string;
+    upright: boolean;
     pieceShadows?: unknown;
 }
 
 async function reviewBrowser(window: BrowserWindow, entry: string, screenshots?: string) {
     const { evaluate, settle } = createBrowserTest(window);
+    const matteStyles = ["paper"];
+    const instructionShape = (style: string) => {
+        if (style === "neon") return "glow";
+        if (style === "paper") return "paper-box";
+        throw new Error("Unknown visual style: " + style);
+    };
     const waitFor = (condition: () => Promise<unknown>, message: string) =>
         waitUntil(condition, message, {
             diagnostics: () =>
@@ -49,7 +57,13 @@ async function reviewBrowser(window: BrowserWindow, entry: string, screenshots?:
             let colored = 0;
             for (let i = 0; i < pixels.length; i += 4)
                 if (Math.max(...pixels.subarray(i, i + 3)) - Math.min(...pixels.subarray(i, i + 3)) > 40) colored++;
-            return { colored, error: gl.getError(), particles: sonata.particles.length };
+            return {
+                colored,
+                error: gl.getError(),
+                particles: sonata.particles.length,
+                shape: sonata.renderer.instructionShape,
+                upright: sonata.pieces.every((piece) => piece.rotation.every((v, i) => v === (i === 3 ? 1 : 0)))
+            };
         });
     const press = async (keyCode: string, modifiers: KeyboardInputEvent["modifiers"] = []) => {
         // main process からの入力配送を keyup と2フレームで確認し、否定条件も送信後に判定する。
@@ -301,9 +315,9 @@ async function reviewBrowser(window: BrowserWindow, entry: string, screenshots?:
     await window.loadFile(entry);
     await ready();
 
-    // 両スタイルで context を失わせ、Blocks の材質テクスチャ・影も復旧後に再生成できることを確認する。
+    // 全スタイルで context を失わせ、材質テクスチャ・影も復旧後に再生成できることを確認する。
     const contextRecoveries = [];
-    for (const visualStyle of ["neon", "blocks"]) {
+    for (const visualStyle of ["neon", ...matteStyles]) {
         await evaluate(({ $ }, key) => $("style-" + key).click(), visualStyle);
         const available = await evaluate(({ gl, state }) => {
             state.context = gl.getExtension("WEBGL_lose_context");
@@ -346,11 +360,14 @@ async function reviewBrowser(window: BrowserWindow, entry: string, screenshots?:
         );
         const frame = await readFrame();
         assert.equal(frame.error, 0, "Restored graphics returned a WebGL error");
+        assert.equal(frame.shape, instructionShape(visualStyle), "Context recovery changed the instruction shape");
         assert.ok(
             frame.colored > 1000 && frame.particles > 0,
             `Restored graphics left an empty frame: ${JSON.stringify(frame)}`
         );
-        if (visualStyle === "blocks") {
+        if (visualStyle === "paper")
+            assert.ok(frame.upright, `${visualStyle}: context recovery rotated a sliding instruction`);
+        if (visualStyle !== "neon") {
             await evaluate(({ sonata }) => {
                 sonata.loadTrace("rename-rush");
                 return sonata.captureAt(459.4);
@@ -359,8 +376,8 @@ async function reviewBrowser(window: BrowserWindow, entry: string, screenshots?:
         }
         contextRecoveries.push({ style: visualStyle, ...frame });
     }
-    // MSAA を使えない環境でも、Cut crystal の背景コピーが描画先を読み書きする循環を作らない。
-    let withoutMSAA;
+    // MSAAなしでも紙の折り面・投影影を描画できる。
+    const withoutMSAA = [];
     debuggerAPI.attach("1.3");
     injected = null;
     try {
@@ -380,42 +397,48 @@ async function reviewBrowser(window: BrowserWindow, entry: string, screenshots?:
         await evaluate(({ sonata, $ }) => {
             sonata.setPlaying(false);
             if ($("auto-camera").getAttribute("aria-pressed") === "true") $("auto-camera").click();
-            $("style-blocks").click();
+            $("style-paper").click();
             for (let i = 0; i < 4; i++) $("zoom-in").click();
         });
         await waitFor(
             () => evaluate(({ sonata }) => Math.abs(sonata.camera.radius - sonata.camera.targetRadius) < 0.01),
-            "Crystal close-up without MSAA did not settle"
+            "Material close-up without MSAA did not settle"
         );
-        withoutMSAA = {
-            ...(await readFrame()),
-            ...(await evaluate(({ sonata }) => ({
-                samples: sonata.renderer.msaaSamples,
-                pieces: sonata.renderer.pieceInstances
-            })))
-        };
-        assert.equal(withoutMSAA.samples, 0, "MSAA fallback was not exercised");
-        assert.equal(withoutMSAA.error, 0, "Crystal background copy without MSAA returned a WebGL error");
-        assert.ok(
-            withoutMSAA.colored > 1000 && withoutMSAA.particles > 0 && withoutMSAA.pieces > 0,
-            "Crystal fallback left an empty frame"
-        );
-        assert.equal(
-            await evaluate(({ sonata }) => sonata.renderer.instructionShape),
-            "cut-crystal",
-            "MSAA fallback changed the fixed instruction shape"
-        );
-        await evaluate(({ sonata }) => {
-            sonata.loadTrace("rename-rush");
-            return sonata.captureAt(459.4);
-        });
-        withoutMSAA.pieceShadows = await require("./check-piece-shadows.cjs")(window);
-        await settle();
-        if (screenshots)
-            fs.writeFileSync(
-                path.join(screenshots, "sonata-style-blocks-no-msaa.png"),
-                (await window.webContents.capturePage()).toPNG()
+        for (const style of matteStyles) {
+            await evaluate(({ $ }, key) => $("style-" + key).click(), style);
+            await settle();
+            const frame = {
+                ...(await readFrame()),
+                ...(await evaluate(({ sonata }) => ({
+                    samples: sonata.renderer.msaaSamples,
+                    pieces: sonata.renderer.pieceInstances
+                })))
+            };
+            assert.equal(frame.samples, 0, "MSAA fallback was not exercised");
+            if (style === "paper") assert.ok(frame.upright, `${style}: MSAA fallback rotated a sliding instruction`);
+            assert.equal(frame.error, 0, "Instruction rendering without MSAA returned a WebGL error");
+            assert.ok(
+                frame.colored > 1000 && frame.particles > 0 && frame.pieces > 0,
+                "Instruction fallback left an empty frame"
             );
+            assert.equal(
+                await evaluate(({ sonata }) => sonata.renderer.instructionShape),
+                instructionShape(style),
+                "MSAA fallback changed the instruction shape"
+            );
+            await evaluate(({ sonata }) => {
+                sonata.loadTrace("rename-rush");
+                return sonata.captureAt(459.4);
+            });
+            frame.pieceShadows = await require("./check-piece-shadows.cjs")(window);
+            await settle();
+            if (screenshots)
+                fs.writeFileSync(
+                    path.join(screenshots, `sonata-style-${style}-no-msaa.png`),
+                    (await window.webContents.capturePage()).toPNG()
+                );
+            withoutMSAA.push({ style, ...frame });
+        }
     } finally {
         try {
             if (injected)
@@ -451,4 +474,85 @@ async function reviewBrowser(window: BrowserWindow, entry: string, screenshots?:
         withoutMSAA
     };
 }
+// 命令の描画直前に色だけを黒/白へ置き換え、不透明な中心画素が背景に依存しないことを確認する。
+// 命令を省いた対照フレームでは同じ座標に背景差が出るため、描画の差し替え自体も検証できる。
+async function reviewPieceOpacity(window: BrowserWindow) {
+    const { evaluate, sampleFrame } = createBrowserTest(window);
+    const originalPieces = await evaluate(({ sonata }) => sonata.pieces);
+    const frames = [];
+    for (const style of ["paper"]) {
+        const frame = await sampleFrame(() =>
+            evaluate(({ sonata, gl, $ }, key) => {
+                const original = { style: sonata.visualStyle, cycle: sonata.cycle };
+                const draw = gl.drawArraysInstanced;
+                let background = 0,
+                    omitPieces = false,
+                    intercepted = 0;
+                gl.drawArraysInstanced = function (mode, first, vertices, count) {
+                    const program = gl.getParameter(gl.CURRENT_PROGRAM) as WebGLProgram;
+                    if (
+                        vertices !== 6 ||
+                        gl.getAttribLocation(program, "aSphere") !== 0 ||
+                        !gl.getUniformLocation(program, "uLight")
+                    )
+                        return draw.call(this, mode, first, vertices, count);
+                    const color = gl.getParameter(gl.COLOR_CLEAR_VALUE) as Float32Array;
+                    const scissor = gl.isEnabled(gl.SCISSOR_TEST);
+                    gl.disable(gl.SCISSOR_TEST);
+                    gl.clearColor(background, background, background, 1);
+                    gl.clear(gl.COLOR_BUFFER_BIT);
+                    gl.clearColor(color[0], color[1], color[2], color[3]);
+                    if (scissor) gl.enable(gl.SCISSOR_TEST);
+                    intercepted++;
+                    if (!omitPieces) return draw.call(this, mode, first, vertices, count);
+                };
+                const read = (value: number, omit = false) => {
+                    background = value;
+                    omitPieces = omit;
+                    sonata.captureAt(459.4);
+                    const particle = sonata.particles.find((p) => p.id === 761);
+                    if (!particle) throw new Error("Opacity fixture is not visible");
+                    const scale = sonata.renderer.pixelRatio;
+                    const x = Math.floor(particle.screen[0] * scale);
+                    const y = Math.floor(gl.drawingBufferHeight - particle.screen[1] * scale);
+                    if (x < 0 || y < 0 || x >= gl.drawingBufferWidth || y >= gl.drawingBufferHeight)
+                        throw new Error("Opacity fixture is outside the canvas");
+                    const pixel = new Uint8Array(4);
+                    gl.readPixels(x, y, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, pixel);
+                    return [...pixel];
+                };
+                try {
+                    $("style-" + key).click();
+                    const black = read(0),
+                        white = read(1),
+                        repeated = read(0),
+                        controlBlack = read(0, true),
+                        controlWhite = read(1, true);
+                    return { black, white, repeated, controlBlack, controlWhite, intercepted, error: gl.getError() };
+                } finally {
+                    gl.drawArraysInstanced = draw;
+                    $("style-" + original.style).click();
+                    sonata.captureAt(original.cycle);
+                }
+            }, style)
+        );
+        assert.ok(frame.intercepted >= 5, `${style}: the instruction background was not replaced`);
+        assert.equal(frame.error, 0, `${style}: the opacity fixture caused a WebGL error`);
+        assert.deepEqual(frame.repeated, frame.black, `${style}: restoring the background changed the same frame`);
+        const difference = Math.max(...frame.black.slice(0, 3).map((v, i) => Math.abs(v - frame.white[i])));
+        const controlDifference = Math.min(
+            ...frame.controlBlack.slice(0, 3).map((v, i) => Math.abs(v - frame.controlWhite[i]))
+        );
+        assert.ok(controlDifference > 200, `${style}: the control did not expose the changed background`);
+        assert.equal(difference, 0, `${style}: opaque instruction still transmits the background`);
+        frames.push({ style, difference, controlDifference, ...frame });
+    }
+    assert.deepEqual(
+        await evaluate(({ sonata }) => sonata.pieces),
+        originalPieces,
+        "Restoring the style and cycle changed instruction poses"
+    );
+    return frames;
+}
+reviewBrowser.pieceOpacity = reviewPieceOpacity;
 export = reviewBrowser;

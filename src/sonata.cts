@@ -182,7 +182,6 @@ function start(gl: WebGL2RenderingContext) {
         applyTrace();
     }
     function applyTrace() {
-        paths.resetTrace();
         $("trace-select").value = replay.trace.key;
         session.selectedID = null;
         rebuildWorld();
@@ -194,9 +193,9 @@ function start(gl: WebGL2RenderingContext) {
         session.visualStyle = key;
         session.style = styles[key];
         document.documentElement.dataset.style = key;
-        document.querySelector<HTMLMetaElement>('meta[name="color-scheme"]')!.content = session.style.matte
-            ? "light"
-            : "dark";
+        const theme = session.style.matte ? "light" : "dark";
+        document.documentElement.dataset.theme = theme;
+        document.querySelector<HTMLMetaElement>('meta[name="color-scheme"]')!.content = theme;
         for (const el of document.querySelectorAll<HTMLElement>("[data-bound]")) {
             if (el.closest(".bound-bar,.bound-scene-key"))
                 el.style.setProperty(
@@ -1028,7 +1027,7 @@ function start(gl: WebGL2RenderingContext) {
                     fps: clock.fps,
                     contextLost: gpu.contextLost,
                     style: session.visualStyle,
-                    instructionShape: session.style.matte ? "cut-crystal" : "glow",
+                    instructionShape: session.style.matte ? "paper-box" : "glow",
                     pieceVertices: gpu.instructionPieces.count * gpu.instructionPieces.vertices,
                     pieceInstances: gpu.instructionPieces.count,
                     materialInstances: gpu.staticMaterials!.count,

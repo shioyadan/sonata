@@ -16,6 +16,8 @@ module.exports = async function reviewMobile(window, screenshots, visualStyle = 
         );
     const { settle } = createBrowserTest(window);
     const layouts = [];
+    const styleChoices = ["neon", "paper"];
+    const styleSequence = [...styleChoices.filter((style) => style !== visualStyle), visualStyle];
     let result;
     try {
         await command("Emulation.setTouchEmulationEnabled", { enabled: true, maxTouchPoints: 2 });
@@ -37,10 +39,14 @@ module.exports = async function reviewMobile(window, screenshots, visualStyle = 
                 const rect=id=>document.getElementById(id).getBoundingClientRect();
                 const w=rect('world'),b=rect('bound-scene'),transport=document.querySelector('.transport').getBoundingClientRect();
                 const fits=r=>r.left>=0&&r.right<=innerWidth+.1&&r.top>=0&&r.bottom<=innerHeight+.1;
-                const ids=['play','previous','next','reset','speed','timeline','next-flush','mobile-details','style-neon','style-blocks','zoom-in','zoom-fit','zoom-out'];
+                const ids=[
+                    'play','previous','next','reset','speed','timeline','next-flush','mobile-details',
+                    ...${JSON.stringify(styleChoices.map((style) => `style-${style}`))},'zoom-in','zoom-fit','zoom-out'
+                ];
                 return {width:innerWidth,height:innerHeight,scrollWidth:document.documentElement.scrollWidth,scrollHeight:document.documentElement.scrollHeight,
-                    controls:ids.map(id=>{const r=rect(id);return {id,width:r.width,height:r.height,visible:fits(r),reachable:document.getElementById(id).contains(document.elementFromPoint(r.x+r.width/2,r.y+r.height/2))};}),
-                    styleBelowView:rect('style-neon').top>=document.querySelector('.view-controls').getBoundingClientRect().bottom,
+                    controls:ids.map(id=>{const r=rect(id);return {id,left:r.left,right:r.right,top:r.top,bottom:r.bottom,width:r.width,height:r.height,visible:fits(r),reachable:document.getElementById(id).contains(document.elementFromPoint(r.x+r.width/2,r.y+r.height/2))};}),
+                    styleBelowView:[...document.querySelectorAll('[data-style-choice]')].every(el=>
+                        el.getBoundingClientRect().top>=document.querySelector('.view-controls').getBoundingClientRect().bottom),
                     compact:sonata.camera.compact,transportVisible:fits(transport),error:sonata.renderer.error,
                     boundVisible:b.width>0&&b.left>=w.left&&b.right<=w.right&&b.top>=w.top&&b.bottom<=w.bottom,
                     telemetryInPanel:document.getElementById('mobile-panel').contains(document.querySelector('.telemetry'))};
@@ -53,12 +59,31 @@ module.exports = async function reviewMobile(window, screenshots, visualStyle = 
                 JSON.stringify(layout.controls)
             );
             assert.ok(layout.styleBelowView, "Appearance controls did not fit below the view controls");
+            // 2つのスタイルを同じ行に並べ、ボタン同士や再生・ズーム操作との重なりも検出する。
+            const styles = layout.controls.filter((control) => control.id.startsWith("style-"));
+            assert.deepEqual(
+                styles.map((control) => control.id),
+                styleChoices.map((style) => `style-${style}`)
+            );
+            assert.ok(
+                styles.every((control) => control.top === styles[0].top),
+                "Style controls wrapped across rows"
+            );
+            for (const button of layout.controls.filter((control) => control.id.startsWith("style-"))) {
+                const collision = layout.controls.find(
+                    (other) =>
+                        other.id !== button.id &&
+                        Math.min(button.right, other.right) - Math.max(button.left, other.left) > 0.1 &&
+                        Math.min(button.bottom, other.bottom) - Math.max(button.top, other.top) > 0.1
+                );
+                assert.equal(collision, undefined, `${button.id} overlaps ${collision?.id} at ${width} px`);
+            }
             assert.equal(layout.error, 0);
             layouts.push(layout);
             await capture(name);
-            // 実際のタッチで両方を選び、再生時刻を保ったまま選択表示が切り替わる。
+            // 実際のタッチで全スタイルを選び、再生時刻を保ったまま選択表示が切り替わる。
             const cycle = await js("sonata.cycle");
-            for (const key of [visualStyle === "blocks" ? "neon" : "blocks", visualStyle]) {
+            for (const key of styleSequence) {
                 const point = await js(
                     `(()=>{const r=document.getElementById('style-'+${JSON.stringify(key)}).getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2};})()`
                 );
@@ -148,7 +173,7 @@ module.exports = async function reviewMobile(window, screenshots, visualStyle = 
         const cycle = await js("sonata.cycle"),
             playing = await js("sonata.playing");
         // ネイティブ button の Space 入力で切り替え、再生ショートカットとの干渉を検出する。
-        for (const key of [visualStyle === "blocks" ? "neon" : "blocks", visualStyle]) {
+        for (const key of styleSequence) {
             await js(`document.getElementById('style-'+${JSON.stringify(key)}).focus()`);
             window.webContents.sendInputEvent({ type: "keyDown", keyCode: "Space" });
             window.webContents.sendInputEvent({ type: "keyUp", keyCode: "Space" });

@@ -147,9 +147,14 @@ h1 > span {
     backdrop-filter: blur(10px);
 }
 
+.style-controls {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
 .view-controls button {
     flex: 1;
-    padding: 7px 13px;
+    padding: 7px 9px;
     font-size: 10px;
     color: #82949d;
     border-radius: 3px;

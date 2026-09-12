@@ -16,12 +16,14 @@ module.exports = async function reviewGroundedPieces(window) {
         };
         try{
             sonata.captureAt(459.4);
-            const pieces=sonata.pieces;
+            const pieces=sonata.pieces,shape=sonata.renderer.instructionShape;
+            if(shape!=='paper-box')throw Error('Unexpected grounded instruction shape '+shape);
             let maximumGap=0,gpuError=0,moved=0,grounded=0,transferring=0;
             for(let i=0;i<pieces.length;i++){
                 const p=pieces[i],q=p.rotation;
+                if(q.some((v,k)=>v!==(k===3?1:0)))throw Error(shape+' rotated '+p.id);
                 if(p.contact){
-                    const lower=sonataPieceGrounding.lowerAt((p.contact[0]-p.position[0])/p.radius,(p.contact[2]-p.position[2])/p.radius,[-q[0],-q[1],-q[2],q[3]]);
+                    const lower=sonataPieceGrounding.lowerAt((p.contact[0]-p.position[0])/p.radius,(p.contact[2]-p.position[2])/p.radius,[-q[0],-q[1],-q[2],q[3]],shape);
                     if(lower===null)throw Error('Contact lies outside instruction '+p.id);
                     maximumGap=Math.max(maximumGap,Math.abs(p.position[1]+lower*p.radius-p.contact[1]));grounded++;
                 }else{
@@ -29,23 +31,26 @@ module.exports = async function reviewGroundedPieces(window) {
                     transferring++;
                 }
                 if(Math.abs(p.position[1]-p.pathPosition[1])>.01)moved++;
-                for(const batch of batches)for(let k=0;k<4;k++)gpuError=Math.max(gpuError,Math.abs(batch[i*12+k]-(k===3?p.radius:p.position[k])));
+                for(const batch of batches)for(let k=0;k<4;k++){
+                    gpuError=Math.max(gpuError,Math.abs(batch[i*12+k]-(k===3?p.radius:p.position[k])));
+                    gpuError=Math.max(gpuError,Math.abs(batch[i*12+8+k]-q[k]));
+                }
             }
             const first=JSON.stringify(pieces);sonata.captureAt(460.4);sonata.captureAt(459.4);
-            return {pieces:pieces.length,moved,grounded,transferring,maximumGap,gpuError,batches:batches.length,returned:first===JSON.stringify(sonata.pieces),error:gl.getError()};
+            return {shape,pieces:pieces.length,moved,grounded,transferring,maximumGap,gpuError,batches:batches.length,returned:first===JSON.stringify(sonata.pieces),error:gl.getError()};
         }finally{gl.drawArraysInstanced=draw;sonata.captureAt(original);}
     })()`);
-    assert.ok(result.pieces > 0 && result.moved > 20, `Cut crystal: instructions still use hovering heights`);
+    assert.ok(result.pieces > 0 && result.moved > 20, `${result.shape}: instructions still use hovering heights`);
     assert.ok(
         result.grounded > 20 && result.transferring > 0,
-        `Cut crystal: stage contact and airborne transfer were not both exercised`
+        `${result.shape}: stage contact and airborne transfer were not both exercised`
     );
-    assert.ok(result.maximumGap < 1e-6, `Cut crystal: instruction does not touch its support`);
+    assert.ok(result.maximumGap < 1e-6, `${result.shape}: instruction does not touch its support`);
     assert.ok(
         result.batches > 0 && result.gpuError < 2e-6,
-        `Cut crystal: rendered positions differ from grounded positions`
+        `${result.shape}: rendered poses differ from grounded poses`
     );
-    assert.ok(result.returned, `Cut crystal: seeking changed grounded positions`);
+    assert.ok(result.returned, `${result.shape}: seeking changed grounded positions`);
     assert.equal(result.error, 0);
     return result;
 };

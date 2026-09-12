@@ -1,8 +1,10 @@
 "use strict";
+import geometry = require("./geometry.cts");
+const { paperBoxHalfExtent } = geometry;
 // 材質ごとの GLSL。プログラムの生成は呼び出し元へ委ね、GPU 資源を所有しない。
 type ProgramFactory<Program> = (vertex: string, fragment: string) => Program;
 
-// 固定面・木の材質と影を受ける面。
+// 固定面・紙の材質と影を受ける面。
 function createSurfaceShaders<Program>(program: ProgramFactory<Program>) {
     const solidProgram = program(
         `#version 300 es
@@ -26,7 +28,7 @@ function createSurfaceShaders<Program>(program: ProgramFactory<Program>) {
         }
         `
     );
-    // 塗装面とガラスで色空間と光源の影を共有する。
+    // 固定部品と命令で色空間と光源の影を共有する。
     const surfaceLighting = `
         uniform vec3 uEye;
         uniform vec3 uLight;
@@ -114,6 +116,8 @@ function createSurfaceShaders<Program>(program: ProgramFactory<Program>) {
         out vec3 vLocal;
         out vec4 vColor;
         out float vSeat;
+        out float vTopDepth;
+        flat out vec3 vHalfSize;
         flat out float vMaterial;
         out vec4 vShadow;
 
@@ -124,6 +128,8 @@ function createSurfaceShaders<Program>(program: ProgramFactory<Program>) {
             vColor = aColor;
             vMaterial = aSurface.y;
             vSeat = clamp((vLocal.y / aHalfSize.y + 1.) * .5, 0., 1.);
+            vTopDepth = aHalfSize.y - vLocal.y;
+            vHalfSize = aHalfSize;
             gl_Position = uMatrix * vec4(vPosition, 1.);
             vShadow = uLightMatrix * vec4(vPosition, 1.);
         }
@@ -135,10 +141,11 @@ function createSurfaceShaders<Program>(program: ProgramFactory<Program>) {
         in vec3 vLocal;
         in vec4 vColor;
         in float vSeat;
+        in float vTopDepth;
+        flat in vec3 vHalfSize;
         flat in float vMaterial;
         in vec4 vShadow;
         uniform float uRoughness;
-        uniform float uGrain;
         out vec4 frag;
 
         // sRGB の区分関数で塗料を線形化し、照明計算後に表示用の値へ戻す。
@@ -149,12 +156,28 @@ function createSurfaceShaders<Program>(program: ProgramFactory<Program>) {
                  light = normalize(uLight * 26. - vPosition);
             vec3 color = vColor.rgb;
             float rough = uRoughness;
-            if (vMaterial > .5) {
-                // 長手方向へうねる木目。細い筋の縮小はテクスチャの mipmap に任せる。
-                vec2 uv = vec2(vLocal.x, mix(vLocal.z, vLocal.y * 2., abs(n.z)));
-                vec2 grain = texture(uSurfaceTexture, uv * vec2(.07, .25)).rg - .5;
-                color *= 1. + grain.x * uGrain + grain.y * .024;
-                rough += .10;
+            bool paper = vMaterial > .5;
+            // サンプリングの分岐は部品単位に揃え、上面と側面の境界でも mipmap の微分を保つ。
+            if (paper) {
+                // 紙面の粒と繊維も既存テクスチャを使い、縮小時は mipmap で平均する。
+                vec2 uv = abs(n.y) > .5 ? vLocal.xz : abs(n.x) > .5 ? vLocal.zy : vLocal.xy;
+                vec2 fiber = texture(uSurfaceTexture, uv * vec2(.65, 1.8)).bg - .5;
+                color *= 1. + fiber.x * .04 + fiber.y * .014;
+                float side = 1. - smoothstep(.7, .95, abs(n.y));
+                if (vMaterial < 1.5) {
+                    // 台と台座は厚紙の積層。線が画素より細くなると平均色へ戻し、ちらつきを防ぐ。
+                    float layer = vTopDepth / .045;
+                    float resolved = 1. - smoothstep(.35, .8, fwidth(layer));
+                    color *= 1. - side * (.045 + .035 * cos(layer * 6.2831853) * resolved);
+                } else if (vMaterial < 2.5) {
+                    // 本体は折った厚紙。角の内側に一本の折り筋を付け、実際の経路は変えない。
+                    vec2 inset = vHalfSize.xz - abs(vLocal.xz);
+                    float edge = abs(n.y) > .5 ? min(inset.x, inset.y)
+                        : abs(n.x) > .5 ? inset.y : inset.x;
+                    float aa = max(fwidth(edge), .002);
+                    float crease = 1. - smoothstep(.003, .007 + aa, abs(edge - .075));
+                    color *= 1. - crease * .095 - side * .025;
+                }
             } else {
                 // 微細な塗膜のむらは物体の座標に固定し、動く駒でも模様を滑らせない。
                 vec2 uv = abs(n.y) > .5 ? vLocal.xz : abs(n.x) > .5 ? vLocal.zy : vLocal.xy;
@@ -170,7 +193,7 @@ function createSurfaceShaders<Program>(program: ProgramFactory<Program>) {
             float sheen = pow(max(dot(n, halfway), 0.), mix(100., 22., rough));
             float fresnel = .04 + .35 * pow(1. - max(dot(n, view), 0.), 5.);
             vec3 linear = toLinear(max(color, vec3(0.))) * illumination * seat;
-            linear += vec3(1., .96, .89) * sheen * (.14 + fresnel) * diffuse * lit * seat;
+            linear += vec3(1., .96, .89) * sheen * (.14 + fresnel) * diffuse * lit * seat * (paper ? .06 : 1.);
             // 明るい反射だけを緩やかに圧縮し、通常の塗料の色と暗部は保つ。
             float peak = max(linear.r, max(linear.g, linear.b));
             if (peak > .8)
@@ -183,24 +206,18 @@ function createSurfaceShaders<Program>(program: ProgramFactory<Program>) {
     return { solidProgram, surfaceLighting, pieceReceiverProgram, materialProgram };
 }
 
-// Cut crystal の交点・反射・透過と投影影。
-function createCrystalShaders<Program>(
-    program: ProgramFactory<Program>,
-    surfaceLighting: string,
-    crystalTransmission: number
-) {
-    // 命令は六頂点の外接領域内で視線とカット面の交点を求め、輪郭と深度を描く。
+// 命令の紙箱の材質と投影影。
+function createPieceShaders<Program>(program: ProgramFactory<Program>, surfaceLighting: string) {
+    // 命令は六頂点の外接領域内で視線と面の交点を求め、輪郭と深度を描く。
     const pieceVertex = `#version 300 es
         layout(location = 0) in vec4 aSphere;
         layout(location = 1) in vec4 aColor;
         layout(location = 2) in vec4 aRotation;
         uniform mat4 uMatrix;
         uniform vec3 uEye;
-        uniform float uScale;
         out vec3 vPlane;
         flat out vec4 vSphere;
         flat out vec4 vColor;
-        flat out float vPixelRadius;
         flat out vec4 vRotation;
 
         void main() {
@@ -215,8 +232,6 @@ function createCrystalShaders<Program>(
             vSphere = aSphere;
             vColor = aColor;
             vRotation = aRotation;
-            vec4 center = uMatrix * vec4(aSphere.xyz, 1.);
-            vPixelRadius = aSphere.w * uScale / center.w;
             gl_Position = uMatrix * vec4(vPlane, 1.);
         }
     `;
@@ -225,34 +240,12 @@ function createCrystalShaders<Program>(
         in vec3 vPlane;
         flat in vec4 vSphere;
         flat in vec4 vColor;
-        flat in float vPixelRadius;
         flat in vec4 vRotation;
         uniform mat4 uMatrix;
         uniform mat4 uLightMatrix;
-        uniform sampler2D uBackground;
         out vec4 frag;
 
         ${surfaceLighting}
-        vec3 background(vec2 uv) {
-            return toLinear(texture(uBackground, uv).rgb);
-        }
-
-        // 外部画像を使わず、卓上と窓のある室内の映り込みを方向から作る。
-        vec3 glassEnvironment(vec3 direction, float footprint) {
-            vec3 room = mix(vec3(.075, .065, .055), vec3(.63, .73, .84), smoothstep(-.15, .65, direction.y));
-            float horizon = (direction.y + .02) / .12;
-            room *= 1. - .55 * exp(-horizon * horizon);
-            vec3 windowDirection = normalize(vec3(-.55, .85, -.4));
-            vec3 right = normalize(cross(vec3(0., 1., 0.), windowDirection)), up = cross(windowDirection, right);
-            float front = dot(direction, windowDirection), soft = .025 + footprint * 2.;
-            vec2 p = vec2(dot(direction, right), dot(direction, up)) / max(front, .001);
-            float window = (1. - smoothstep(.29 - soft, .29 + soft, abs(p.x)))
-                           * (1. - smoothstep(.43 - soft, .43 + soft, abs(p.y)));
-            room += vec3(8., 7.8, 7.3) * window * smoothstep(0., .1, front);
-            float strip = pow(max(dot(direction, normalize(vec3(.7, .25, .6))), 0.), 24.);
-            return room + vec3(.42, .58, .75) * strip;
-        }
-
         vec3 pieceLocal(vec3 v) {
             vec4 q = vec4(-vRotation.xyz, vRotation.w);
             return v + 2. * cross(q.xyz, cross(q.xyz, v) + q.w * v);
@@ -260,6 +253,10 @@ function createCrystalShaders<Program>(
 
         vec3 pieceWorld(vec3 v) {
             return v + 2. * cross(vRotation.xyz, cross(vRotation.xyz, v) + vRotation.w * v);
+        }
+
+        vec2 paperUV(vec3 position, vec3 face) {
+            return (position.zy * face.x + position.xz * face.y + position.xy * face.z) / ${paperBoxHalfExtent};
         }
 
         void clipPiece(vec3 start, vec3 direction, vec3 normal, float limit, inout vec2 interval, inout vec3 face) {
@@ -279,7 +276,7 @@ function createCrystalShaders<Program>(
                 interval.y = min(interval.y, t);
         }
 
-        // Cut crystal の軸に垂直な6面と、角を切る8面で視線を切り詰める。
+        // 紙箱の寸法はCPU接地と共用し、本体と影で同じ交点を使う。
         float pieceIntersection(vec3 start, vec3 direction, out vec3 normal, out float coverage) {
             normal = vec3(0., 1., 0.);
             vec2 interval = vec2(-100., 100.);
@@ -287,10 +284,10 @@ function createCrystalShaders<Program>(
                 for (int y = -1; y <= 1; y++)
                     for (int z = -1; z <= 1; z++) {
                         int axes = abs(x) + abs(y) + abs(z);
-                        if (axes == 0 || axes == 2)
+                        if (axes != 1)
                             continue;
-                        float limit = axes == 1 ? .88 : 1.20;
-                        clipPiece(start, direction, vec3(float(x), float(y), float(z)), limit, interval, normal);
+                        clipPiece(start, direction, vec3(float(x), float(y), float(z)),
+                            ${paperBoxHalfExtent}, interval, normal);
                     }
             float span = interval.y - interval.x;
             coverage = smoothstep(0., max(fwidth(span), .00001), span);
@@ -307,7 +304,7 @@ function createCrystalShaders<Program>(
             float distance = -dot(offset, ray) - sqrt(hit);
             if (distance <= 0.)
                 discard;
-            vec3 position = uEye + ray * distance, n = normalize(position - vSphere.xyz), view = -ray;
+            vec3 position = uEye + ray * distance, n = normalize(position - vSphere.xyz);
             vec3 start = pieceLocal(n) * 1.0001, direction = pieceLocal(ray), localNormal;
             float coverage, t = pieceIntersection(start, direction, localNormal, coverage);
             if (t < 0.)
@@ -327,18 +324,24 @@ function createCrystalShaders<Program>(
         #else
             vec3 light = normalize(uLight * 26. - position);
             float diffuse = max(dot(n, light), 0.), lit = visibility(uLightMatrix * vec4(position, 1.), diffuse);
-            float facing = max(dot(n, view), 0.);
-            // 色相を保った顔料と、面ごとの屈折・反射で Cut crystal を描く。
-            float peak = max(vColor.r, max(vColor.g, vColor.b));
-            vec3 pigment = pow(clamp(vColor.rgb * .98 / max(peak, .001), 0., 1.), vec3(1.15));
-            vec3 tint = toLinear(pigment);
-            float footprint = 1. / max(vPixelRadius, 1.);
-            vec3 reflected = glassEnvironment(reflect(ray, n), footprint);
-            vec4 projected = uMatrix * vec4(position + refract(ray, n, 1. / 1.5) * vSphere.w * 2., 1.);
-            vec2 uv = clamp(projected.xy / max(projected.w, .001) * .5 + .5, vec2(0.), vec2(1.));
-            vec3 through = background(uv) * mix(vec3(1.), tint, .65);
-            vec3 linear = mix(tint * (.24 + .85 * diffuse * lit), through, ${crystalTransmission});
-            linear += reflected * (.10 + .45 * pow(1. - facing, 4.));
+            // ふたの継ぎ目・折り返し・白い断面を紙面に固定し、縮小時は模様を薄める。
+            vec3 face = abs(localNormal);
+            // 面の境界でUVが飛んでも、同じ面へ投影した座標の微分で線幅とmipmapを求める。
+            vec2 uv = paperUV(localPosition, face),
+                dx = paperUV(dFdx(localPosition), face),
+                dy = paperUV(dFdy(localPosition), face);
+            vec2 footprint = abs(dx) + abs(dy);
+            float aa = max(max(footprint.x, footprint.y), .002);
+            float detail = 1. - smoothstep(.12, .45, aa);
+            float fold = face.y > .5 ? min(abs(uv.x), abs(abs(uv.x) + abs(uv.y) - 1.4)) : abs(uv.y - .72);
+            float crease = 1. - smoothstep(.008, .025 + aa, fold);
+            float rim = 1. - smoothstep(.018, .055 + aa, 1. - max(abs(uv.x), abs(uv.y)));
+            vec2 scale = vec2(.32, .9);
+            vec2 fiber = textureGrad(uSurfaceTexture, uv * scale, dx * scale, dy * scale).bg - .5;
+            float pigment = 1. + fiber.x * .05 + fiber.y * .018 - detail * .085 * crease;
+            vec3 paper = mix(vColor.rgb * pigment, vec3(.94, .91, .84), detail * rim * .45);
+            float fill = max(dot(n, normalize(vec3(.65, .35, .6))), 0.);
+            vec3 linear = toLinear(clamp(paper, 0., 1.)) * (.62 + .62 * diffuse * lit + .14 * fill);
             frag = vec4(toSRGB(clamp(linear, vec3(0.), vec3(1.))), vColor.a * edge);
         #endif
         }
@@ -528,5 +531,5 @@ function createEffectShaders<Program>(program: ProgramFactory<Program>) {
     return { pointProgram, typeProgram, blurProgram, compositeProgram };
 }
 
-const shaders = { createSurfaceShaders, createCrystalShaders, createEffectShaders };
+const shaders = { createSurfaceShaders, createPieceShaders, createEffectShaders };
 export = shaders;

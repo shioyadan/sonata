@@ -4,7 +4,7 @@ const assert = require("node:assert/strict");
 // 実トレースの同じフレームで影だけを切り替え、駒以外の面の暗さを画素から確認する。
 module.exports = async function reviewPieceShadows(window) {
     const result = await window.webContents.executeJavaScript(`(()=>{
-        const gl=document.getElementById('scene').getContext('webgl2'),surface=sonataStyles.blocks.surface;
+        const gl=document.getElementById('scene').getContext('webgl2'),surface=sonataStyles[sonata.visualStyle].surface;
         const original={cycle:sonata.cycle,strength:surface.pieceShadow};
         const read=cycle=>{sonata.captureAt(cycle);const pixels=new Uint8Array(gl.drawingBufferWidth*gl.drawingBufferHeight*4);
             gl.readPixels(0,0,gl.drawingBufferWidth,gl.drawingBufferHeight,gl.RGBA,gl.UNSIGNED_BYTE,pixels);return pixels;};
@@ -31,7 +31,7 @@ module.exports = async function reviewPieceShadows(window) {
     assert.equal(result.returnedDifference, 0, "Seeking back did not restore the same shadows");
     assert.ok(result.movedMask > 20, "Advancing the trace did not move the cast shadows");
     assert.ok(result.cacheReused, "Paused shadows were unnecessarily regenerated");
-    assert.ok(result.state.size > 0 && result.state.instances > 0, "Crystal instructions lost their shadows");
+    assert.ok(result.state.size > 0 && result.state.instances > 0, "Solid instructions lost their shadows");
     assert.equal(result.error, 0, "Instruction shadows caused a WebGL error");
     return result;
 };

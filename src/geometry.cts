@@ -5,6 +5,7 @@
 type Vec3 = [number, number, number];
 type Quat = [number, number, number, number];
 type Triangle = [Vec3, Vec3, Vec3];
+type GroundShape = "paper-box" | "sphere";
 interface PathStage {
     node: string;
     start: number;
@@ -103,6 +104,7 @@ interface Surface {
 }
 
 const TAU = Math.PI * 2;
+const paperBoxHalfExtent = 1 / Math.sqrt(3);
 const clamp = (n: number, lo = 0, hi = 1) => Math.max(lo, Math.min(hi, n));
 const mix = (a: number, b: number, t: number) => a + (b - a) * t;
 const smooth = (t: number) => {
@@ -208,66 +210,7 @@ function crossesBox(a: Vec3, b: Vec3, low: Vec3, high: Vec3) {
     return true;
 }
 
-// 経路に沿う回転。フレーム時計に依存しない。
-const identity: Quat = [0, 0, 0, 1];
-function advance(rotation: Quat, from: Vec3 | null, to: Vec3 | null, distancePerRadian: number): Quat {
-    if (!from || !to) return [...rotation];
-    const dx = to[0] - from[0],
-        dz = to[2] - from[2],
-        distance = Math.hypot(dx, dz);
-    if (distance < 1e-10) return [...rotation];
-    // 上向き法線と進行方向の外積。接地点が進行方向と逆へ回る向きにする。
-    const half = distance / distancePerRadian / 2,
-        s = Math.sin(half) / distance;
-    const x = dz * s,
-        z = -dx * s,
-        w = Math.cos(half),
-        [a, b, c, d] = rotation;
-    const q = [w * a + x * d - z * b, w * b + z * a - x * c, w * c + z * d + x * b, w * d - x * a - z * c];
-    const length = Math.hypot(...q);
-    return q.map((v) => v / length) as Quat;
-}
-function createRollingTrack(
-    positionAt: (time: number) => Vec3 | null,
-    breakpoints: Iterable<number>,
-    { distancePerRadian = 0.85 } = {}
-) {
-    // ステージの境界・曲がり角を区切りに採取し、待機時間が長くても標本を増やさない。
-    const times = [...new Set(breakpoints)].sort((a, b) => a - b),
-        samples: { time: number; position: Vec3 | null; rotation: Quat }[] = [];
-    let previous: Vec3 | null = null,
-        rotation: Quat = [...identity];
-    const sample = (time: number) => {
-        const position = positionAt(time);
-        rotation = advance(rotation, previous, position, distancePerRadian);
-        if (!samples.length || !position || !previous || position.some((v, i) => Math.abs(v - previous![i]) > 1e-10)) {
-            samples.push({ time, position, rotation });
-        }
-        previous = position;
-    };
-    if (times.length) sample(times[0]);
-    for (let i = 1; i < times.length; i++)
-        for (let step = 1; step <= 16; step++) sample(times[i - 1] + ((times[i] - times[i - 1]) * step) / 16);
-    const previousAt = (time: number) => {
-        let lo = 0,
-            hi = samples.length;
-        while (lo < hi) {
-            const mid = (lo + hi) >> 1;
-            if (samples[mid].time <= time) lo = mid + 1;
-            else hi = mid;
-        }
-        return samples[lo - 1];
-    };
-    return {
-        rotationAt(time: number, position = positionAt(time)): Quat {
-            // 直前までの姿勢に現在位置までの回転を加える。呼出順や fps に依存しない。
-            const before = previousAt(time);
-            return before ? advance(before.rotation, before.position, position, distancePerRadian) : [...identity];
-        }
-    };
-}
-
-// Cut crystal の支持点と、描画する面に対する接地。
+// 命令の凸多面体の支持点と、描画する面に対する接地。
 const dot3 = (a: Vec3, b: Vec3) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
 const sub = (a: Vec3, b: Vec3) => a.map((v, i) => v - b[i]) as Vec3;
 const rotate = (v: Vec3, q: Quat): Vec3 => {
@@ -283,8 +226,11 @@ function polyhedron() {
         for (let y = -1; y <= 1; y++)
             for (let z = -1; z <= 1; z++) {
                 const axes = Math.abs(x) + Math.abs(y) + Math.abs(z);
-                if (!axes || axes === 2) continue;
-                planes.push({ n: [x, y, z], d: axes === 1 ? 0.88 : 1.2 });
+                if (axes !== 1) continue;
+                planes.push({
+                    n: [x, y, z],
+                    d: paperBoxHalfExtent
+                });
             }
     for (let i = 0; i < planes.length; i++)
         for (let j = i + 1; j < planes.length; j++)
@@ -304,35 +250,39 @@ function polyhedron() {
             }
     return { planes, vertices };
 }
-const crystal = polyhedron();
-function support(direction: Vec3, boundingSphere = false): Vec3 {
-    if (boundingSphere) {
+const polyhedra = {
+    "paper-box": polyhedron()
+};
+function support(direction: Vec3, shape: GroundShape = "paper-box"): Vec3 {
+    if (shape === "sphere") {
         const length = Math.hypot(...direction);
         return direction.map((v) => v / length) as Vec3;
     }
-    return crystal.vertices.reduce((best, p) => (dot3(p, direction) > dot3(best, direction) ? p : best));
+    return polyhedra[shape].vertices.reduce((best, p) => (dot3(p, direction) > dot3(best, direction) ? p : best));
 }
-// 世界の垂直線に沿う Cut crystal の下端。外接球は移動経路の障害物判定専用。
-function lowerAt(x: number, z: number, inverse: Quat, boundingSphere = false) {
-    if (boundingSphere) {
+// 世界の垂直線に沿う命令の下端。外接球は移動経路の障害物判定専用。
+function lowerAt(x: number, z: number, inverse: Quat, shape: GroundShape = "paper-box") {
+    if (shape === "sphere") {
         const d = 1 - x * x - z * z;
         return d >= 0 ? -Math.sqrt(d) : null;
     }
     const start = rotate([x, -2, z], inverse),
         direction = rotate([0, 1, 0], inverse);
+    // 世界座標との往復で生じる誤差により、輪郭の頂点や辺を外側と判定しない。
+    const tolerance = 1e-9;
     let lo = -Infinity,
         hi = Infinity;
-    for (const { n, d } of crystal.planes) {
+    for (const { n, d } of polyhedra[shape].planes) {
         const slope = dot3(n, direction),
             gap = d - dot3(n, start);
         if (Math.abs(slope) < 1e-10) {
-            if (gap < 0) return null;
+            if (gap < -tolerance) return null;
             continue;
         }
         if (slope < 0) lo = Math.max(lo, gap / slope);
         else hi = Math.min(hi, gap / slope);
     }
-    return lo <= hi ? -2 + lo : null;
+    return lo <= hi + tolerance ? -2 + lo : null;
 }
 function createGround(triangles: Iterable<Triangle>, floor = -0.87) {
     const cells = new Map<string, Surface[]>(),
@@ -363,11 +313,11 @@ function createGround(triangles: Iterable<Triangle>, floor = -0.87) {
         return signs.every((v) => v >= -1e-9) || signs.every((v) => v <= 1e-9);
     };
     return {
-        seat(position: Vec3, radius: number, q: Quat, boundingSphere = false): Seat {
+        seat(position: Vec3, radius: number, q: Quat, shape: GroundShape = "paper-box"): Seat {
             const inverse: Quat = [-q[0], -q[1], -q[2], q[3]],
                 x = position[0],
                 z = position[2];
-            const lowest = rotate(support(rotate([0, -1, 0], inverse), boundingSphere), q);
+            const lowest = rotate(support(rotate([0, -1, 0], inverse), shape), q);
             let y = floor - lowest[1] * radius,
                 contact: Vec3 = [x + lowest[0] * radius, floor, z + lowest[2] * radius];
             const nearby = new Set<Surface>();
@@ -386,7 +336,7 @@ function createGround(triangles: Iterable<Triangle>, floor = -0.87) {
                 const low = (
                     n[0] === 0 && n[2] === 0
                         ? lowest
-                        : rotate(support(rotate(n.map((v) => -v) as Vec3, inverse), boundingSphere), q)
+                        : rotate(support(rotate(n.map((v) => -v) as Vec3, inverse), shape), q)
                 ).map((v) => v * radius) as Vec3;
                 const limit = (d - n[0] * x - n[2] * z - dot3(n, low)) / n[1];
                 if (limit <= y + 1e-9) continue;
@@ -413,7 +363,7 @@ function createGround(triangles: Iterable<Triangle>, floor = -0.87) {
                     const at = (t: number) => {
                         const px = a[0] + t * dx,
                             pz = a[2] + t * dz,
-                            bottom = lowerAt((px - x) / radius, (pz - z) / radius, inverse, boundingSphere);
+                            bottom = lowerAt((px - x) / radius, (pz - z) / radius, inverse, shape);
                         if (bottom === null) return -Infinity;
                         const py = a[1] + t * (b[1] - a[1]),
                             height = py - bottom * radius;
@@ -634,32 +584,9 @@ function createPaths<T extends PathOperation>({
     }
 
     const poses: {
-        pieceTracks: WeakMap<PathOperation, ReturnType<typeof createRollingTrack>>;
         pieceGround: ReturnType<typeof createGround> | null;
         piecePoseCache: WeakMap<PathOperation, PoseCache>;
-    } = { pieceTracks: new WeakMap(), pieceGround: null, piecePoseCache: new WeakMap() };
-    function pieceRotation(op: PathOperation, t: number, position: Vec3): Quat {
-        if (session.reducedMotion) return [0, 0, 0, 1];
-        let track = poses.pieceTracks.get(op);
-        if (!track) {
-            const end = op.end + (op.flush ? 2.2 : 2) - 0.000001,
-                times = [op.fetch, op.end, end];
-            for (const stage of op.stages) {
-                times.push(stage.start, stage.end);
-                for (const fraction of [0.48, 0.65, 0.7, 0.8, 1])
-                    times.push(stage.start + stageTransition(stage) * fraction);
-            }
-            if (!op.flush) times.push(op.end + 0.45, op.end + 0.95);
-            // 命令の実際の表示経路を使い、視点・スタイル切替では姿勢のキャッシュを捨てない。
-            track = createRollingTrack(
-                (time) => positionAt(op, time),
-                times.filter((time) => time >= op.fetch && time <= end)
-            );
-            poses.pieceTracks.set(op, track);
-        }
-        return track.rotationAt(t, position);
-    }
-
+    } = { pieceGround: null, piecePoseCache: new WeakMap() };
     function pieceTransfer(op: PathOperation, t: number): Transfer | null {
         if (t >= op.end) {
             if (op.flush) return null;
@@ -708,15 +635,17 @@ function createPaths<T extends PathOperation>({
             cache = new Map();
             poses.piecePoseCache.set(op, cache);
         }
-        const key = `${t}/${session.reducedMotion}`;
+        const shape: GroundShape = "paper-box";
+        const key = String(t);
         if (cache.has(key)) return cache.get(key)!;
         // 場所や待機・実行・退場で大きさを変えず、同じ命令の形を保つ。
         const radius = instructionRadius;
-        const rotation = pieceRotation(op, t, path);
+        // 紙箱は、演出設定によらず上面を上に保って滑らせる。
+        const rotation: Quat = [0, 0, 0, 1];
         const poseKey = JSON.stringify([path[0], path[2], radius, rotation]);
         if (cache.poseKey !== poseKey) {
             cache.poseKey = poseKey;
-            cache.seat = poses.pieceGround!.seat(path, radius, rotation);
+            cache.seat = poses.pieceGround!.seat(path, radius, rotation, shape);
         }
         let { position } = cache.seat!;
         let contact: Vec3 | null = cache.seat!.contact;
@@ -726,7 +655,7 @@ function createPaths<T extends PathOperation>({
                 bridgeKey = JSON.stringify([from, to, radius, rotation]);
             if (cache.bridgeKey !== bridgeKey) {
                 cache.bridgeKey = bridgeKey;
-                cache.bridgeSeats = [from, to].map((p) => poses.pieceGround!.seat(p, radius, rotation));
+                cache.bridgeSeats = [from, to].map((p) => poses.pieceGround!.seat(p, radius, rotation, shape));
             }
             const profileKey = `${transfer.start}/${transfer.end}`;
             if (cache.bridgeProfileKey !== profileKey) {
@@ -734,14 +663,14 @@ function createPaths<T extends PathOperation>({
                 cache.bridgeSurfaces = [];
                 cache.bridgeThreshold =
                     Math.max(
-                        ...[from, to].map((p) => poses.pieceGround!.seat(p, radius, [0, 0, 0, 1], true).contact[1])
+                        ...[from, to].map((p) => poses.pieceGround!.seat(p, radius, [0, 0, 0, 1], "sphere").contact[1])
                     ) + 0.05;
                 for (let i = 1; i < 16; i++) {
                     const p = positionAt(op, mix(transfer.start, transfer.end, i / 16));
                     if (p)
                         cache.bridgeSurfaces.push({
                             progress: smooth(i / 16),
-                            height: poses.pieceGround!.seat(p, radius, [0, 0, 0, 1], true).contact[1]
+                            height: poses.pieceGround!.seat(p, radius, [0, 0, 0, 1], "sphere").contact[1]
                         });
                 }
             }
@@ -768,9 +697,6 @@ function createPaths<T extends PathOperation>({
         return piece;
     }
 
-    function resetTrace() {
-        poses.pieceTracks = new WeakMap();
-    }
     function setGround(ground: ReturnType<typeof createGround> | null) {
         poses.pieceGround = ground;
         poses.piecePoseCache = new WeakMap();
@@ -784,7 +710,6 @@ function createPaths<T extends PathOperation>({
         instructionLight,
         instructionColor,
         groundedPiece,
-        resetTrace,
         setGround
     };
 }
@@ -805,7 +730,7 @@ const geometry = {
     route,
     crossesBox,
     instructionRadius,
-    createRollingTrack,
+    paperBoxHalfExtent,
     createGround,
     support,
     lowerAt,
@@ -813,16 +738,15 @@ const geometry = {
     createPaths,
     stageTransition
 };
-globalThis.sonataPieceMotion = { createRollingTrack };
 globalThis.sonataPieceGrounding = { createGround, support, lowerAt, rotate };
 
 namespace geometry {
     export type Vector = Vec3;
     export type Quaternion = Quat;
     export type Ground = ReturnType<typeof createGround>;
+    export type PieceShape = GroundShape;
     export type GroundSeat = Seat;
     export type GroundTriangle = Triangle;
-    export type RollingTrack = ReturnType<typeof createRollingTrack>;
     export type Paths<T extends PathOperation = PathOperation> = ReturnType<typeof createPaths<T>>;
     export type Stage = PathStage;
     export type Operation = PathOperation;
@@ -834,7 +758,6 @@ namespace geometry {
     export type Light = ReturnType<Paths["instructionLight"]>;
 }
 declare global {
-    var sonataPieceMotion: Pick<typeof geometry, "createRollingTrack">;
     var sonataPieceGrounding: Pick<typeof geometry, "createGround" | "support" | "lowerAt" | "rotate">;
 }
 export = geometry;

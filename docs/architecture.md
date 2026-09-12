@@ -1,6 +1,6 @@
 # ソースの構造
 
-編集用の `src/` は TypeScript 9個、CSS 3個、HTML 1個の計13ファイルです。配布時には `dist/sonata.html` 一つへ結合します。画面の配置・記録値・再生時刻と、外観の材質・照明・合成を分けることで、Neon / Blocks を同じ再生内容で比較できます。
+編集用の `src/` は TypeScript 9個、CSS 3個、HTML 1個の計13ファイルです。配布時には `dist/sonata.html` 一つへ結合します。画面の配置・記録値・再生時刻と、外観の材質・照明・合成を分けることで、Neon / Paper を同じ再生内容で比較できます。
 
 ## 境界と編集先
 
@@ -10,17 +10,17 @@
 | `src/camera.cts` | カメラの状態・補間・投影、マウスとタッチの操作 |
 | `src/replay-model.cts` | デモの準備、記録時刻に対応する FIFO・依存・レジスタ・Top-down の状態 |
 | `src/memory.cts` | 命令の分類、LOAD / STORE の基準時間・表示区間、記録された書込み待ち |
-| `src/geometry.cts` | 座標・行列、命令の経路とステージ補間、回転・接地と姿勢キャッシュ |
+| `src/geometry.cts` | 座標・行列、命令の経路とステージ補間、接地と姿勢キャッシュ |
 | `src/scene.cts` | 外観プリセット、ユニット・セル・接続の配置、固定部品の形状・材質・ラベル・接地面 |
 | `src/activity.cts` | 現在の命令・待機列・レジスタ・通知、命令列の巻き戻し、Top-down 分類の表示 |
 | `src/renderer.cts` | WebGL 資源、影・透過・発光の描画順 |
-| `src/shaders.cts` | 固定面・Cut crystal・発光の GLSL 生成 |
+| `src/shaders.cts` | 固定面・命令の多面体と材質・発光の GLSL 生成 |
 | `src/index.html` | 画面の骨格、CSS とスクリプトの読み込み順 |
 | `src/sonata.css` | 共通書式、再生操作、情報パネル |
 | `src/scene.css` | シーン上のラベル、操作部、凡例 |
 | `src/appearance.css` | 画面サイズへの対応とスタイル別の配色 |
 
-外観を変えるときは、まず `scene.cts` 冒頭のプリセットと `appearance.css` の配色を編集します。固定部品の形は `scene.cts`、動く表示は `activity.cts`、材質の計算は `shaders.cts`、描画順は `renderer.cts` が担当します。共通の配置や再生モデルへ外観のための時刻変更を持ち込まないでください。具体的な材質・接地の仕様は [外観の仕様](visual-styles.md) を参照してください。
+外観を変えるときは、まず `scene.cts` 冒頭のプリセットと `appearance.css` の配色を編集します。固定部品の形は `scene.cts`、動く表示は `activity.cts`、材質の計算は `shaders.cts`、描画順は `renderer.cts` が担当します。共通の配置や再生モデルへ外観のための時刻変更を持ち込まないでください。明るいUIは `data-theme=light` でまとめて切り替えます。具体的な材質・接地の仕様は [外観の仕様](visual-styles.md) を参照してください。
 
 ## 状態と依存
 
@@ -34,7 +34,7 @@
 
 `scene.buildWorld()` は新しい接地面を返し、`paths.setGround()` が受け取って姿勢キャッシュを破棄します。固定シーン側から別モジュールのキャッシュやレジスタ表示状態を書き換えません。待機列・レジスタ・命令列・Top-down の表示状態と初期化は activity が所有します。
 
-`renderer.cts` は `createGpu` と `createRenderer` を分け、資源の生成とフレームの描画をそれぞれ追えるようにします。影のターゲットと再利用条件は renderer の内部で扱い、GLSL は `shaders.cts` の固定面・Cut crystal・発光の生成関数にまとめます。シェーダー側は渡された生成関数を使い、GPU 資源や描画順を所有しません。
+`renderer.cts` は `createGpu` と `createRenderer` を分け、資源の生成とフレームの描画をそれぞれ追えるようにします。影のターゲットと再利用条件は renderer の内部で扱い、GLSL は `shaders.cts` の固定面・命令・発光の生成関数にまとめます。シェーダー側は渡された生成関数を使い、GPU 資源や描画順を所有しません。
 
 `memory.cts` は抽出器と再生側で共有する命令分類を持ち、再生の準備時に LOAD / STORE の表示区間を分けます。元データの時刻を変更せず、準備後の `replay.memory` に基準時間・表示経路・書込み待ちをまとめます。完了、ROB、依存関係の状態は従来どおり記録時刻から求めます。
 
@@ -68,6 +68,6 @@ GPU の描画先は初期化前には `null` です。残る非 null assertion �
 
 - `npm run typecheck`: ブラウザ用コードと型付きの画面検査を `strict` で検査。型境界の不正な入力・null の扱い・GPU 資源の前提も検査。
 - `npm test`: 再生・演出計算、独立したシーン間の状態分離、モジュールの解決・キャッシュ・スコープ・循環参照、単一 HTML の再現可能なビルド。
-- `npm run test:render`: 全5デモ、両スタイル、選択・接地・回転・影、キーボード・タッチ、モバイル復帰、WebGL の障害と復旧。
+- `npm run test:render`: 全5デモ、2スタイル、選択・接地・滑走・影、キーボード・タッチ、モバイル復帰、WebGL の障害と復旧。
 
 構造の変更でも、診断値だけで描画の同一性を判断しません。比較時は同じ時刻・カメラ・演出用時計を与え、canvas の画素も照合します。通常再生と実入力は既存の描画検査で別に確認します。検証環境と実行手順は [開発ガイド](development.md) を参照してください。

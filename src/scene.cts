@@ -21,7 +21,12 @@ type SceneStyle = StyleBase &
         | {
               matte: true;
               structure: Record<"body" | "base" | "rail" | "recess" | "wire" | "ink", Vector>;
-              surface: { wood: Vector; roughness: number; grain: number; light: Vector; pieceShadow: number };
+              surface: {
+                  floor: Vector;
+                  roughness: number;
+                  light: Vector;
+                  pieceShadow: number;
+              };
           }
     );
 interface SceneNode {
@@ -66,7 +71,31 @@ interface SceneOptions {
 }
 
 /* 外観だけのプリセット。命令の配置、再生時刻、記録値は再生モデルと共通にする。 */
-const styles: Record<"neon" | "blocks", SceneStyle> = {
+const solidColors: Pick<StyleBase, "palette" | "background" | "bounds" | "timeline"> = {
+    palette: {
+        integer: [0.16, 0.72, 0.48],
+        memory: [0.95, 0.64, 0.28],
+        branch: [0.69, 0.51, 0.93],
+        red: [0.94, 0.28, 0.34],
+        blue: [0.36, 0.65, 0.89],
+        floor: [0.84, 0.72, 0.52]
+    },
+    background: [0.955, 0.936, 0.896],
+    bounds: {
+        active: "#287b60",
+        retiring: "#287b60",
+        inFlight: "#48877c",
+        badSpeculation: "#bf3948",
+        frontend: "#386d9c",
+        backend: "#a3601c",
+        unresolved: "#65716e",
+        mixed: "#66645e",
+        unavailable: "#716c63"
+    },
+    timeline: ["#c8d2ce", "#43836b", "#9aaca4"]
+};
+
+const styles: Record<"neon" | "paper", SceneStyle> = {
     neon: {
         label: "Neon",
         matte: false,
@@ -92,43 +121,21 @@ const styles: Record<"neon" | "blocks", SceneStyle> = {
         },
         timeline: ["#1d3946", "#59bba9", "#31525e"]
     },
-    blocks: {
-        label: "Blocks",
+    paper: {
+        ...solidColors,
+        label: "Paper model",
         matte: true,
-        palette: {
-            integer: [0.16, 0.72, 0.48],
-            memory: [0.95, 0.64, 0.28],
-            branch: [0.69, 0.51, 0.93],
-            red: [0.94, 0.28, 0.34],
-            blue: [0.36, 0.65, 0.89],
-            floor: [0.84, 0.72, 0.52]
-        },
-        background: [0.955, 0.936, 0.896],
-        bounds: {
-            active: "#287b60",
-            retiring: "#287b60",
-            inFlight: "#48877c",
-            badSpeculation: "#bf3948",
-            frontend: "#386d9c",
-            backend: "#a3601c",
-            unresolved: "#65716e",
-            mixed: "#66645e",
-            unavailable: "#716c63"
-        },
-        timeline: ["#c8d2ce", "#43836b", "#9aaca4"],
-        // 大きな面は生成りと木肌、線と溝は茶灰色にし、活動の色を引き立てる。
         structure: {
-            body: [0.88, 0.845, 0.77],
-            base: [0.73, 0.64, 0.51],
-            rail: [0.91, 0.86, 0.75],
-            recess: [0.7, 0.645, 0.55],
-            wire: [0.48, 0.41, 0.33],
-            ink: [0.38, 0.32, 0.26]
+            body: [0.94, 0.93, 0.89],
+            base: [0.86, 0.84, 0.79],
+            rail: [0.89, 0.89, 0.85],
+            recess: [0.76, 0.77, 0.73],
+            wire: [0.52, 0.53, 0.5],
+            ink: [0.38, 0.39, 0.36]
         },
         surface: {
-            wood: [0.86, 0.76, 0.62],
-            roughness: 0.6,
-            grain: 0.06,
+            floor: [0.9, 0.88, 0.84],
+            roughness: 0.95,
             light: [-0.55, 0.85, -0.4],
             pieceShadow: 0.44
         }
@@ -823,7 +830,7 @@ function createScene({ gpu, replay, session }: SceneOptions) {
                 base = y < -0.1;
             // 大きな構造面は中性色に揃え、意味を持つ色は命令と識別帯へ集める。
             const paint = floor
-                ? session.style.surface.wood
+                ? session.style.surface.floor
                 : base
                   ? session.style.structure.base
                   : h < 0.1
@@ -831,7 +838,9 @@ function createScene({ gpu, replay, session }: SceneOptions) {
                     : h < 0.2
                       ? session.style.structure.rail
                       : session.style.structure.body;
-            beveledBlock(tris, x, y, z, w, h, d, paint, 1, floor || base ? 1 : 0, supportY);
+            // 形状と支持面を共用し、台の積層と本体の折り筋を材質で描き分ける。
+            const material = floor || base ? 1 : h >= 0.2 ? 2 : 3;
+            beveledBlock(tris, x, y, z, w, h, d, paint, 1, material, supportY);
             if (tris.shadows && y >= -0.05 && w > 0.4 && d > 0.4 && h > 0.09)
                 contactShadow(tris.shadows, x, Math.min(y, supportY) + 0.002, z, w, d, 0.1, 0.18);
             return;
@@ -1238,7 +1247,7 @@ function createScene({ gpu, replay, session }: SceneOptions) {
                     0.07,
                     color,
                     1,
-                    0,
+                    3,
                     top
                 );
             }

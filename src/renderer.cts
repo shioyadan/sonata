@@ -2,7 +2,7 @@
 // WebGL 資源と描画順。材質ごとのシェーダーは shaders.cts で定義する。
 import geometry = require("./geometry.cts");
 import shaders = require("./shaders.cts");
-const { createSurfaceShaders, createCrystalShaders, createEffectShaders } = shaders;
+const { createSurfaceShaders, createPieceShaders, createEffectShaders } = shaders;
 const { TAU, mix, smooth, hash, multiply, lookAt, normalize } = geometry;
 type Vec3 = geometry.Vector;
 interface VertexBuffer {
@@ -60,9 +60,9 @@ interface GpuState {
     maxRenderSide: number;
 }
 interface SurfaceStyle {
+    floor: Vec3;
     light: Vec3;
     roughness: number;
-    grain: number;
     pieceShadow: number;
 }
 type RenderStyle = { background: Vec3 } & (
@@ -88,7 +88,6 @@ interface ShadowPass {
     pieceShadowKey: string;
     pieceShadowUpdates: number;
 }
-const crystalTransmission = 0.4;
 
 // 起動側で有効な WebGL 2 を取得してから資源を作る。取得失敗・context loss は起動側が扱う。
 function createGpu({
@@ -129,9 +128,9 @@ function createGpu({
     }
 
     const surfaces = createSurfaceShaders(program);
-    const crystal = createCrystalShaders(program, surfaces.surfaceLighting, crystalTransmission);
+    const pieces = createPieceShaders(program, surfaces.surfaceLighting);
     const effects = createEffectShaders(program);
-    const programs = { ...surfaces, ...crystal, ...effects };
+    const programs = { ...surfaces, ...pieces, ...effects };
 
     const colorSamples = gl.getInternalformatParameter(gl.RENDERBUFFER, gl.RGBA8, gl.SAMPLES) as Int32Array;
     const depthSamples = gl.getInternalformatParameter(gl.RENDERBUFFER, gl.DEPTH_COMPONENT24, gl.SAMPLES) as Int32Array;
@@ -385,7 +384,7 @@ function createGpu({
     });
 }
 
-// 固定バッファは buildWorld、描画先は resize、Blocks の影は buildMaterialShadow 後に利用する。
+// 固定バッファは buildWorld、描画先は resize、実体スタイルの影は buildMaterialShadow 後に利用する。
 // 以下の非 null 参照はこの初期化順に対応し、未初期化の状態は公開する GPU の型にも残す。
 function createRenderer({
     activity,
@@ -411,7 +410,7 @@ function createRenderer({
     };
     const { gl } = gpu;
     function createSurfaceTexture() {
-        // 木目2層と塗膜の粒を初期化時に生成し、毎画素でのノイズ計算を省く。
+        // 紙の繊維と塗膜の粒を初期化時に生成し、毎画素でのノイズ計算を省く。
         // 周期的な格子を使い、繰り返し境界と縮小表示の継ぎ目をなくす。
         const width = 256,
             height = 512,
@@ -432,8 +431,7 @@ function createRenderer({
                 );
             };
         };
-        const grain = grid(4, 28, 310),
-            fiber = grid(8, 192, 520),
+        const fiber = grid(8, 192, 520),
             paint = grid(64, 64, 730);
         for (let y = 0; y < height; y++)
             for (let x = 0; x < width; x++) {
@@ -441,7 +439,6 @@ function createRenderer({
                     v = y / height,
                     warp = Math.sin(u * TAU) * 0.15 + Math.sin(u * TAU * 3 + v * TAU) * 0.035,
                     i = (y * width + x) * 4;
-                data[i] = Math.round(grain(u * 4, (v + warp) * 28) * 255);
                 data[i + 1] = Math.round(fiber(u * 8, (v + warp) * 192) * 255);
                 data[i + 2] = Math.round(paint(u * 64, v * 64) * 255);
                 data[i + 3] = 255;
@@ -542,8 +539,8 @@ function createRenderer({
     }
 
     function updatePieceShadow() {
-        // カメラ操作と一時停止中は再利用。シーク・外観・演出の変更時だけ描き直す。
-        const key = `${session.cycle}/${session.reducedMotion}`;
+        // 紙箱の向きは固定なので、カメラ操作・演出変更・一時停止中は影を再利用する。
+        const key = String(session.cycle);
         if (shadowPass.pieceShadowKey === key) return;
         shadowPass.pieceShadow ??= shadowTarget(true);
         gl.bindFramebuffer(gl.FRAMEBUFFER, shadowPass.pieceShadow.fbo);
@@ -578,13 +575,12 @@ function createRenderer({
             gl.activeTexture(gl.TEXTURE5);
             gl.bindTexture(gl.TEXTURE_2D, shadowPass.pieceShadow!.coverage!);
             gl.uniform1i(p.u("uPieceCoverage"), 5);
-            gl.uniform1f(p.u("uPieceStrength"), session.style.surface!.pieceShadow * (1 - crystalTransmission * 0.5));
+            gl.uniform1f(p.u("uPieceStrength"), session.style.surface!.pieceShadow);
         }
         if (p === programs.materialProgram || p === programs.pieceProgram) {
             gl.uniform3fv(p.u("uEye"), camera.eye);
             gl.uniform3fv(p.u("uLight"), session.style.surface!.light);
             gl.uniform1f(p.u("uRoughness"), session.style.surface!.roughness);
-            gl.uniform1f(p.u("uGrain"), session.style.surface!.grain);
             gl.uniformMatrix4fv(p.u("uLightMatrix"), false, shadowPass.lightProjection!);
             gl.activeTexture(gl.TEXTURE2);
             gl.bindTexture(gl.TEXTURE_2D, shadowPass.materialShadow!.texture);
@@ -593,12 +589,6 @@ function createRenderer({
             gl.activeTexture(gl.TEXTURE3);
             gl.bindTexture(gl.TEXTURE_2D, shadowPass.surfaceTexture);
             gl.uniform1i(p.u("uSurfaceTexture"), 3);
-        }
-        if (p === programs.pieceProgram) {
-            gl.activeTexture(gl.TEXTURE0);
-            gl.bindTexture(gl.TEXTURE_2D, gpu.bloomA!.texture);
-            gl.uniform1i(p.u("uBackground"), 0);
-            gl.uniform1f(p.u("uScale"), gpu.renderHeight / (2 * Math.tan(0.33)));
         }
         if (p === programs.pointProgram) {
             gl.uniform1f(p.u("uScale"), gpu.renderHeight * 0.042);
@@ -653,38 +643,6 @@ function createRenderer({
         drawBuffer(gpu.movingLines, gl.LINES, programs.solidProgram);
         drawBuffer(gpu.particles, gl.POINTS, programs.pointProgram);
         if (session.style.matte && gpu.instructionPieces.count) {
-            // 玉を描く前の背景を半解像度で保存する。MSAA の解決と縮小は別々に行う。
-            if (gpu.sceneMultisample) {
-                gl.bindFramebuffer(gl.READ_FRAMEBUFFER, gpu.sceneMultisample.fbo);
-                gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, gpu.sceneTarget!.fbo);
-                gl.blitFramebuffer(
-                    0,
-                    0,
-                    gpu.renderWidth,
-                    gpu.renderHeight,
-                    0,
-                    0,
-                    gpu.renderWidth,
-                    gpu.renderHeight,
-                    gl.COLOR_BUFFER_BIT,
-                    gl.NEAREST
-                );
-            }
-            gl.bindFramebuffer(gl.READ_FRAMEBUFFER, gpu.sceneTarget!.fbo);
-            gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, gpu.bloomA!.fbo);
-            gl.blitFramebuffer(
-                0,
-                0,
-                gpu.renderWidth,
-                gpu.renderHeight,
-                0,
-                0,
-                gpu.bloomA!.w,
-                gpu.bloomA!.h,
-                gl.COLOR_BUFFER_BIT,
-                gl.LINEAR
-            );
-            gl.bindFramebuffer(gl.FRAMEBUFFER, (gpu.sceneMultisample ?? gpu.sceneTarget!).fbo);
             gl.depthMask(true);
             drawBuffer(gpu.instructionPieces, gl.TRIANGLES, programs.pieceProgram);
             gl.depthMask(false);

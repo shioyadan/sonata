@@ -75,6 +75,15 @@ function snapshot(scene) {
         positions
     });
 }
+const withoutColors = (value) => {
+    const state = JSON.parse(value);
+    state.nodes = state.nodes.map(([id, { color, ...node }]) => [id, node]);
+    state.connections = state.connections.map(({ color, ...connection }) => connection);
+    return state;
+};
+const matteStyles = ["paper"];
+assert.deepEqual(Object.keys(styles), ["neon", ...matteStyles], "Available styles or their order changed");
+for (const style of matteStyles) assert.equal(styles[style].matte, true, `${style} did not use grounded instructions`);
 const first = createFixture(),
     second = createFixture();
 let instructions = 0;
@@ -95,10 +104,18 @@ for (const [index, sample] of samples.entries()) {
     assert.equal(snapshot(second), expected);
     assert.notEqual(first.replay.ops, second.replay.ops);
     assert.notEqual(first.placement.nodes, second.placement.nodes);
-    first.session.style = styles.blocks;
-    first.load(samples[(index + 1) % samples.length].key);
-    snapshot(first);
-    assert.equal(snapshot(second), expected, "Loading another scene changed an existing scene");
+    for (const style of matteStyles) {
+        first.session.style = styles[style];
+        first.load(sample.key);
+        assert.deepEqual(
+            withoutColors(snapshot(first)),
+            withoutColors(expected),
+            `${sample.key}: Paper changed the layout or instruction paths`
+        );
+        first.load(samples[(index + 1) % samples.length].key);
+        snapshot(first);
+        assert.equal(snapshot(second), expected, "Loading another scene changed an existing scene");
+    }
     first.session.style = styles.neon;
     first.load(sample.key);
     assert.equal(snapshot(first), expected, "Reloading a trace changed its layout or paths");

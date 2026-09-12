@@ -8,8 +8,8 @@ import shaders = require("../src/shaders.cts");
 import browserTest = require("./browser-test.cts");
 
 const clamped: number = geometry.clamp(0.5);
-const rolling = geometry.createRollingTrack((time) => [time, 0, 0], [0, 1]);
-const rotation: number[] = rolling.rotationAt(0.5);
+const rotation: geometry.Quaternion = [0, 0, 0, 1];
+const rotated: geometry.Vector = geometry.rotate([1, 0, 0], rotation);
 const rob = replay.createRobReplay([], 4);
 const head: number = rob.stateAt(0).head;
 const speed: number = replay.flushPlaybackRate(1, [0]);
@@ -28,8 +28,8 @@ void [unloaded, pending, readyTrace, readyRob];
 geometry.clamp(".5");
 // @ts-expect-error 3次元の座標には3要素が必要。
 geometry.lookAt([0, 0], [0, 0, 0]);
-// @ts-expect-error 回転する経路は数値の座標を返す必要がある。
-geometry.createRollingTrack((time) => [time, "0", 0], [0, 1]);
+// @ts-expect-error 回転対象の座標は数値で指定する。
+geometry.rotate([1, "0", 0], rotation);
 // @ts-expect-error 再生時刻は数値。
 rob.stateAt("0");
 // @ts-expect-error 観測イベントの時刻は数値。
@@ -38,6 +38,11 @@ replay.flushPlaybackRate(1, ["0"]);
 replay.createRobReplay([], "4");
 // @ts-expect-error 接触点がない場合の null を無視してはならない。
 const lower: number = geometry.lowerAt(2, 2, [0, 0, 0, 1]);
+const paperLower: number | null = geometry.lowerAt(0, 0, [0, 0, 0, 1], "paper-box");
+// @ts-expect-error 接地の形状指定は外接球か既知の命令形状に限る。
+geometry.lowerAt(0, 0, [0, 0, 0, 1], "unknown");
+// @ts-expect-error 形状は真偽値ではなく名前で指定する。
+geometry.support([0, -1, 0], true);
 
 const topDown = replay.sampleTopDown(null, 1);
 if (topDown.available) {
@@ -55,7 +60,7 @@ if (registers.available) {
     void observed;
 }
 
-void [clamped, rotation, head, speed, pathReplay, lower];
+void [clamped, rotation, rotated, head, speed, pathReplay, lower, paperLower];
 
 // 型の境界をまたいでも、命令やステージの詳しい記録を保持する。
 declare const paths: geometry.Paths<replay.Operation>;
@@ -77,7 +82,7 @@ const buffer: renderer.Buffer = gpu.buffer([]);
 gpu.sceneTarget.fbo;
 // @ts-expect-error インスタンス描画には頂点数が必要。
 const incomplete: renderer.InstancedBuffer = { ...buffer, instances: true };
-// @ts-expect-error Blocks の材質には表面の設定が必要。
+// @ts-expect-error 接地する材質には表面の設定が必要。
 const material: renderer.Style = { matte: true, background: [0, 0, 0] };
 // @ts-expect-error WebGL 未対応時の null で GPU を初期化してはならない。
 renderer.createGpu({ gl: null, canvas: document.createElement("canvas"), onResize() {} });
