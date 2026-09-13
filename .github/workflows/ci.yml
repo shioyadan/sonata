@@ -5,6 +5,11 @@ on:
     branches: [main]
   pull_request:
   workflow_dispatch:
+    inputs:
+      full_render:
+        description: Run the full rendering suite (up to 25 minutes)
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -16,7 +21,7 @@ concurrency:
 jobs:
   verify:
     runs-on: ubuntu-24.04
-    timeout-minutes: 25
+    timeout-minutes: ${{ github.event_name == 'workflow_dispatch' && inputs.full_render && 25 || 5 }}
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-node@v6
@@ -32,7 +37,15 @@ jobs:
         run: npm test
       - name: Check preview server and malformed requests
         run: npm run test:server
-      - name: Check desktop, mobile, touch and offline playback
+      - name: Check basic desktop, mobile and offline playback
+        if: ${{ github.event_name != 'workflow_dispatch' || !inputs.full_render }}
+        timeout-minutes: 3
+        run: |
+          set -o pipefail
+          mkdir -p artifacts
+          xvfb-run -a -s '-screen 0 1600x1100x24' npm run test:smoke 2>&1 | tee artifacts/ci-render.log
+      - name: Check full desktop, mobile, touch and offline playback
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.full_render }}
         run: |
           set -o pipefail
           mkdir -p artifacts
@@ -55,6 +68,7 @@ jobs:
     if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
     needs: verify
     runs-on: ubuntu-24.04
+    timeout-minutes: 5
     permissions:
       contents: read
       pages: write

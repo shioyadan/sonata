@@ -13,6 +13,7 @@
     "src/**/*.cts",
     "scripts/check-types.cts",
     "scripts/check-browser.cts",
+    "scripts/check-smoke.cts",
     "scripts/browser-test.cts"
   ]
 }

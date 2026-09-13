@@ -22,6 +22,22 @@ app.setPath("userData", path.join(isolated, "profile"));
 const entry = path.join(isolated, "sonata.html");
 fs.copyFileSync(sourceEntry, entry);
 const unexpectedRequests = [];
+const timings = [];
+const begin = (name) => {
+    const started = performance.now();
+    console.log(`[render] ${name}: start`);
+    return () => {
+        const seconds = Number(((performance.now() - started) / 1000).toFixed(2));
+        timings.push({ name, seconds });
+        console.log(`[render] ${name}: passed (${seconds}s)`);
+    };
+};
+const review = async (name, run) => {
+    const done = begin(name);
+    const result = await run();
+    done();
+    return result;
+};
 app.whenReady()
     .then(async () => {
         const window = new BrowserWindow({
@@ -56,33 +72,47 @@ app.whenReady()
             return { firstCycle, samples };
         };
         await window.loadFile(entry);
-        if (process.argv.includes("--styles")) {
-            const styles = await require("./check-styles.cjs")(window, entry, screenshots);
+        if (process.argv.includes("--smoke")) {
+            const smoke = await review("smoke", () =>
+                require("./load-test.cjs")("check-smoke.cts")(window, screenshots, begin)
+            );
             assert.deepEqual(errors, []);
             assert.deepEqual(unexpectedRequests, []);
-            console.log(JSON.stringify({ styles, errors, externalRequests: unexpectedRequests }, null, 2));
+            console.log(JSON.stringify({ smoke, timings, errors, externalRequests: unexpectedRequests }, null, 2));
+            fs.rmSync(isolated, { recursive: true, force: true });
+            app.quit();
+            return;
+        }
+        if (process.argv.includes("--styles")) {
+            const styles = await review("styles", () => require("./check-styles.cjs")(window, entry, screenshots));
+            assert.deepEqual(errors, []);
+            assert.deepEqual(unexpectedRequests, []);
+            console.log(JSON.stringify({ styles, timings, errors, externalRequests: unexpectedRequests }, null, 2));
             fs.rmSync(isolated, { recursive: true, force: true });
             app.quit();
             return;
         }
         if (process.argv.includes("--browser")) {
-            const browser = await require("./load-test.cjs")("check-browser.cts")(window, entry, screenshots);
+            const browser = await review("browser", () =>
+                require("./load-test.cjs")("check-browser.cts")(window, entry, screenshots)
+            );
             assert.deepEqual(errors, []);
             assert.deepEqual(unexpectedRequests, []);
-            console.log(JSON.stringify({ browser, errors, externalRequests: unexpectedRequests }, null, 2));
+            console.log(JSON.stringify({ browser, timings, errors, externalRequests: unexpectedRequests }, null, 2));
             fs.rmSync(isolated, { recursive: true, force: true });
             app.quit();
             return;
         }
         if (process.env.SONATA_MOBILE_ONLY || process.argv.includes("--mobile")) {
-            const mobile = await require("./check-mobile.cjs")(window, screenshots);
+            const mobile = await review("mobile", () => require("./check-mobile.cjs")(window, screenshots));
             assert.deepEqual(errors, []);
             assert.deepEqual(unexpectedRequests, []);
-            console.log(JSON.stringify({ mobile, errors, externalRequests: unexpectedRequests }, null, 2));
+            console.log(JSON.stringify({ mobile, timings, errors, externalRequests: unexpectedRequests }, null, 2));
             fs.rmSync(isolated, { recursive: true, force: true });
             app.quit();
             return;
         }
+        const finishDesktop = begin("desktop");
         await delay(700);
         assert.equal(await js("typeof sonata"), "object", "WebGL mockup did not initialize");
         assert.equal(
@@ -920,7 +950,9 @@ app.whenReady()
         await js("document.getElementById('run-details').open=true");
         assert.match(await js("document.getElementById('run-file').textContent"), /mshr\.log/);
         await js("document.getElementById('run-details').open=false");
-        const mobile = await require("./check-mobile.cjs")(window, screenshots);
+        finishDesktop();
+        const mobile = await review("mobile", () => require("./check-mobile.cjs")(window, screenshots));
+        const finishMotion = begin("motion");
         // OS が動きを減らす設定でも、操作なしで再生・演出が始まることを確認する。
         window.setSize(1440, 1000);
         window.webContents.debugger.attach("1.3");
@@ -1022,9 +1054,12 @@ app.whenReady()
             "Reload did not restore the default animation and playback"
         );
         window.webContents.debugger.detach();
-        const browser = await require("./load-test.cjs")("check-browser.cts")(window, entry, screenshots);
-        const styles = await require("./check-styles.cjs")(window, entry, screenshots);
-        const memory = await require("./check-memory-render.cjs")(window, screenshots);
+        finishMotion();
+        const browser = await review("browser", () =>
+            require("./load-test.cjs")("check-browser.cts")(window, entry, screenshots)
+        );
+        const styles = await review("styles", () => require("./check-styles.cjs")(window, entry, screenshots));
+        const memory = await review("memory", () => require("./check-memory-render.cjs")(window, screenshots));
         assert.deepEqual(errors, [], `Browser errors: ${errors.join("; ")}`);
         assert.deepEqual(unexpectedRequests, [], "The copied HTML tried to fetch another resource");
         console.log(
@@ -1057,6 +1092,7 @@ app.whenReady()
                     browser,
                     styles,
                     memory,
+                    timings,
                     errors,
                     standalone: { isolated: true, externalRequests: unexpectedRequests }
                 },

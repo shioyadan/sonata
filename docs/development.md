@@ -112,7 +112,7 @@ npm ci
 npm run typecheck
 ```
 
-`src/` の全 `.cts` と画面検査の `scripts/check-browser.cts` / `scripts/browser-test.cts` を `tsconfig.json` の `strict` と `noEmit` で検査します。再生モデル・経路計算から UI・固定シーン・動的表示・GPU への型の受け渡しも対象です。デモ抽出スクリプトと vendor はこの型検査の対象外です。型のためだけに `src/` のファイルを増やさず、共有型は所有者のモジュールから公開します。
+`src/` の全 `.cts` と画面検査の `scripts/check-browser.cts` / `scripts/check-smoke.cts` / `scripts/browser-test.cts` を `tsconfig.json` の `strict` と `noEmit` で検査します。再生モデル・経路計算から UI・固定シーン・動的表示・GPU への型の受け渡しも対象です。デモ抽出スクリプトと vendor はこの型検査の対象外です。型のためだけに `src/` のファイルを増やさず、共有型は所有者のモジュールから公開します。
 
 型検査用の TypeScript と Node の型定義は開発依存としてバージョンを固定します。通常ビルドはこれらを読み込みません。型変換だけでは型の正しさを検査できないため、CI は `npm run typecheck` と実行時の検証を別々に実施します。`scripts/check-types.cts` は誤った引数型や null の見落としを拒否することも確認し、型が `any` に落ちた場合に検出できるようにします。未生成の GPU 資源、Aluminum / Paper の材質設定、経路計算で保持すべき命令・ステージ情報も型の回帰検査に含めます。
 
@@ -128,11 +128,13 @@ Node の推奨バージョンは `.nvmrc` に固定し、セキュリティ修�
 
 `THIRD_PARTY_NOTICES.md` と `licenses/` の原文は、配布 HTML の **Licenses** パネルへ埋め込みます。デモの元プログラムやライセンスが変わった場合はこれらも更新し、`npm test` で全文の保持を確認してください。
 
+`npm run test:smoke` は、単一HTMLの起動と再生・操作、全5デモの代表時刻、3スタイルの描画、モバイル1サイズからデスクトップへの復帰、ライセンス表示を短く確認します。全描画検査と同じHTML単体コピー・外部要求禁止・一時プロファイルを使います。
+
 `npm run test:render` は、ビルドした単一 HTML だけを別の一時ディレクトリへコピーして Electron で開きます。外部リソースへのアクセスを禁止し、全5デモの FIFO、ステージ、pipe と接続線、依存行列、レジスタ、フラッシュ、Top-down、操作を検査します。OS の動きを減らす設定でも再生・演出が自動で始まること、手動で演出を OFF / ON にできること、再読込み時は再び ON になることも確認します。
 
 モバイルは DPR 2 とタッチイベントを使い、320 × 568、390 × 844、430 × 932、932 × 430 で検査します。ピンチ、2本指の移動、指を離した後の回転、キャンセル、Fit、設定パネル、横向きからの復帰を含みます。実機 Safari / Chrome の検査を置き換えるものではありません。
 
-ブラウザの回帰検査は `scripts/check-browser.cts` にまとめ、`npm run test:render` と CI に含めています。個別に実行する場合は `npm run test:browser` を使います。ページ内で実行する操作も TypeScript の関数として記述し、診断 API の名前や引数の変更を型検査で検出します。検査用モジュールは Electron 側で Node 標準の型除去を使って読み込み、製品 HTML には含めません。共通の待機処理は `scripts/browser-test.cts` が担当し、検査ごとの期限・収束条件・失敗時の診断は呼び出し側で指定します。
+ブラウザの回帰検査は `scripts/check-browser.cts` にまとめ、`npm run test:render` と手動の全描画CIに含めています。個別に実行する場合は `npm run test:browser` を使います。ページ内で実行する操作も TypeScript の関数として記述し、診断 API の名前や引数の変更を型検査で検出します。検査用モジュールは Electron 側で Node 標準の型除去を使って読み込み、製品 HTML には含めません。共通の待機処理は `scripts/browser-test.cts` が担当し、検査ごとの期限・収束条件・失敗時の診断は呼び出し側で指定します。
 
 `waitFor` の `timeout` は条件の確認全体の期限です。1回の確認が応答しなくても終了し、ポーリングごとに期限を更新しません。既存の5秒・10秒・カメラ収束30秒と、50/60msの確認間隔を維持します。失敗時の診断取得は追加で最大1秒（`diagnosticsTimeout`）とし、診断が失敗しても元の検査メッセージを残します。`settle` は2フレームと任意の `gl.finish()` を合計10秒以内に待ち、必要なら `timeout` を指定できます。
 
@@ -162,6 +164,7 @@ Node の推奨バージョンは `.nvmrc` に固定し、セキュリティ修�
 ヘッドレス Linux の実行例:
 
 ```sh
+xvfb-run -a -s '-screen 0 1600x1100x24' npm run test:smoke
 xvfb-run -a -s '-screen 0 1600x1100x24' npm run test:render
 xvfb-run -a -s '-screen 0 1600x1100x24' npm run test:mobile
 xvfb-run -a -s '-screen 0 1600x1100x24' npm run test:browser
@@ -169,7 +172,9 @@ xvfb-run -a -s '-screen 0 1600x1100x24' npm run test:browser
 
 描画検査は一時的なブラウザプロファイルを使い、ローカルでもCIと同じ初期状態から始めます。大量の時刻やスタイルを続けて検査するときは、`createBrowserTest(window).sampleFrame(() => evaluate(...))` で状態の採取と1フレームの待機を行います。戻り値は待機前に採取した状態で、採取と待機は合計10秒（必要なら `timeout`）に制限されます。
 
-CI の `verify` ジョブ全体は25分を上限にします。全5デモ・各スタイルを SwiftShader で順次描画すると、検査中に従来の15分上限へ達する場合があるためです。個々のフレーム・状態待機の期限や検査項目は変更せず、ジョブ全体の実行枠と区別します。
+通常のpush / pull requestでは、整形・型・モデル・ビルド・サーバーの検査と `npm run test:smoke` を実行します。`verify` は最大5分、その中の基本描画ステップは最大3分です。全時刻走査、複数画面のタッチ操作、材質拡大・影の比較、全スタイルの障害復旧は通常CIへ含めず、ローカルの全検査を維持します。
+
+GitHub Actionsで全描画検査を行う場合は **Verify and publish Sonata → Run workflow → full_render** を選びます。手動実行の入力は既定でOFFです。ONの場合は基本描画を重複実行せず `npm run test:render` を実行し、検証ジョブの上限を25分にします。基本検査と全検査の成功を区別し、全検査が必要な変更では [AGENTS.md](../AGENTS.md#変更に応じた検証) に従ってローカルで確認してください。各描画区間の開始・終了・経過秒はログから確認できます。
 
 描画検査の標準出力・標準エラーは `artifacts/ci-render.log` にも保存します。失敗時は末尾60行（最大10,000文字）を `Rendering failure` の検査注釈に載せ、ログAPIの権限がなくても AssertionError と前後の情報を確認できるようにします。`pipefail` で元の検査失敗を維持し、注釈出力の成否で成功扱いにしません。
 
@@ -187,6 +192,6 @@ Konata の解析コードを更新する場合は [vendor の手順](../vendor/k
 
 公開先は https://shioyadan.github.io/sonata/ です。初回公開前に GitHub リポジトリの **Settings → Pages → Build and deployment → Source** を **GitHub Actions** に設定してください。
 
-`.github/workflows/ci.yml` は `main` への push または手動実行でモデル・ビルド・サーバー・描画を検証し、成功した同じコミットから `dist/sonata.html` を生成して、Pages の `index.html` として公開します。pull request は検証だけを行います。依存パッケージやソース、元ログを公開用ディレクトリへコピーしません。
+`.github/workflows/ci.yml` は `main` への push または手動実行でモデル・ビルド・サーバーと、選択された範囲の描画を検証し、成功した同じコミットから `dist/sonata.html` を生成して、Pages の `index.html` として公開します。pull request は検証だけを行います。通常は基本描画検査、手動で `full_render` を選んだ場合は全描画検査が公開条件です。Pagesジョブの上限は5分です。依存パッケージやソース、元ログを公開用ディレクトリへコピーしません。
 
 README 冒頭の **ライブデモ** はこの公開先へリンクします。push 後は GitHub Actions で対象コミットの `verify` と `pages` が成功したことを確認し、公開 URL の応答と生成 HTML の内容を確認します。`verify` が失敗した場合は `pages` がスキップされ、初回は未公開、既存サイトがある場合は前の公開内容が維持されます。

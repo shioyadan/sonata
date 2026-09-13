@@ -18,6 +18,7 @@
     "test": "node --experimental-transform-types scripts/check-memory.cjs && node --import tsx scripts/check-store-evidence.cjs && node --experimental-transform-types scripts/check-model.cjs && node --experimental-transform-types scripts/check-piece-grounding.cjs && node --experimental-transform-types scripts/check-scene.cjs && node scripts/check-bundle.cjs && node scripts/check-browser-test.cjs && node scripts/check-build.cjs",
     "test:server": "node scripts/check-server.cjs",
     "test:render": "electron --no-sandbox scripts/render.cjs",
+    "test:smoke": "electron --no-sandbox scripts/render.cjs --smoke",
     "test:mobile": "electron --no-sandbox scripts/render.cjs --mobile",
     "test:styles": "electron --no-sandbox scripts/render.cjs --styles",
     "test:browser": "electron --no-sandbox scripts/render.cjs --browser",
