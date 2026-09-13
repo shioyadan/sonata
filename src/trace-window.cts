@@ -18,6 +18,7 @@ type Options = {
     lastCycle: number;
     source: Source;
     laneNames?: readonly string[];
+    flushCycles?: ReadonlyMap<number, number>;
 };
 const limits = { operations: 16384, stages: 131072, cycles: 512, active: 512, queue: 128, rob: 224, width: 32 };
 
@@ -92,6 +93,71 @@ function primaryLane(ops: readonly Readonly<Op>[]) {
     return [...counts].sort((a, b) => b[1] - a[1] || a[0] - b[0])[0]?.[0] ?? 0;
 }
 
+// パーサーの既知の記録形式は局所区間に順序逆転がなくても役割を判定できる。
+// RSDは複数の固有stageの組を確認し、任意のKanata名へ意味を押し付けない。
+function stageProtocol(ops: readonly Readonly<Op>[], lane: number, parser: Source["parser"]) {
+    const names = new Set(ops.flatMap((op) => op.lanes[lane]?.stages.map((s) => s.name) ?? []));
+    if (parser === "gem5" && [...names].every((name) => ["F", "Dc", "Rn", "Ds", "Is", "Cm", "Mc", "Rt"].includes(name)))
+        return "gem5";
+    if (
+        ["Np", "Pd", "Sc", "Is", "Rr", "X"].every((name) => names.has(name)) &&
+        [...names].every((name) =>
+            ["Np", "F", "Pd", "Dc", "Rn", "Ds", "Sc", "Is", "Rr", "X", "Mt", "Ma", "Rw", "Cm", "Wc"].includes(name)
+        )
+    )
+        return "rsd";
+    return null;
+}
+
+// 最初の命令が途中でsquashされても、後の命令に観測した前後関係で並べる。
+// 循環する未知stageは同じ表示区画へまとめ、架空の一方向順序を作らない。
+function orderedFrontGroups(paths: readonly Range[][], names: Set<string>): string[][] {
+    const successors = new Map([...names].map((name) => [name, new Set<string>()])),
+        incoming = new Map([...names].map((name) => [name, 0]));
+    for (const path of paths) {
+        const front = path.filter((range) => names.has(range.name));
+        front.forEach((range, index) => {
+            if (!index || front[index - 1].name === range.name) return;
+            const after = successors.get(front[index - 1].name)!;
+            if (after.has(range.name)) return;
+            after.add(range.name);
+            incoming.set(range.name, incoming.get(range.name)! + 1);
+        });
+    }
+    const groups: string[][] = [],
+        queue = [...names].filter((name) => incoming.get(name) === 0),
+        visited = new Set<string>();
+    for (let index = 0; index < queue.length; index++) {
+        const next = queue[index];
+        groups.push([next]);
+        visited.add(next);
+        for (const after of successors.get(next)!) {
+            incoming.set(after, incoming.get(after)! - 1);
+            if (incoming.get(after) === 0) queue.push(after);
+        }
+    }
+    if (visited.size !== names.size) groups.push([...names].filter((name) => !visited.has(name)));
+    return groups;
+}
+
+// retire:0はsquash時刻ではない。raw終端を保持し、連続する群の最終観測を別の推定値にする。
+function flushTimes(ops: readonly Readonly<Op>[], parser: Source["parser"]) {
+    const result = new Map<number, number>();
+    if (parser !== "gem5") return result;
+    for (let index = 0; index < ops.length; ) {
+        if (!ops[index].flush) {
+            index++;
+            continue;
+        }
+        const group = [ops[index++]];
+        while (index < ops.length && ops[index].flush && ops[index].id === group.at(-1)!.id + 1)
+            group.push(ops[index++]);
+        const cycle = Math.max(...group.map((op) => op.retiredCycle));
+        for (const op of group) result.set(op.id, cycle);
+    }
+    return result;
+}
+
 // ファイル名から ISA、周波数、物理レジスタ数を決めず、記録内の tick/cycle 対応だけを使う。
 function storeCompletions(ops: readonly Readonly<Op>[], parser: Source["parser"]): [number, number][] {
     if (parser !== "gem5") return [];
@@ -122,7 +188,14 @@ function storeCompletions(ops: readonly Readonly<Op>[], parser: Source["parser"]
     });
 }
 
-function toTraceWindow({ ops: input, firstCycle, lastCycle, source, laneNames = [] }: Options): Trace {
+function toTraceWindow({
+    ops: input,
+    firstCycle,
+    lastCycle,
+    source,
+    laneNames = [],
+    flushCycles: indexedFlushCycles
+}: Options): Trace {
     finiteCycle(firstCycle, "Window start");
     finiteCycle(lastCycle, "Window end");
     finiteCycle(source.lastCycle, "Trace end");
@@ -167,22 +240,36 @@ function toTraceWindow({ ops: input, firstCycle, lastCycle, source, laneNames = 
         );
     if (ops.some((op) => !ranges.get(op.id)!.length))
         throw new Error(`Some instructions have no recorded stages in lane ${laneNames[lane] ?? lane}`);
-    const allocationNames = new Set(detected?.allocationStage.stageNames ?? []),
-        executionNames = new Set(detected?.executionStage.stageNames ?? []),
+    const protocol = stageProtocol(ops, lane, source.parser),
+        executionNames = new Set(
+            protocol === "rsd"
+                ? ["X", "Mt", "Ma"]
+                : protocol === "gem5"
+                  ? ["Is"]
+                  : (detected?.executionStage.stageNames ?? [])
+        ),
         observations = new Map(ops.map((op) => [op.id, detected?.observe(op)]));
     const frontNames = new Set<string>();
-    for (const op of ops) {
-        const allocation = observations.get(op.id)?.allocationCycle;
-        for (const range of ranges.get(op.id)!)
-            if (allocation == null || range.start < allocation) frontNames.add(range.name);
-    }
-    const names = [...frontNames],
-        frontNodes = Array.from({ length: Math.min(6, Math.max(1, names.length)) }, (_, index) => ({
+    if (protocol) {
+        for (const name of protocol === "rsd" ? ["Np", "F", "Pd", "Dc", "Rn", "Ds"] : ["F", "Dc", "Rn"])
+            frontNames.add(name);
+    } else
+        for (const op of ops) {
+            const allocation = observations.get(op.id)?.allocationCycle;
+            for (const range of ranges.get(op.id)!)
+                if (allocation == null || range.start < allocation) frontNames.add(range.name);
+        }
+    const groups = protocol
+            ? [...frontNames].map((name) => [name])
+            : orderedFrontGroups([...ranges.values()], frontNames),
+        frontNodes = Array.from({ length: Math.min(6, Math.max(1, groups.length)) }, (_, index) => ({
             id: `front-${index}`,
             names: [] as string[]
         }));
-    names.forEach((name, index) => frontNodes[Math.floor((index * frontNodes.length) / names.length)].names.push(name));
-    if (!names.length) frontNodes[0].names.push("STAGES");
+    groups.forEach((names, index) =>
+        frontNodes[Math.floor((index * frontNodes.length) / groups.length)].names.push(...names)
+    );
+    if (!groups.length) frontNodes[0].names.push("STAGES");
     const frontByName = new Map(frontNodes.flatMap((node) => node.names.map((name) => [name, node.id]))),
         completionNames = new Set<string>();
     for (const op of ops) {
@@ -190,18 +277,34 @@ function toTraceWindow({ ops: input, firstCycle, lastCycle, source, laneNames = 
             range = ranges.get(op.id)!.find((range) => range.start === completion);
         if (range) completionNames.add(range.name);
     }
+    const flushCycles = flushTimes(ops, source.parser);
+    for (const op of ops) {
+        const cycle = indexedFlushCycles?.get(op.id);
+        if (cycle == null || !op.flush) continue;
+        finiteCycle(cycle, `Instruction #${op.id} squash`);
+        if (cycle < op.retiredCycle) throw new Error(`Instruction #${op.id} squash precedes its last observation`);
+        flushCycles.set(op.id, cycle);
+    }
     const compactOps: CompactOperation[] = ops.map((op) => {
         const observed = observations.get(op.id),
-            allocation = observed?.allocationCycle ?? null,
-            issue = observed?.issueCycle ?? null,
+            path = ranges.get(op.id)!,
+            allocation = protocol
+                ? (path.find((range) => range.name === (protocol === "rsd" ? "Sc" : "Ds"))?.start ?? null)
+                : (observed?.allocationCycle ?? null),
+            issue = protocol
+                ? (path.find((range) => range.name === "Is")?.start ?? null)
+                : (observed?.issueCycle ?? null),
             kind = memoryModel.instructionType(op.labelName),
-            execution = `exec-${kind === "load" || kind === "store" || kind === "atomic" ? "memory" : kind}`,
-            path = ranges.get(op.id)!;
+            execution = `exec-${kind === "load" || kind === "store" || kind === "atomic" ? "memory" : kind}`;
         // 再登場する ready stage は最後の実行後だけを完了とする。EOF は結果を補完しない。
         const lastExecution = path.findLast((range) => executionNames.has(range.name)),
             completed =
                 lastExecution &&
-                path.findLast((range) => range.start >= lastExecution.end && completionNames.has(range.name));
+                path.findLast(
+                    (range) =>
+                        range.start >= lastExecution.end &&
+                        (protocol ? range.name === (protocol === "rsd" ? "Rw" : "Cm") : completionNames.has(range.name))
+                );
         const response =
             source.parser === "gem5" && ["load", "store", "atomic"].includes(kind)
                 ? path.findLast((range) => range.name === "Mc")
@@ -214,6 +317,15 @@ function toTraceWindow({ ops: input, firstCycle, lastCycle, source, laneNames = 
                 else if (completion == null || range.start < completion) node = execution;
                 else node = !unfinished(op) && op.retired && !op.flush && index === path.length - 1 ? "commit" : "rob";
             }
+            if (protocol === "rsd" && allocation != null) {
+                if (["Is", "Rr"].includes(range.name)) node = "register-read";
+                else if (["X", "Mt", "Ma"].includes(range.name)) node = execution;
+                else if (range.name === "Rw")
+                    node = kind === "load" && (completion == null || range.start < completion) ? "memory-wait" : "rob";
+                else if (range.name === "Cm" && op.retired && !op.flush && !unfinished(op)) node = "commit";
+            }
+            if (protocol === "gem5" && range.name === "Rt" && op.retired && !op.flush && !unfinished(op))
+                node = "commit";
             return [range.name, node, range.start, range.end];
         });
         return [
@@ -228,11 +340,11 @@ function toTraceWindow({ ops: input, firstCycle, lastCycle, source, laneNames = 
             issue,
             completion,
             execution,
-            null,
+            flushCycles.get(op.id) ?? null,
             unfinished(op)
         ];
     });
-    const endOf = (op: CompactOperation) => (op[12] ? Infinity : op[3]),
+    const endOf = (op: CompactOperation) => (op[12] ? Infinity : op[4] ? (op[11] ?? op[3]) : op[3]),
         activePeak = peak(compactOps.map((op) => [op[2], endOf(op)])),
         queuePeak = peak(
             compactOps.flatMap((op) =>
@@ -279,16 +391,18 @@ function toTraceWindow({ ops: input, firstCycle, lastCycle, source, laneNames = 
                 ready: byID.get(producer.opID)?.[9] ?? null
             }))
         }));
-    const inferred = detected
-        ? "Stage roles inferred from the selected instructions"
-        : "Generic serial stage view; allocation, execution and completion roles are unobserved";
+    const inferred = protocol
+        ? `Stage roles follow the ${protocol === "rsd" ? "RSD" : "gem5 O3PipeView"} stage records`
+        : detected
+          ? "Stage roles inferred from the selected instructions"
+          : "Generic serial stage view; allocation, execution and completion roles are unobserved";
     const incompleteCount = compactOps.filter((op) => op[12]).length;
     return {
         key: "local-file",
         label: source.name,
         fileName: source.name,
         parser: source.parser === "gem5" ? "gem5 O3PipeView" : "Kanata/Onikiri",
-        machineOrder: detected ? "out-of-order" : "unknown",
+        machineOrder: protocol || detected ? "out-of-order" : "unknown",
         firstCycle,
         lastCycle,
         initialCycle: firstCycle,
@@ -297,9 +411,18 @@ function toTraceWindow({ ops: input, firstCycle, lastCycle, source, laneNames = 
         ops: compactOps,
         storeCompletions: storeCompletions(ops, source.parser),
         structure: {
+            ...(protocol === "rsd"
+                ? {
+                      registerRead: {
+                          id: "register-read",
+                          names: ["Is", "Rr"],
+                          description: "Recorded issue handoff and register read; values unobserved"
+                      }
+                  }
+                : {}),
             queueCapacity,
             robCapacity,
-            allocationWidth: detected?.allocationStage.width ?? 1,
+            allocationWidth: width(compactOps.flatMap((op) => (op[7] == null ? [] : [op[7]]))),
             frontNodes,
             executionNodes,
             memoryWait: null
@@ -328,7 +451,7 @@ function toTraceWindow({ ops: input, firstCycle, lastCycle, source, laneNames = 
                 processor: "Not recorded",
                 configuration: "Not recorded",
                 workloadKnown: false,
-                note: `${inferred}. Display capacities and routes are inferred from observed concurrency, not hardware specifications. ${incompleteCount} instruction outcomes are unobserved. Source: ${source.opCount} instructions, through cycle ${source.lastCycle}.`
+                note: `${inferred}. Display capacities and routes are inferred from observed concurrency, not hardware specifications. ${flushCycles.size ? "Squash timing is inferred from the last observations of contiguous flushed instructions. " : ""}${incompleteCount} instruction outcomes are unobserved. Source: ${source.opCount} instructions, through cycle ${source.lastCycle}.`
             }
         }
     };

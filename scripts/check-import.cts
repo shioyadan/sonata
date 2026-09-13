@@ -9,9 +9,9 @@ import type browserTest = require("./browser-test.cts");
 const { createBrowserTest, waitFor: waitUntil } = require("./load-test.cjs")("browser-test.cts") as typeof browserTest;
 
 // 外部の実トレースをCIへ持ち込まず、形式・圧縮・区間移動を実際のFile入力で検査する。
-function fixture() {
+function fixture(count = 320) {
     const lines = ["Kanata\t0004", "C=\t100"];
-    for (let id = 0; id < 320; id++) {
+    for (let id = 0; id < count; id++) {
         lines.push(
             `I\t${id}\t${id}\t${id % 2}`,
             `L\t${id}\t0\t0x1000: add r1, r2, r3`,
@@ -24,7 +24,7 @@ function fixture() {
             `R\t${id}\t${id}\t0`
         );
     }
-    lines.push("C\t1000", "I\t320\t320\t0", "L\t320\t0\tunfinished add", "S\t320\t0\tF", "C\t2");
+    lines.push("C\t1000", `I\t${count}\t${count}\t0`, `L\t${count}\t0\tunfinished add`, `S\t${count}\t0\tF`, "C\t2");
     return lines.join("\n") + "\n";
 }
 async function reviewImport(window: BrowserWindow, screenshots: string) {
@@ -62,6 +62,198 @@ async function reviewImport(window: BrowserWindow, screenshots: string) {
             { timeout: 30000, diagnostics: () => evaluate(() => document.getElementById("import-status")?.textContent) }
         );
     };
+    async function checkIncremental() {
+        const originalSource = await evaluate(() => globalThis.sonataTraceWorkerSource);
+        // 実際のFileの後半をWorker内で止める。固定秒数の遅延や巨大fixtureに依存せず、
+        // EOF前に描画・操作できることを確認してから残りの入力を渡す。
+        const gate = `
+            let releaseInput;
+            let delayFirstError = false;
+            const inputGate = new Promise(resolve => releaseInput = resolve);
+            File.prototype.stream = function () {
+                const file = this;
+                delayFirstError = file.name === "late-error.kanata";
+                let offset = 0;
+                return new ReadableStream({
+                    async pull(controller) {
+                        if (offset >= 524288) await inputGate;
+                        if (offset >= file.size) { controller.close(); return; }
+                        const bytes = new Uint8Array(await file.slice(offset, offset + 65536).arrayBuffer());
+                        offset += bytes.length;
+                        controller.enqueue(bytes);
+                    }
+                });
+            };
+        `;
+        const receive = `
+            const sendTrace = globalThis.postMessage.bind(globalThis);
+            let delayedRequest;
+            globalThis.postMessage = data => {
+                if (delayFirstError && data.type === "window") {
+                    delayFirstError = false;
+                    delayedRequest = data.request;
+                    sendTrace({ type: "test-window-held" });
+                    return;
+                }
+                sendTrace(data);
+                if (data.type === "loaded" && data.source.complete && delayedRequest !== undefined) {
+                    sendTrace({ type: "error", request: delayedRequest, message: "Partial window unavailable" });
+                    delayedRequest = undefined;
+                }
+            };
+            const receiveTrace = globalThis.onmessage;
+            globalThis.onmessage = event => {
+                if (event.data.type === "release-test-input") releaseInput();
+                else receiveTrace(event);
+            };
+        `;
+        async function captureWorker() {
+            await evaluate(() => {
+                const context = globalThis as typeof globalThis & {
+                    importTestWorker?: Worker;
+                    importTestHeld?: boolean;
+                };
+                const NativeWorker = Worker;
+                context.importTestHeld = false;
+                globalThis.Worker = new Proxy(NativeWorker, {
+                    construct(Target, args) {
+                        const instance = new Target(...(args as [string | URL, WorkerOptions?]));
+                        context.importTestWorker = instance;
+                        instance.addEventListener("message", (event) => {
+                            if (event.data.type === "test-window-held") context.importTestHeld = true;
+                        });
+                        globalThis.Worker = NativeWorker;
+                        return instance;
+                    }
+                });
+            });
+        }
+        try {
+            await captureWorker();
+            await evaluate(
+                (_page, source) => {
+                    globalThis.sonataTraceWorkerSource = source;
+                },
+                gate + originalSource + receive
+            );
+            const file = path.join(dir, "incremental.kanata");
+            fs.writeFileSync(file, fixture(6000));
+            assert.ok(fs.statSync(file).size > 524288);
+            const { root } = await debuggerAPI.sendCommand("DOM.getDocument");
+            const { nodeId } = await debuggerAPI.sendCommand("DOM.querySelector", {
+                nodeId: root.nodeId,
+                selector: "#trace-file"
+            });
+            await debuggerAPI.sendCommand("DOM.setFileInputFiles", { nodeId, files: [file] });
+            await waitFor(
+                ({ sonata }) =>
+                    sonata.trace.key === "local-file" &&
+                    sonata.fileImport.source?.complete === false &&
+                    !sonata.fileImport.selecting,
+                "No trace was displayed before the input reached EOF"
+            );
+            const partial = await evaluate(({ sonata }) => ({
+                count: sonata.fileImport.source!.opCount,
+                loading: sonata.fileImport.loading,
+                message: document.getElementById("file-partial")!.hidden,
+                cancel: document.getElementById("import-cancel")!.hidden
+            }));
+            assert.ok(partial.count > 0 && partial.count < 6001);
+            assert.ok(partial.loading && !partial.message && !partial.cancel);
+            await evaluate(() => {
+                (document.getElementById("file-cycle") as HTMLInputElement).value = "600";
+                document.getElementById("file-go")!.click();
+            });
+            await waitFor(
+                ({ sonata }) => sonata.trace.firstCycle === 600 && !sonata.fileImport.selecting,
+                "Seeking was blocked by background trace loading"
+            );
+            await evaluate(({ sonata }) => {
+                sonata.captureAt(620.5);
+                sonata.setPlaying(true);
+            });
+            await waitFor(
+                ({ sonata }) => sonata.cycle > 621 && sonata.fileImport.loading,
+                "Playback did not advance while the file was loading"
+            );
+            await evaluate(({ sonata }) => {
+                sonata.setPlaying(false);
+                sonata.captureAt(621.5);
+                (globalThis as typeof globalThis & { importTestWorker: Worker }).importTestWorker.postMessage({
+                    type: "release-test-input"
+                });
+            });
+            await waitFor(({ sonata }) => !sonata.fileImport.busy, "Background loading did not finish");
+            const complete = await evaluate(({ sonata }) => ({
+                complete: sonata.fileImport.source!.complete,
+                count: sonata.fileImport.source!.opCount,
+                start: sonata.trace.firstCycle,
+                cycle: sonata.cycle,
+                finite: sonata.particles.every((p) => p.position.every(Number.isFinite)),
+                hidden: document.getElementById("file-partial")!.hidden,
+                status: document.getElementById("import-status")!.textContent
+            }));
+            assert.equal(complete.complete, true);
+            assert.equal(complete.count, 6001);
+            assert.equal(complete.start, 600);
+            assert.equal(complete.cycle, 621.5, "Finishing background loading reset the playback position");
+            assert.ok(complete.finite && complete.hidden);
+            assert.equal(complete.status, "");
+            // 一度途中表示ができた後でも、Cancelは表示とstoreをまとめて閉じる。
+            await debuggerAPI.sendCommand("DOM.setFileInputFiles", { nodeId, files: [file] });
+            await waitFor(
+                ({ sonata }) =>
+                    sonata.trace.key === "local-file" &&
+                    sonata.fileImport.source?.complete === false &&
+                    !sonata.fileImport.selecting,
+                "The second background import did not become usable"
+            );
+            await evaluate(() => document.getElementById("import-cancel")!.click());
+            assert.ok(
+                await evaluate(
+                    ({ sonata }) =>
+                        sonata.trace.key === "rename-rush" &&
+                        sonata.fileImport.source === null &&
+                        !sonata.fileImport.busy &&
+                        !document.querySelector('#trace-select option[value="local-file"]')
+                ),
+                "Cancel left a partially imported trace selected"
+            );
+            // 最終loadedと古い部分windowの失敗が交差しても、完成した区間を再取得する。
+            // 一度も部分表示できなかった場合はデモの時刻を引き継がず、区間先頭から表示する。
+            await captureWorker();
+            const late = path.join(dir, "late-error.kanata");
+            fs.writeFileSync(late, fixture(6000));
+            await debuggerAPI.sendCommand("DOM.setFileInputFiles", { nodeId, files: [late] });
+            await waitFor(
+                () => Boolean((globalThis as typeof globalThis & { importTestHeld?: boolean }).importTestHeld),
+                "The partial window was not held for the completion race"
+            );
+            await evaluate(() =>
+                (globalThis as typeof globalThis & { importTestWorker: Worker }).importTestWorker.postMessage({
+                    type: "release-test-input"
+                })
+            );
+            await waitFor(
+                ({ sonata }) => !sonata.fileImport.busy && sonata.trace.key === "local-file",
+                "The final trace was lost after a late partial-window error"
+            );
+            assert.equal(await evaluate(({ sonata }) => sonata.cycle), 0);
+            assert.equal(await evaluate(() => document.getElementById("import-status")!.textContent), "");
+        } finally {
+            await evaluate((_page, source) => {
+                const context = globalThis as typeof globalThis & {
+                    importTestWorker?: Worker;
+                    importTestHeld?: boolean;
+                };
+                context.importTestWorker?.postMessage({ type: "release-test-input" });
+                delete context.importTestWorker;
+                delete context.importTestHeld;
+                globalThis.sonataTraceWorkerSource = source;
+                document.getElementById("file-close")!.click();
+            }, originalSource);
+        }
+    }
     try {
         await evaluate(({ sonata }) => sonata.setPlaying(false));
         await importFile("<local> & trace.kanata", contents);
@@ -165,6 +357,48 @@ async function reviewImport(window: BrowserWindow, screenshots: string) {
         await test.settle({ finish: true });
         fs.writeFileSync(path.join(screenshots, "sonata-import.png"), (await window.webContents.capturePage()).toPNG());
 
+        const memoryFile = [
+            { name: "ldr w0, [x1]", complete: 12000 },
+            { name: "ldr w2, [x3]", complete: 6000 },
+            { name: "str w0, [x4]", complete: 6000 }
+        ]
+            .map(
+                ({ name, complete }, id) =>
+                    [
+                        `O3PipeView:fetch:1000:0x1000:0:${id + 1}: ${name}`,
+                        "O3PipeView:decode:2000",
+                        "O3PipeView:rename:3000",
+                        "O3PipeView:dispatch:4000",
+                        "O3PipeView:issue:5000",
+                        `O3PipeView:complete:${complete}`,
+                        `O3PipeView:retire:${15000 + id * 1000}`
+                    ].join("\n") + "\n"
+            )
+            .join("");
+        await importFile("memory.o3", memoryFile);
+        for (const style of ["neon", "aluminum", "paper"]) {
+            await evaluate(({ sonata }, name) => {
+                document.getElementById(`style-${name}`)!.click();
+                sonata.captureAt(5.5);
+            }, style);
+            const labels = await evaluate(() =>
+                [...document.querySelectorAll(".memory-label")].map((element) => {
+                    const r = element.getBoundingClientRect();
+                    return { text: element.textContent, left: r.left, right: r.right, top: r.top, bottom: r.bottom };
+                })
+            );
+            assert.equal(labels.length, 3, "Imported memory stages did not produce LOAD / STORE / WAIT labels");
+            for (let i = 0; i < labels.length; i++)
+                for (let j = i + 1; j < labels.length; j++) {
+                    const a = labels[i],
+                        b = labels[j];
+                    assert.ok(
+                        a.right <= b.left || b.right <= a.left || a.bottom <= b.top || b.bottom <= a.top,
+                        `Imported memory labels overlap in ${style}: ${a.text} / ${b.text}`
+                    );
+                }
+        }
+
         await importFile(
             "gem5-eof.log",
             "O3PipeView:fetch:1000:0x1000:0:1: add r1, r2\nO3PipeView:decode:2000\nO3PipeView:rename:3000\nO3PipeView:dispatch:4000\nO3PipeView:issue:5000\nO3PipeView:complete:6000\nO3PipeView:retire:7000\nO3PipeView:fetch:11000:0x1004:0:2: add r1, r2\nO3PipeView:decode:12000\nO3PipeView:rename:13000\nO3PipeView:dispatch:14000\nO3PipeView:issue:15000\n"
@@ -264,6 +498,10 @@ async function reviewImport(window: BrowserWindow, screenshots: string) {
             "Cancel did not release the file"
         );
         await evaluate(({ sonata }) => sonata.loadTrace("rename-rush"));
+        await checkIncremental();
+        await importFile("one-cycle.kanata", "Kanata\t0004\nI\t0\t0\t0\nS\t0\t0\tF\n");
+        assert.equal(await evaluate(() => document.getElementById("playhead")!.style.left), "0%");
+        await evaluate(({ sonata }) => sonata.loadTrace("rename-rush"));
         return {
             formats: ["Kanata", "gem5", "gzip", "zstd"],
             sourceOps: 321,
@@ -271,7 +509,10 @@ async function reviewImport(window: BrowserWindow, screenshots: string) {
             cycleJump: 600,
             threads: 2,
             invalidInput: true,
-            canceled: true
+            canceled: true,
+            playbackBeforeEOF: true,
+            seekBeforeEOF: true,
+            preservePositionAtEOF: true
         };
     } finally {
         debuggerAPI.detach();

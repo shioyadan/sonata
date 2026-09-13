@@ -68,9 +68,10 @@ git worktree list
 
 ## 境界
 
-現在の `src/` は TypeScript 9個・CSS 3個・HTML 1個です。ファイル数は固定せず、責務と変更のまとまりに応じて見直します。各ファイルの責務と状態の所有者は [ソースの構造](architecture.md) を参照してください。
+ファイル数は固定せず、責務と変更のまとまりに応じて見直します。各ファイルの責務と状態の所有者は [ソースの構造](architecture.md) を参照してください。
 
 - `src/sonata.cts`: 起動、再生時計、共通操作、DOM と診断 API。
+- `src/trace-import.cts` / `src/trace-file.cts` / `src/trace-worker.cts` / `src/trace-window.cts`: ファイル操作、解析と圧縮store、Workerの要求受付、有界な表示区間への変換。
 - `src/camera.cts`: カメラの状態・投影とマウス / タッチ操作。GPU 資源から独立。
 - `src/replay-model.cts` / `src/geometry.cts`: トレース準備と再生状態、経路・接地。DOM / GPU から独立して検査可能。
 - `src/scene.cts` / `src/activity.cts` / `src/renderer.cts`: 固定シーン、動的表示、WebGL 資源・影と描画。材質の GLSL は `src/shaders.cts`。

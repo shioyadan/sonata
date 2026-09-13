@@ -459,11 +459,12 @@ function createScene({ gpu, replay, session }: SceneOptions) {
             frontNodes: front
         });
         const hasRegisters = !!replay.trace.evidence?.registers;
+        const hasRegisterRead = hasRegisters || !!replay.trace.structure.registerRead;
         front.forEach((n, i) => {
             const node = makeNode(
                 n.id,
                 n.names.join(" / "),
-                mix(hasRegisters ? -12.5 : -11.4, hasRegisters ? -7.8 : -6.7, i / Math.max(1, front.length - 1)),
+                mix(hasRegisterRead ? -12.5 : -11.4, hasRegisterRead ? -7.8 : -6.7, i / Math.max(1, front.length - 1)),
                 0,
                 Math.min(1.65, 4.4 / Math.max(1, front.length - 1)),
                 2.7,
@@ -495,10 +496,10 @@ function createScene({ gpu, replay, session }: SceneOptions) {
         const scheduler = makeNode(
             "issue",
             "SCHEDULER",
-            hasRegisters ? -5.2 : -3.7,
+            hasRegisterRead ? -5.2 : -3.7,
             0,
-            hasRegisters ? 3.2 : 3.6,
-            hasRegisters ? 3.2 : 3.6,
+            hasRegisterRead ? 3.2 : 3.6,
+            hasRegisterRead ? 3.2 : 3.6,
             0.65,
             session.style.palette.blue,
             `${replay.trace.structure.queueCapacity} ROWS × ${replay.dependencyReplay.columnCount} COLS · ${replay.trace.evidence?.scheduling.kind === "recorded" ? "RECORDED" : replay.trace.key === "local-file" ? "UNOBSERVED" : "RAW ESTIMATE"}`
@@ -536,7 +537,7 @@ function createScene({ gpu, replay, session }: SceneOptions) {
             const node = makeNode(
                 n.id,
                 label,
-                (hasRegisters ? 1.515 : 0.315) + (width - 0.78) / 2,
+                (hasRegisterRead ? 1.515 : 0.315) + (width - 0.78) / 2,
                 z,
                 width,
                 depth,
@@ -597,7 +598,7 @@ function createScene({ gpu, replay, session }: SceneOptions) {
             session.style.palette.integer,
             `${replay.trace.retireWidth} SLOTS / CYCLE`
         );
-        if (hasRegisters) {
+        if (hasRegisterRead) {
             // 実行 pipe を並べ替えても、レジスタ側の端子を筐体内に収める。
             const ports = [...scene.nodes.values()]
                 .filter((n) => n.pipeCount)
@@ -606,23 +607,25 @@ function createScene({ gpu, replay, session }: SceneOptions) {
                 maxZ = Math.max(5.65, ...ports.map((z) => z + 0.35));
             makeNode(
                 "register-read",
-                "PHYSICAL REGISTERS",
+                hasRegisters ? "PHYSICAL REGISTERS" : "REGISTER READ",
                 -1.65,
                 (minZ + maxZ) / 2,
                 2.2,
                 maxZ - minZ,
                 0.4,
                 session.style.palette.blue,
-                replay.trace.evidence!.registers!.origin === "gem5"
-                    ? `${replay.registerTags.length} INT · ${replay.trace.evidence!.registers!.kind === "configuration" ? "CONFIG ONLY" : "RECORDED ACCESSES"}`
-                    : `${replay.registerTags.length} OBSERVED · READ AT Rr`
+                !hasRegisters
+                    ? "Is / Rr · VALUES NOT LOGGED"
+                    : replay.trace.evidence!.registers!.origin === "gem5"
+                      ? `${replay.registerTags.length} INT · ${replay.trace.evidence!.registers!.kind === "configuration" ? "CONFIG ONLY" : "RECORDED ACCESSES"}`
+                      : `${replay.registerTags.length} OBSERVED · READ AT Rr`
             );
         }
         front.slice(1).forEach((n, i) => addConnection(front[i].id, n.id, scene.nodes.get(front[i].id)!.color));
         addConnection(front.at(-1)!.id, "issue", session.style.palette.integer);
-        if (hasRegisters) addConnection("issue", "register-read", session.style.palette.blue);
+        if (hasRegisterRead) addConnection("issue", "register-read", session.style.palette.blue);
         for (const n of replay.memory.executionNodes) {
-            addConnection(hasRegisters ? "register-read" : "issue", n.id, session.style.palette[n.kind]);
+            addConnection(hasRegisterRead ? "register-read" : "issue", n.id, session.style.palette[n.kind]);
             addConnection(n.id, "rob", session.style.palette[n.kind]);
         }
         if (scene.nodes.has("memory-wait")) {
@@ -1276,7 +1279,7 @@ function createScene({ gpu, replay, session }: SceneOptions) {
                 matrixModule(tris, lines, node);
                 continue;
             }
-            if (id === "register-read") {
+            if (id === "register-read" && replay.trace.evidence?.registers) {
                 registerModule(tris, lines, node);
                 continue;
             }
@@ -1409,6 +1412,7 @@ function createScene({ gpu, replay, session }: SceneOptions) {
                 ({ "register-read": "REG FILE", rob: "ROB", "memory-wait": "MEM WAIT" } as Record<string, string>)[
                     n.id
                 ] ?? n.label;
+            if (n.id === "register-read" && !replay.trace.evidence?.registers) label.dataset.label = "REG READ";
             const detail = document.createElement("small");
             detail.textContent = n.id.startsWith("front") && !n.mapWords ? "" : n.detail;
             if (n.mapWords!) {
@@ -1421,7 +1425,7 @@ function createScene({ gpu, replay, session }: SceneOptions) {
             if (n.id === "commit")
                 el.title = "One slot per instruction in this cycle's in-order commit group. Unused slots stay dark.";
             el.append(index, label, detail);
-            if (n.id === "register-read") {
+            if (n.id === "register-read" && replay.trace.evidence?.registers) {
                 const allocation = document.createElement("div");
                 allocation.id = "register-allocation";
                 allocation.className = "register-allocation";

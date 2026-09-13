@@ -163,6 +163,218 @@ assert.deepEqual(
 assert.equal(genericReplay.robReplay.stateAt(4).entries.length, 0, "Generic stages invented ROB allocation");
 assert.ok(genericReplay.commitGroups.get(5), "Generic fallback discarded observed retirement");
 
+// 先頭の不完全な命令の初見順を、その後の命令のstage順より優先しない。
+const unorderedFront = convert([
+    operation(0, [["beta", 0, 1]]),
+    operation(1, [
+        ["alpha", 1, 2],
+        ["beta", 2, 3],
+        ["gamma", 3, 4]
+    ])
+]);
+assert.deepEqual(
+    unorderedFront.structure.frontNodes.map((node) => node.names),
+    [["alpha"], ["beta"], ["gamma"]]
+);
+const cyclicFront = convert([
+    operation(0, [
+        ["alpha", 0, 1],
+        ["beta", 1, 2],
+        ["alpha", 2, 3],
+        ["gamma", 3, 4]
+    ])
+]);
+assert.equal(new Set(cyclicFront.ops[0][6].map((stage) => stage[1])).size, 1);
+assert.deepEqual(
+    cyclicFront.ops[0][6].map((stage) => stage[0]),
+    ["alpha", "beta", "alpha", "gamma"]
+);
+
+// 順序逆転がない短区間でも、RSDの記録区分と再試行を保つ。Wcはsquashの終端例。
+function rsdOperation(id, label, retry = false) {
+    const timing = [
+        ["Np", 0, 1],
+        ["F", 1, 2],
+        ["Pd", 2, 3],
+        ["Dc", 3, 4],
+        ["Rn", 4, 5],
+        ["Ds", 5, 6],
+        ["Sc", 6, 7],
+        ["Is", 7, 8],
+        ["Rr", 8, 9],
+        ["X", 9, 10],
+        ["Mt", 10, 11],
+        ["Ma", 11, 12],
+        ...(retry
+            ? [
+                  ["Rw", 12, 18],
+                  ["Is", 18, 19],
+                  ["Rr", 19, 20],
+                  ["X", 20, 21],
+                  ["Mt", 21, 22],
+                  ["Ma", 22, 23],
+                  ["Rw", 23, 25]
+              ]
+            : [["Rw", 12, 25]]),
+        ["Cm", 25, 26]
+    ].map(([name, start, end]) => [name, start + id * 0.25, end + id * 0.25]);
+    return operation(id, timing, { labelName: label });
+}
+const rsdOps = [
+    rsdOperation(0, "sb a2, a3, 0", true),
+    rsdOperation(1, "lb a2, a3, 0"),
+    rsdOperation(2, "sb a2, a3, 0")
+];
+rsdOps[2].flush = true;
+rsdOps[2].retired = false;
+rsdOps[2].lanes[0].stages.pop();
+rsdOps[2].lanes[0].stages.push({ name: "Wc", startCycle: 25.5, endCycle: 25.5, labels: "" });
+rsdOps[2].retiredCycle = 25.5;
+const rsdRaw = JSON.stringify(rsdOps),
+    rsd = convert(rsdOps),
+    rsdState = prepare(rsd);
+assert.equal(JSON.stringify(rsdOps), rsdRaw);
+assert.deepEqual(
+    rsd.structure.frontNodes.map((node) => node.names),
+    [["Np"], ["F"], ["Pd"], ["Dc"], ["Rn"], ["Ds"]]
+);
+assert.deepEqual(rsd.ops[0].slice(7, 10), [6, 7, 23]);
+assert.deepEqual(rsdState.replay.memory.minimum, { load: 3, store: 3 });
+assert.equal(rsd.evidence, undefined);
+assert.equal(rsdState.scene.nodes.get("register-read").label, "REGISTER READ");
+assert.match(rsdState.scene.nodes.get("register-read").detail, /VALUES NOT LOGGED/);
+assert.deepEqual(rsdState.replay.registerTags, []);
+assert.equal(rsdState.replay.registerReplay.stateAt(15).available, false);
+const retriedStore = rsdState.replay.ops[0],
+    stableRobSlot = retriedStore.robSlot;
+for (const [cycle, node, ready] of [
+    [10, "exec-store", false],
+    [15, "rob", false],
+    [18.5, "register-read", false],
+    [20.5, "exec-store", false],
+    [24, "rob", true],
+    [15, "rob", false]
+]) {
+    assert.equal(rsdState.paths.stageAt(retriedStore, cycle).node, node);
+    assert.equal(retriedStore.completion <= cycle, ready);
+    assert.equal(
+        rsdState.replay.robReplay.stateAt(cycle).entries.find((entry) => entry.op.id === 0).slot,
+        stableRobSlot
+    );
+    assert.ok(rsdState.paths.positionAt(retriedStore, cycle).every(Number.isFinite));
+}
+for (const firstCycle of [0, 14, 18]) {
+    const small = convert([rsdOps[0]], { firstCycle, lastCycle: firstCycle + 1 });
+    assert.deepEqual(small.ops[0], rsd.ops[0], "RSD role mapping changed with local detector coverage");
+}
+const partialRsd = rsdOperation(3, "lb a2, a3, 0");
+partialRsd.lanes[0].stages = partialRsd.lanes[0].stages.filter((stage) => !["Sc", "Is"].includes(stage.name));
+const missingAdmission = convert([rsdOps[0], partialRsd]);
+assert.deepEqual(missingAdmission.ops[1].slice(7, 10), [null, null, null]);
+assert.ok(missingAdmission.ops[1][6].every((stage) => stage[1].startsWith("front-")));
+
+// gem5先頭の無発行命令もRtへ進み、Ds/Is/Cmの通常経路を前段へ並べ替えない。
+function gem5Operation(id, stages, options = {}) {
+    return operation(id, stages, { labelDetail: "Fetched Tick: 1000", ...options });
+}
+const gem5Source = { name: "trace.log", parser: "gem5", opCount: 4, lastCycle: 100 };
+const gem5Ops = [
+    gem5Operation(0, [
+        ["F", 0, 1],
+        ["Dc", 1, 2],
+        ["Rn", 2, 3],
+        ["Ds", 3, 4],
+        ["Rt", 4, 5]
+    ]),
+    gem5Operation(1, [
+        ["F", 1, 2],
+        ["Dc", 2, 3],
+        ["Rn", 3, 4],
+        ["Ds", 4, 5],
+        ["Is", 5, 6],
+        ["Cm", 6, 8],
+        ["Rt", 8, 9]
+    ])
+];
+const gem5Stages = convert(gem5Ops, { source: gem5Source });
+assert.deepEqual(
+    gem5Stages.structure.frontNodes.map((node) => node.names),
+    [["F"], ["Dc"], ["Rn"]]
+);
+assert.deepEqual(gem5Stages.ops[0].slice(7, 10), [3, null, null]);
+assert.equal(gem5Stages.ops[0][6].at(-1)[1], "commit");
+assert.deepEqual(gem5Stages.ops[1].slice(7, 10), [4, 5, 6]);
+const memoryResponse = structuredClone(gem5Ops[1]);
+memoryResponse.labelName = "ldr x0, [x1]";
+memoryResponse.lanes[0].stages.splice(6, 0, { name: "Mc", startCycle: 7, endCycle: 8, labels: "" });
+memoryResponse.lanes[0].stages[5].endCycle = 7;
+const response = convert([gem5Ops[0], memoryResponse], { source: gem5Source });
+assert.equal(response.ops[1][9], 7, "Cm made a memory operation ready before Mc");
+
+// retire:0の個別の最終観測が前後しても、元時刻は保持して群のsquashだけを推定する。
+const squashGroup = [
+    gem5Ops[0],
+    gem5Operation(
+        1,
+        [
+            ["F", 1, 2],
+            ["Dc", 2, 3],
+            ["Rn", 3, 4],
+            ["Ds", 4, 7]
+        ],
+        { retired: false, flush: true }
+    ),
+    gem5Operation(
+        2,
+        [
+            ["F", 2, 3],
+            ["Dc", 3, 4],
+            ["Rn", 4, 5],
+            ["Ds", 5, 8]
+        ],
+        { retired: false, flush: true }
+    ),
+    gem5Operation(
+        3,
+        [
+            ["F", 3, 4],
+            ["Dc", 4, 5],
+            ["Rn", 5, 6],
+            ["Ds", 6, 9]
+        ],
+        { retired: false, flush: true }
+    )
+];
+const squashRaw = JSON.stringify(squashGroup),
+    squashed = convert(squashGroup, { source: gem5Source });
+assert.match(squashed.demo.provenance.note, /Squash timing is inferred/);
+assert.deepEqual(
+    squashed.ops.slice(1).map((op) => [op[3], op[11]]),
+    [
+        [7, 9],
+        [8, 9],
+        [9, 9]
+    ]
+);
+assert.equal(JSON.stringify(squashGroup), squashRaw);
+const squashState = prepare(squashed);
+assert.equal(squashState.replay.robReplay.stateAt(8.5).entries.length, 3);
+assert.equal(squashState.replay.robReplay.stateAt(9).entries.length, 0);
+for (const firstCycle of [0, 7, 8]) {
+    const partialGroup = convert([squashGroup[1]], {
+        source: gem5Source,
+        firstCycle,
+        lastCycle: firstCycle + 1,
+        flushCycles: new Map([[1, 9]])
+    });
+    assert.equal(partialGroup.ops[0][11], 9, "A boundary window changed indexed squash timing");
+    assert.equal(partialGroup.ops[0][3], 7);
+}
+assert.throws(
+    () => convert([squashGroup[1]], { source: gem5Source, flushCycles: new Map([[1, 6]]) }),
+    /precedes its last observation/
+);
+
 const zero = convert([
     operation(60, [
         ["a", 0, 0.25],

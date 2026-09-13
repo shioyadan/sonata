@@ -191,7 +191,9 @@ function start(gl: WebGL2RenderingContext) {
             updateUI();
         },
         pause: () => setPlaying(false),
-        apply: (trace) => {
+        apply: (trace, preservePosition) => {
+            const position = session.cycle;
+            const selected = session.selectedID;
             replaySource.loadData(trace);
             let option = $("trace-select").querySelector<HTMLOptionElement>('option[value="local-file"]');
             if (!option) {
@@ -200,6 +202,10 @@ function start(gl: WebGL2RenderingContext) {
             }
             option.textContent = trace.label;
             applyTrace();
+            if (preservePosition) {
+                session.cycle = clamp(position, trace.firstCycle, trace.lastCycle);
+                session.selectedID = replay.ops.some((op) => op.id === selected) ? selected : null;
+            }
             render();
             updateUI();
         }
@@ -524,6 +530,24 @@ function start(gl: WebGL2RenderingContext) {
         feedLabel.hidden = !session.instructionStream || feedAnchor[2] < 0;
         feedLabel.style.transform = `translate(${feedAnchor[0] + (camera.cameraMode === "plan" ? 135 : 0)}px,${feedAnchor[1] + (camera.cameraMode === "plan" ? -28 : 24)}px) translateX(-50%)`;
         activity.updateTopDownUI(dt > 0 && !session.reducedMotion);
+        // 任意ログのpipe数・長さでもLOAD/STORE/WAITの説明を重ねない。
+        // 投影後の3ラベルだけをまとめて測り、衝突したものを下へ離す。
+        if (!camera.compactMedia.matches) {
+            const labels = [...scene.nodes.values()]
+                .filter((n) => ["exec-load", "exec-store", "memory-wait"].includes(n.id))
+                .map((n) => ({ element: n.element!, rect: n.element!.getBoundingClientRect() }))
+                .filter(({ rect }) => rect.width > 0)
+                .sort((a, b) => a.rect.top - b.rect.top);
+            const placed: { left: number; right: number; top: number; bottom: number }[] = [];
+            for (const { element, rect } of labels) {
+                let top = rect.top;
+                for (const other of placed)
+                    if (rect.left < other.right + 4 && rect.right > other.left - 4 && top < other.bottom + 4)
+                        top = other.bottom + 4;
+                if (top > rect.top) element.style.transform += ` translateY(${top - rect.top}px)`;
+                placed.push({ left: rect.left, right: rect.right, top, bottom: top + rect.height });
+            }
+        }
         // 全体表示では読めるステージ名を残し、拡大に応じて詳細を表示する。
         // 投影したラベルが操作部や他のラベルを覆わないようにする。
         if (camera.compactMedia.matches) {
@@ -595,7 +619,7 @@ function start(gl: WebGL2RenderingContext) {
         $("mobile-cycle-value").textContent = `${integer.toLocaleString("en-US")}.${String(fraction).padStart(2, "0")}`;
         $("timeline").value = String(session.cycle);
         $("playhead").style.left =
-            `${clamp((session.cycle - replay.trace.firstCycle) / (replay.trace.lastCycle - replay.trace.firstCycle)) * 100}%`;
+            `${clamp((session.cycle - replay.trace.firstCycle) / Math.max(1, replay.trace.lastCycle - replay.trace.firstCycle)) * 100}%`;
         $("active-count").textContent = String(activity.frame.stats.active.length);
         $("ipc-value").textContent = activity.frame.stats.ipc.toFixed(2);
         const traceEvents = (replay.trace.demo.events ?? []).filter(
@@ -783,13 +807,13 @@ function start(gl: WebGL2RenderingContext) {
         const markers = replay.flushEvents.map((t) => {
             const marker = document.createElement("span");
             marker.className = "event-marker";
-            marker.style.left = `${((t - replay.trace.firstCycle) / (replay.trace.lastCycle - replay.trace.firstCycle)) * 100}%`;
+            marker.style.left = `${((t - replay.trace.firstCycle) / Math.max(1, replay.trace.lastCycle - replay.trace.firstCycle)) * 100}%`;
             return marker;
         });
         for (const bookmark of replay.trace.demo.bookmarks.filter((b) => b.type !== "flush")) {
             const marker = document.createElement("span");
             marker.className = "event-marker highlight-marker";
-            marker.style.left = `${((bookmark.cycle - replay.trace.firstCycle) / (replay.trace.lastCycle - replay.trace.firstCycle)) * 100}%`;
+            marker.style.left = `${((bookmark.cycle - replay.trace.firstCycle) / Math.max(1, replay.trace.lastCycle - replay.trace.firstCycle)) * 100}%`;
             markers.push(marker);
         }
         $("event-markers").replaceChildren(...markers);
@@ -1072,7 +1096,12 @@ function start(gl: WebGL2RenderingContext) {
             setPlaying: clock.setPlaying,
             loadTrace,
             get fileImport() {
-                return { source: fileImport.source, busy: fileImport.busy };
+                return {
+                    source: fileImport.source,
+                    busy: fileImport.busy,
+                    loading: fileImport.loading,
+                    selecting: fileImport.selecting
+                };
             },
             setCamera: camera.setCamera,
             captureAt(t: number) {

@@ -124,6 +124,7 @@ interface TraceData {
     retireWidth: number;
     machineOrder: string;
     structure: {
+        registerRead?: { id: string; names: string[]; description: string };
         queueCapacity: number;
         robCapacity: number;
         allocationWidth: number;
