@@ -195,3 +195,9 @@ Konata の解析コードを更新する場合は [vendor の手順](../vendor/k
 `.github/workflows/ci.yml` は `main` への push または手動実行でモデル・ビルド・サーバーと、選択された範囲の描画を検証し、成功した同じコミットから `dist/sonata.html` を生成して、Pages の `index.html` として公開します。pull request は検証だけを行います。通常は基本描画検査、手動で `full_render` を選んだ場合は全描画検査が公開条件です。Pagesジョブの上限は5分です。依存パッケージやソース、元ログを公開用ディレクトリへコピーしません。
 
 README 冒頭の **ライブデモ** はこの公開先へリンクします。push 後は GitHub Actions で対象コミットの `verify` と `pages` が成功したことを確認し、公開 URL の応答と生成 HTML の内容を確認します。`verify` が失敗した場合は `pages` がスキップされ、初回は未公開、既存サイトがある場合は前の公開内容が維持されます。
+
+## 任意トレースとCoreの更新
+
+ローカルファイルの対応形式・区間選択・大規模データの境界は[読込みの資料](trace-import.md)を参照してください。`npm run test:import`でFile入力・圧縮・Worker・取消を重点確認し、最終確認は全`test:render`で行います。通常CIの基本検査にも小さな合成トレースで同じ入口を含め、大規模性能測定はローカルに限定します。
+
+Coreは固定ソースと生成済み`vendor/konata-core/browser.cjs`を同梱します。更新時はソースのリビジョンとハッシュを揃え、`npm run core:generate`、`npm test`、型検査、オフライン読込み検査を行って生成物もコミットしてください。生成だけは開発依存のTypeScriptを使います。通常ビルドは依存パッケージを必要としません。

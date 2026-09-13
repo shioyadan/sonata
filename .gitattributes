@@ -2,3 +2,4 @@
 *.png binary
 *.jpg binary
 *.zip binary
+/vendor/wasm-zstd/LICENSE -text whitespace=cr-at-eol

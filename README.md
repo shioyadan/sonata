@@ -24,6 +24,14 @@ npm run build
 
 ローカル HTTP サーバーで開く場合は `npm start` を使います。ビルド後に `http://127.0.0.1:4173` で表示できます。ソース変更後は再起動してください。
 
+## トレースを開く
+
+**Open trace…** でローカルファイルを選択するか、画面へドラッグ＆ドロップしてください。Konata coreでKanata / Onikiriとgem5 O3PipeViewを判定し、非圧縮・gzip（`.gz`）・Zstandard（`.zst` / `.zstd`）を読み込みます。ファイルをサーバーへ送信せず、配布HTMLだけでオフライン動作します。
+
+読み込み中は進捗を表示し、**Cancel** で取り消せます。数GBのログでも全文の文字列や描画用の全命令配列を作らず、Konataの圧縮ページ保存を使います。読み込み後は **TRACE RANGE**、**Start cycle**、**Previous / Next** で全体から表示区間を選びます。初期区間は128サイクルで、16 / 32 / 512サイクルにも変更できます。下の再生タイムラインは選択中の区間を再生します。複数スレッドがある場合は対象を選択してください。
+
+表示構造と容量はその区間の記録からの推定です。役割を判定できないステージは記録順の前段として表示し、未観測のレジスタ値やTop-down分類を補いません。未完了の命令はコミットさせません。同時に表示できる密度やFIFO順序には制約があり、対応できない区間は理由を表示します。大きなファイルも圧縮後の記録はメモリに保持するので、扱えるサイズは内容と端末の空きメモリに依存します。[読込みの構造と制約](docs/trace-import.md)を参照してください。
+
 ## 操作
 
 | 操作 | 動作 |
@@ -86,6 +94,10 @@ xvfb-run -a -s '-screen 0 1600x1100x24' npm run test:mobile
 ```text
 src/                    編集用のソース
   sonata.cts            起動・操作・DOM 表示
+  trace-import.cts      ファイル選択・進捗・区間移動
+  trace-worker.cts      読込みWorkerの入口
+  trace-file.cts        Konata store・区間索引・寿命
+  trace-window.cts      選択区間を再生形式へ変換
   camera.cts            カメラ・投影・ポインター操作
   replay-model.cts      デモ準備・時刻に対応する再生状態
   geometry.cts          座標・経路・接地
@@ -99,7 +111,8 @@ src/                    編集用のソース
   appearance.css        画面サイズ対応・配色
 data/                   Git に含める5本の実トレース抜粋と出自
 scripts/                ビルド・検証・デモ抽出
-vendor/konata-core/      抽出に使う Konata 解析コードの固定スナップショット
+vendor/konata-core/      読込み・抽出に使う Konata core と生成済みブラウザ用コード
+vendor/wasm-zstd/        同梱する圧縮器とライセンス
 docs/                   可視化の仕様と開発手順
 dist/sonata.html         配布用の生成物（Git 対象外）
 artifacts/              検証画像・レポート（Git 対象外）

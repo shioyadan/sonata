@@ -45,7 +45,11 @@ for (const file of [
     "THIRD_PARTY_NOTICES.md",
     "licenses/COREMARK-LICENSE.md",
     "licenses/RSD-LICENSE.txt",
-    "licenses/RSD-CREDITS.md"
+    "licenses/RSD-CREDITS.md",
+    "vendor/konata-core/LICENSE.md",
+    "vendor/wasm-zstd/LICENSE",
+    "vendor/wasm-zstd/FZSTD-LICENSE.txt",
+    "vendor/wasm-zstd/ZSTD-LICENSE.txt"
 ]) {
     assert.ok(notices.includes(read(file).trim()), `Standalone HTML lost third-party notice: ${file}`);
 }
@@ -54,9 +58,13 @@ assert.equal(scripts.length, 2);
 assert.deepEqual(readTrace(scripts[0]), expected, "HTML changed the recorded demo data");
 assert.equal(new Set(expected.map((t) => t.key)).size, 5);
 for (const script of scripts) new vm.Script(script);
+const workerContext = {};
+vm.runInNewContext(scripts[0], workerContext);
+assert.ok(workerContext.sonataTraceWorkerSource.includes("PagedOpStore"), "Offline trace reader missing");
+new vm.Script(workerContext.sonataTraceWorkerSource);
 const temp = fs.mkdtempSync(path.join(os.tmpdir(), "sonata-build-"));
 try {
-    for (const entry of ["src", "data", "LICENSE.md", "THIRD_PARTY_NOTICES.md", "licenses"]) {
+    for (const entry of ["src", "data", "vendor", "LICENSE.md", "THIRD_PARTY_NOTICES.md", "licenses"]) {
         fs.cpSync(path.join(root, entry), path.join(temp, entry), { recursive: true });
     }
     fs.mkdirSync(path.join(temp, "scripts"));

@@ -1,7 +1,7 @@
 {
   "project": "Konata",
   "repository": "https://github.com/shioyadan/Konata",
-  "revision": "9976e3b125e28d9dcf9353f3803d13191869ddd7",
+  "revision": "e714a3c967b3499d948016afa1158575142da5ce",
   "sourceDirectory": "src/core",
   "localChanges": false,
   "files": {
@@ -10,10 +10,35 @@
     "gem5_o3_pipe_view_parser.ts": "54f0d53431f51c84c6ba61bcf6674ee1fa23bfbddad475b36a712088774d474a",
     "model.ts": "b93bb755069a3363a0a8c502a1af3ee5b56bfd08efa1c10c65ab3f0b4aae3b51",
     "onikiri_parser.ts": "bf880e7862a36336ce9811ed24cf407c695a0381375b60b6c85e9a37285fd87c",
-    "op_store.ts": "8cebe436679a32247d67998d419ba629c90bf35abb6740194849443ebb44bdd5",
-    "stage_structure_detector.ts": "2bd662ae6d88a8a23697010de9646e62e1c28c41c5a412ee1645ba111f0cef99",
-    "trace_navigator_analysis.ts": "7a5264512778a07062bc5d6a1e0bbdb1f440cb077ef3a2b57609f2116f9ccf36",
+    "op_store.ts": "49989006b5cc7a5162e52f1b2d78a6bbc960d150da198e60d883d1ca244bb283",
+    "paged_op_store.ts": "02f4690a229c76913613c9a28561d4b157257cbf4450e36f7af93b8648455f98",
+    "stage_structure_detector.ts": "78e33fcc8e81fffab6b7a1d9218d144e31613fee4108bc086c6760a21d1b8f27",
+    "trace_navigator_analysis.ts": "e87f1c70bc5be48e405b3b2da7f7a709f89fa4d203a8feeaddceac43ca30c87f",
+    "trace_parser.ts": "50d47478484dcce417849b6cad5a82dceed5fa17a9a559977de6650ba2a8da34",
     "zstd_stream.ts": "bac0aac079dfeac0d3aabd0103a5baea9949679d6536ee424eafdb4a5eba28dd",
     "zstd_stream_worker.ts": "87701a96b1464b1238b691a531e0d8cb99558e183ac317202e250f15ff05dd9e"
+  },
+  "generated": {
+    "generator": "scripts/generate-core.cjs",
+    "typescript": "5.9.3",
+    "typescriptSha256": "3ae902c92cc44dace175c0e69e13a4b0899f6983c6121d76b9ab8dd5795e7675",
+    "dependencies": {
+      "scripts/generate-core.cjs": "72bbe430a3843c600c57dad0f9f1fedc487ad1ef7140b2e3231b5a0994dfb6be",
+      "vendor/konata-core/browser.d.cts": "96c91caf414ab7e7e8773c94d78d0544630778daf51f7887b98642a3625c5db2",
+      "vendor/konata-core/file_line_reader.ts": "47f875f03217a9c58cf0be593fd8ce62beb325cf1932e8921155e3e1b3cb003c",
+      "vendor/konata-core/gem5_o3_pipe_view_parser.ts": "54f0d53431f51c84c6ba61bcf6674ee1fa23bfbddad475b36a712088774d474a",
+      "vendor/konata-core/model.ts": "b93bb755069a3363a0a8c502a1af3ee5b56bfd08efa1c10c65ab3f0b4aae3b51",
+      "vendor/konata-core/onikiri_parser.ts": "bf880e7862a36336ce9811ed24cf407c695a0381375b60b6c85e9a37285fd87c",
+      "vendor/konata-core/op_store.ts": "49989006b5cc7a5162e52f1b2d78a6bbc960d150da198e60d883d1ca244bb283",
+      "vendor/konata-core/paged_op_store.ts": "02f4690a229c76913613c9a28561d4b157257cbf4450e36f7af93b8648455f98",
+      "vendor/konata-core/stage_structure_detector.ts": "78e33fcc8e81fffab6b7a1d9218d144e31613fee4108bc086c6760a21d1b8f27",
+      "vendor/konata-core/trace_parser.ts": "50d47478484dcce417849b6cad5a82dceed5fa17a9a559977de6650ba2a8da34",
+      "vendor/konata-core/zstd_stream_worker.ts": "87701a96b1464b1238b691a531e0d8cb99558e183ac317202e250f15ff05dd9e",
+      "vendor/konata-core/zstd_stream.ts": "bac0aac079dfeac0d3aabd0103a5baea9949679d6536ee424eafdb4a5eba28dd",
+      "vendor/wasm-zstd/index.js": "3992956e0c164a0568b358e5de65bfd781b64a5a22f89b7fa1ea522f4fbe19ac"
+    },
+    "files": {
+      "browser.cjs": "cb3b351d258806a5c00e8bd81d21628f18b95b53c53a58c791fa440d798efc17"
+    }
   }
 }

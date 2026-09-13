@@ -3,7 +3,7 @@
 const fs = require("node:fs"),
     path = require("node:path");
 const { stripTypeScriptTypes } = require("node:module");
-function bundle(directory, entry) {
+function bundle(directory, entry, inputs = [directory]) {
     const files = [];
     function collect(folder) {
         for (const item of fs
@@ -11,10 +11,14 @@ function bundle(directory, entry) {
             .sort((a, b) => a.name.localeCompare(b.name, "en"))) {
             const file = path.join(folder, item.name);
             if (item.isDirectory()) collect(file);
-            else if (item.isFile() && /\.(js|cts)$/.test(item.name) && !item.name.endsWith(".d.cts")) files.push(file);
+            else if (item.isFile() && /\.(js|cjs|cts)$/.test(item.name) && !item.name.endsWith(".d.cts"))
+                files.push(file);
         }
     }
-    collect(directory);
+    for (const input of inputs) {
+        if (fs.statSync(input).isDirectory()) collect(input);
+        else files.push(input);
+    }
     const modules = files.map((file) => {
         const name = path.relative(directory, file).split(path.sep).join("/");
         const source = fs.readFileSync(file, "utf8");

@@ -10,6 +10,7 @@ const { createActivity, wakeFlightCycles } = activityModel;
 import rendering = require("./renderer.cts");
 const { createGpu, createRenderer } = rendering;
 import cameraModel = require("./camera.cts");
+import createTraceImport = require("./trace-import.cts");
 const { createCamera } = cameraModel;
 type CameraMode = cameraModel.Mode;
 interface Session {
@@ -178,9 +179,31 @@ function start(gl: WebGL2RenderingContext) {
         renderer.buildMaterialShadow();
     }
     function loadTrace(key: string) {
+        if (key === "local-file") return;
+        fileImport.close();
         replaySource.loadTrace(key);
         applyTrace();
     }
+    const fileImport = createTraceImport({
+        reset: () => {
+            loadTrace("rename-rush");
+            render();
+            updateUI();
+        },
+        pause: () => setPlaying(false),
+        apply: (trace) => {
+            replaySource.loadData(trace);
+            let option = $("trace-select").querySelector<HTMLOptionElement>('option[value="local-file"]');
+            if (!option) {
+                option = new Option(trace.label, "local-file");
+                $("trace-select").append(option);
+            }
+            option.textContent = trace.label;
+            applyTrace();
+            render();
+            updateUI();
+        }
+    });
     function applyTrace() {
         $("trace-select").value = replay.trace.key;
         session.selectedID = null;
@@ -686,7 +709,11 @@ function start(gl: WebGL2RenderingContext) {
                           ? "SQUASHED"
                           : "COMMITTED"
                       : scene.nodes.get(stage?.node!)?.label || "IN FLIGHT";
-            $("op-state").textContent = selected ? "Pinned instruction" : "Click an instruction to pin";
+            $("op-state").textContent = op.unfinished
+                ? "Outcome not recorded · incomplete trace"
+                : selected
+                  ? "Pinned instruction"
+                  : "Click an instruction to pin";
             $("spotlight").style.borderLeftColor = rgb(
                 op.flush && session.cycle >= op.end
                     ? session.style.palette.red
@@ -696,7 +723,7 @@ function start(gl: WebGL2RenderingContext) {
                 ...op.stages.map((s, i) => {
                     const el = document.createElement("i");
                     el.className = i === stageIndex ? "current" : session.cycle >= s.end ? "done" : "";
-                    el.title = `${s.names.join(" / ")}: ${s.start}–${s.end}`;
+                    el.title = `${s.names.join(" / ")}: ${s.start}–${Number.isFinite(s.end) ? s.end : "unobserved"}`;
                     return el;
                 })
             );
@@ -723,7 +750,11 @@ function start(gl: WebGL2RenderingContext) {
         $("run-configuration").textContent = provenance.configuration;
         $("run-note").textContent = provenance.note;
         $("matrix-source").textContent =
-            replay.trace.evidence?.scheduling.kind === "recorded" ? "MATRIX · RECORDED DEPS" : "MATRIX · RAW ESTIMATE";
+            replay.trace.evidence?.scheduling.kind === "recorded"
+                ? "MATRIX · RECORDED DEPS"
+                : replay.trace.key === "local-file"
+                  ? "MATRIX · UNOBSERVED"
+                  : "MATRIX · RAW ESTIMATE";
         $("matrix-source").title =
             `${replay.trace.evidence?.scheduling.label ?? "Dependency information unavailable"}. Rows and columns are the same scheduler entries. Dependencies on issued instructions remain on the external wake-up bus. Cell colors follow the consumer row; brightness marks dependency release. Register map / values: ${replay.trace.evidence?.registers ? "recorded RSD annotations" : "not recorded in this trace"}.`;
         $("run-file").textContent = replay.trace.fileName;
@@ -1040,6 +1071,9 @@ function start(gl: WebGL2RenderingContext) {
             setCycle: clock.setCycle,
             setPlaying: clock.setPlaying,
             loadTrace,
+            get fileImport() {
+                return { source: fileImport.source, busy: fileImport.busy };
+            },
             setCamera: camera.setCamera,
             captureAt(t: number) {
                 clock.setPlaying(false);

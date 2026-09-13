@@ -464,6 +464,60 @@ main {
     letter-spacing: 1.3px;
 }
 
+.trace-import {
+    margin: 10px 0;
+    font-size: 11px;
+    color: var(--muted);
+}
+.trace-import .quiet-button {
+    min-height: 36px;
+    padding: 6px 10px;
+    border: 1px solid currentColor;
+    border-radius: 5px;
+}
+.file-hint {
+    display: block;
+    margin-top: 6px;
+}
+.trace-import p {
+    overflow-wrap: anywhere;
+    line-height: 1.5;
+}
+.trace-import progress,
+#file-overview {
+    width: 100%;
+    accent-color: var(--cyan);
+}
+.file-window-row {
+    display: flex;
+    align-items: end;
+    gap: 6px;
+    margin: 8px 0;
+}
+.file-window-row label {
+    flex: 1;
+    min-width: 0;
+}
+.trace-import input[type="number"],
+.trace-import select {
+    width: 100%;
+    min-width: 0;
+    min-height: 36px;
+    margin-top: 4px;
+    padding: 4px;
+    background: var(--panel);
+    color: inherit;
+    border: 1px solid currentColor;
+    border-radius: 4px;
+}
+@media (max-width: 760px) {
+    .trace-import :is(button, input[type="number"], select) {
+        min-height: 44px;
+    }
+    .trace-import button {
+        min-width: 44px;
+    }
+}
 .select-wrap {
     margin-top: 8px;
 }

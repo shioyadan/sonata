@@ -1,11 +1,14 @@
 # ソースの構造
 
-編集用の `src/` は TypeScript 9個、CSS 3個、HTML 1個の計13ファイルです。配布時には `dist/sonata.html` 一つへ結合します。画面の配置・記録値・再生時刻と、外観の材質・照明・合成を分けることで、Neon / Aluminum / Paper を同じ再生内容で比較できます。
+編集用の `src/` は TypeScript 13個、CSS 3個、HTML 1個の計17ファイルです。配布時には `dist/sonata.html` 一つへ結合します。画面の配置・記録値・再生時刻と、外観の材質・照明・合成を分けることで、Neon / Aluminum / Paper を同じ再生内容で比較できます。
 
 ## 境界と編集先
 
 | ファイル | 責務 |
 | --- | --- |
+| `src/trace-import.cts` / `src/trace-worker.cts` | File操作とWorkerの入口 |
+| `src/trace-file.cts` | Konata解析・圧縮store・全体索引と寿命 |
+| `src/trace-window.cts` | 選択区間を観測値に沿って再生データへ変換 |
 | `src/sonata.cts` | 起動、再生時計、共通操作、DOM 表示、検証用 API |
 | `src/camera.cts` | カメラの状態・補間・投影、マウスとタッチの操作 |
 | `src/replay-model.cts` | デモの準備、記録時刻に対応する FIFO・依存・レジスタ・Top-down の状態 |
@@ -71,3 +74,5 @@ GPU の描画先は初期化前には `null` です。残る非 null assertion �
 - `npm run test:render`: 全5デモ、3スタイル、選択・接地・滑走・影、キーボード・タッチ、モバイル復帰、WebGL の障害と復旧。
 
 構造の変更でも、診断値だけで描画の同一性を判断しません。比較時は同じ時刻・カメラ・演出用時計を与え、canvas の画素も照合します。通常再生と実入力は既存の描画検査で別に確認します。検証環境と実行手順は [開発ガイド](development.md) を参照してください。
+
+任意トレースは全体をWorkerのKonata storeへ保持し、選択区間だけを描画へ渡します。未観測値、圧縮、生成済みCoreの扱いは[ローカルトレースの読込み](trace-import.md)を参照してください。

@@ -1,0 +1,30 @@
+{
+  "package": "@hpcc-js/wasm-zstd",
+  "version": "1.15.0",
+  "repository": "https://github.com/hpcc-systems/hpcc-js-wasm",
+  "revision": "1d7a3567f6c3b8129abc5f8bfbe06b45269487fa",
+  "npmIntegrity": "sha512-WjcnbecP+iWNzg/njGoUmQ64DNyadGuEnpNy3a151xqasIHThzZMNuGO2xk3vMwyQ3iYbDU7Z29ntXj4aPolQg==",
+  "sourceFile": "dist/index.js",
+  "localChanges": false,
+  "embedded": [
+    {
+      "project": "fzstd",
+      "version": "0.1.1",
+      "license": "MIT",
+      "file": "FZSTD-LICENSE.txt"
+    },
+    {
+      "project": "Zstandard",
+      "version": "1.5.7",
+      "license": "BSD-3-Clause",
+      "file": "ZSTD-LICENSE.txt"
+    }
+  ],
+  "files": {
+    "index.js": "3992956e0c164a0568b358e5de65bfd781b64a5a22f89b7fa1ea522f4fbe19ac",
+    "LICENSE": "1eb85fc97224598dad1852b5d6483bbcf0aa8608790dcc657a5a2a761ae9c8c6",
+    "FZSTD-LICENSE.txt": "09edb7d111972cbb9e4c633627d8f7ced76c5a0b88941238def940d930d2d336",
+    "ZSTD-LICENSE.txt": "7055266497633c9025b777c78eb7235af13922117480ed5c674677adc381c9d8"
+  },
+  "embeddedLicenseSource": "https://github.com/shioyadan/Konata/blob/e714a3c967b3499d948016afa1158575142da5ce/THIRD_PARTY_LICENSES.md"
+}

@@ -76,9 +76,25 @@ app.whenReady()
             const smoke = await review("smoke", () =>
                 require("./load-test.cjs")("check-smoke.cts")(window, screenshots, begin)
             );
+            const imports = await review("import", () =>
+                require("./load-test.cjs")("check-import.cts")(window, screenshots)
+            );
             assert.deepEqual(errors, []);
             assert.deepEqual(unexpectedRequests, []);
-            console.log(JSON.stringify({ smoke, timings, errors, externalRequests: unexpectedRequests }, null, 2));
+            console.log(
+                JSON.stringify({ smoke, imports, timings, errors, externalRequests: unexpectedRequests }, null, 2)
+            );
+            fs.rmSync(isolated, { recursive: true, force: true });
+            app.quit();
+            return;
+        }
+        if (process.argv.includes("--import")) {
+            const imports = await review("import", () =>
+                require("./load-test.cjs")("check-import.cts")(window, screenshots)
+            );
+            assert.deepEqual(errors, []);
+            assert.deepEqual(unexpectedRequests, []);
+            console.log(JSON.stringify({ imports, timings, errors, externalRequests: unexpectedRequests }, null, 2));
             fs.rmSync(isolated, { recursive: true, force: true });
             app.quit();
             return;
@@ -96,9 +112,14 @@ app.whenReady()
             const browser = await review("browser", () =>
                 require("./load-test.cjs")("check-browser.cts")(window, entry, screenshots)
             );
+            const imports = await review("import", () =>
+                require("./load-test.cjs")("check-import.cts")(window, screenshots)
+            );
             assert.deepEqual(errors, []);
             assert.deepEqual(unexpectedRequests, []);
-            console.log(JSON.stringify({ browser, timings, errors, externalRequests: unexpectedRequests }, null, 2));
+            console.log(
+                JSON.stringify({ browser, imports, timings, errors, externalRequests: unexpectedRequests }, null, 2)
+            );
             fs.rmSync(isolated, { recursive: true, force: true });
             app.quit();
             return;
@@ -1060,12 +1081,16 @@ app.whenReady()
         );
         const styles = await review("styles", () => require("./check-styles.cjs")(window, entry, screenshots));
         const memory = await review("memory", () => require("./check-memory-render.cjs")(window, screenshots));
+        const imports = await review("import", () =>
+            require("./load-test.cjs")("check-import.cts")(window, screenshots)
+        );
         assert.deepEqual(errors, [], `Browser errors: ${errors.join("; ")}`);
         assert.deepEqual(unexpectedRequests, [], "The copied HTML tried to fetch another resource");
         console.log(
             JSON.stringify(
                 {
                     samples: results,
+                    imports,
                     controls,
                     rewind,
                     unravel,

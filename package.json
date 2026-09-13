@@ -15,7 +15,7 @@
   "scripts": {
     "build": "node scripts/build.cjs",
     "start": "node scripts/serve.cjs",
-    "test": "node --experimental-transform-types scripts/check-memory.cjs && node --import tsx scripts/check-store-evidence.cjs && node --experimental-transform-types scripts/check-model.cjs && node --experimental-transform-types scripts/check-piece-grounding.cjs && node --experimental-transform-types scripts/check-scene.cjs && node scripts/check-bundle.cjs && node scripts/check-browser-test.cjs && node scripts/check-build.cjs",
+    "test": "node --experimental-transform-types scripts/check-memory.cjs && node --import tsx scripts/check-store-evidence.cjs && node --experimental-transform-types scripts/check-model.cjs && node --experimental-transform-types scripts/check-piece-grounding.cjs && node --experimental-transform-types scripts/check-scene.cjs && node scripts/check-bundle.cjs && node scripts/check-browser-test.cjs && node scripts/check-build.cjs && node scripts/check-core.cjs && node --experimental-transform-types scripts/check-trace-file.cjs && node --experimental-transform-types scripts/check-trace-window.cjs",
     "test:server": "node scripts/check-server.cjs",
     "test:render": "electron --no-sandbox scripts/render.cjs",
     "test:smoke": "electron --no-sandbox scripts/render.cjs --smoke",
@@ -27,7 +27,9 @@
     "demos:select": "node --import tsx scripts/select-traces.ts",
     "typecheck": "tsc --noEmit",
     "format": "prettier --write src scripts",
-    "format:check": "prettier --check src scripts"
+    "format:check": "prettier --check src scripts",
+    "test:import": "electron --no-sandbox scripts/render.cjs --import",
+    "core:generate": "node scripts/generate-core.cjs"
   },
   "devDependencies": {
     "@hpcc-js/wasm-zstd": "1.15.0",

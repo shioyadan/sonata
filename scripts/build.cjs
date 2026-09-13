@@ -47,7 +47,11 @@ function build() {
         "THIRD_PARTY_NOTICES.md",
         "licenses/COREMARK-LICENSE.md",
         "licenses/RSD-LICENSE.txt",
-        "licenses/RSD-CREDITS.md"
+        "licenses/RSD-CREDITS.md",
+        "vendor/konata-core/LICENSE.md",
+        "vendor/wasm-zstd/LICENSE",
+        "vendor/wasm-zstd/FZSTD-LICENSE.txt",
+        "vendor/wasm-zstd/ZSTD-LICENSE.txt"
     ];
     const notices = noticeFiles.map((file) => `${file}\n${"=".repeat(file.length)}\n${read(file).trim()}`).join("\n\n");
     const noticeMarker = "<!-- SONATA_LICENSE_NOTICES -->";
@@ -57,9 +61,30 @@ function build() {
         const css = read(`src/${url}`).replace(/<\/style/gi, "<\\/style");
         return `<style>\n${css}\n</style>`;
     });
+    const workerFiles = [
+        "trace-worker.cts",
+        "trace-file.cts",
+        "trace-window.cts",
+        "memory.cts",
+        "replay-model.cts",
+        "geometry.cts"
+    ];
+    const worker = bundle(root, "src/trace-worker.cts", [
+        ...workerFiles.map((file) => path.join(root, "src", file)),
+        path.join(root, "vendor/konata-core/browser.cjs")
+    ]);
+    const uiFiles = fs
+        .readdirSync(path.join(root, "src"))
+        .filter((file) => file.endsWith(".cts") && !workerFiles.slice(0, 3).includes(file))
+        .sort()
+        .map((file) => path.join(root, "src", file));
     const scripts = [
-        ["../data/traces.js", formatTraceScript(read("data/traces.js"))],
-        ["sonata.cts", bundle(path.join(root, "src"), "sonata.cts")]
+        [
+            "../data/traces.js",
+            formatTraceScript(read("data/traces.js")) +
+                `globalThis.sonataTraceWorkerSource=${JSON.stringify(worker)};\n`
+        ],
+        ["sonata.cts", bundle(root, "src/sonata.cts", uiFiles)]
     ];
     for (const [url, source] of scripts) {
         const tag = `<script src="${url}"></script>`;

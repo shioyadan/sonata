@@ -501,7 +501,7 @@ function createScene({ gpu, replay, session }: SceneOptions) {
             hasRegisters ? 3.2 : 3.6,
             0.65,
             session.style.palette.blue,
-            `${replay.trace.structure.queueCapacity} ROWS × ${replay.dependencyReplay.columnCount} COLS · ${replay.trace.evidence?.scheduling.kind === "recorded" ? "RECORDED" : "RAW ESTIMATE"}`
+            `${replay.trace.structure.queueCapacity} ROWS × ${replay.dependencyReplay.columnCount} COLS · ${replay.trace.evidence?.scheduling.kind === "recorded" ? "RECORDED" : replay.trace.key === "local-file" ? "UNOBSERVED" : "RAW ESTIMATE"}`
         );
         // 駒を縮めずに置けるよう、待機列の行間と筐体の奥行きを確保する。
         scheduler.matrixDepth = Math.max(scheduler.w * 0.68, replay.trace.structure.queueCapacity * 0.14);

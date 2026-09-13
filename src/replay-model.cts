@@ -23,6 +23,7 @@ interface Instruction {
     fetch: number;
     end: number;
     flush: boolean;
+    unfinished?: boolean;
     label: string;
     stages: StageRange[];
     allocation: number | null;
@@ -53,7 +54,8 @@ type CompactOperation = [
     issue: number | null,
     completion: number | null,
     execution: string,
-    flushCycle?: number | null
+    flushCycle?: number | null,
+    unfinished?: boolean
 ];
 type Dependency = { id: number; ready: number | null; register?: string };
 interface SchedulingEvidence {
@@ -201,7 +203,8 @@ function createRobReplay<T extends RobOperation>(ops: readonly T[], capacity: nu
     for (const op of ops) {
         if (op.allocation == null || op.allocation >= op.end) continue;
         at(op.allocation).allocate.push(op);
-        at(op.end);
+        // EOF の未完了命令は終了イベントを持たず、有限の再生時刻で占有を保つ。
+        if (Number.isFinite(op.end)) at(op.end);
     }
     let head = 0,
         tail = 0;
@@ -719,6 +722,13 @@ function createRegisterReplay(input: RegisterEvidence | null | undefined) {
 // 未読込みの管理部分から、描画に渡せる準備済みの状態を作る。
 function createReplay({ samples }: { samples: readonly TraceData[] }) {
     let current: ReplayState | null = null;
+    function loadData(trace: TraceData): ReplayState {
+        const prepared = prepareTrace(trace);
+        // 利用側が持つ参照を保ち、準備中や失敗時の状態を公開しない。
+        if (current) Object.assign(current, prepared);
+        else current = prepared;
+        return current;
+    }
     return {
         get current() {
             return current;
@@ -726,12 +736,9 @@ function createReplay({ samples }: { samples: readonly TraceData[] }) {
         loadTrace(key: string): ReplayState {
             const trace = samples.find((sample) => sample.key === key) ?? samples[0];
             if (!trace) throw new Error("No traces available");
-            const prepared = prepareTrace(trace);
-            // 利用側が持つ参照を保ち、準備中や失敗時の状態を公開しない。
-            if (current) Object.assign(current, prepared);
-            else current = prepared;
-            return current;
-        }
+            return loadData(trace);
+        },
+        loadData
     };
 }
 
@@ -770,8 +777,23 @@ function prepareTrace(trace: TraceData): ReplayState {
     }
 
     const ops: Instruction[] = trace.ops.map((t, index) => {
-        const [id, rid, fetch, retired, flush, label, source, allocation, issue, completion, execution, flushCycle] = t;
-        const end = flush ? (flushCycle ?? retired) : retired;
+        const [
+            id,
+            rid,
+            fetch,
+            retired,
+            flush,
+            label,
+            source,
+            allocation,
+            issue,
+            completion,
+            execution,
+            flushCycle,
+            unfinished
+        ] = t;
+        // 未完了の末尾は退場させず、最後に観測した段階へ保持する。
+        const end = unfinished ? Infinity : flush ? (flushCycle ?? retired) : retired;
         const type = memoryModel.instructionType(label);
         const kind = type === "integer" || type === "branch" ? type : "memory";
         const displayExecution = type === "atomic" ? "exec-memory" : `exec-${type}`;
@@ -794,6 +816,7 @@ function prepareTrace(trace: TraceData): ReplayState {
             fetch,
             end,
             flush: !!flush,
+            ...(unfinished ? { unfinished: true } : {}),
             label,
             stages,
             allocation,
@@ -822,7 +845,9 @@ function prepareTrace(trace: TraceData): ReplayState {
     const memory = memoryModel.prepareMemory(ops, trace);
     allocateRenameSlots();
     const commitGroups = new Map();
-    for (const op of ops.filter((o) => !o.flush).sort((a, b) => a.end - b.end || a.rid - b.rid || a.id - b.id)) {
+    for (const op of ops
+        .filter((o) => !o.flush && !o.unfinished)
+        .sort((a, b) => a.end - b.end || a.rid - b.rid || a.id - b.id)) {
         const time = Math.floor(op.end),
             group = commitGroups.get(time) ?? [];
         op.commitSlot = group.length;
