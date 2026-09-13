@@ -144,35 +144,31 @@
                         hidden
                     ></progress>
                     <button id="import-cancel" class="quiet-button" hidden>Cancel</button>
-                    <section id="file-window" aria-label="Trace file navigation" hidden>
-                        <p id="file-summary"></p>
-                        <p id="file-partial" hidden>
-                            Reading in background. This partial view may gain more instructions.
-                        </p>
-                        <label class="field-label" for="file-overview">TRACE RANGE</label>
-                        <input id="file-overview" type="range" step="1" />
-                        <div class="file-window-row">
-                            <label for="file-cycle">Start cycle<input id="file-cycle" type="number" step="1" /></label>
-                            <label for="file-span"
-                                >Window<select id="file-span">
-                                    <option value="16">16 cycles</option>
-                                    <option value="32">32 cycles</option>
-                                    <option value="128" selected>128 cycles</option>
-                                    <option value="512">512 cycles</option>
-                                </select></label
-                            >
-                            <button id="file-go" class="quiet-button">Go</button>
+                    <section id="file-tools" aria-label="Trace exploration" hidden>
+                        <label class="field-label" for="file-search-kind">FIND IN TRACE</label>
+                        <select id="file-search-kind">
+                            <option value="text">PC / instruction text</option>
+                            <option value="id">Instruction ID</option>
+                            <option value="flush">Squashed instructions</option>
+                            <option value="long">Lifetime ≥ cycles</option>
+                        </select>
+                        <div class="file-search-row">
+                            <input
+                                id="file-search-query"
+                                type="text"
+                                aria-label="Search trace"
+                                placeholder="PC or instruction text"
+                            />
+                            <button id="file-search" class="quiet-button">Find</button>
                         </div>
-                        <label id="file-thread-field" for="file-thread" hidden
-                            >Thread<select id="file-thread"></select
-                        ></label>
-                        <div class="file-window-row">
-                            <button id="file-previous" class="quiet-button" aria-label="Previous cycle window">
-                                ← Previous
-                            </button>
-                            <button id="file-next" class="quiet-button" aria-label="Next cycle window">Next →</button>
-                            <button id="file-close" class="quiet-button">Close file</button>
+                        <p id="file-search-status" role="status"></p>
+                        <div id="file-search-results" class="file-result-list" aria-label="Search results"></div>
+                        <button id="file-search-more" class="quiet-button" hidden>Find more</button>
+                        <div class="file-bookmark-heading">
+                            <span class="field-label">BOOKMARKS</span>
+                            <span>Current file</span>
                         </div>
+                        <div id="file-bookmarks" class="file-result-list" aria-label="Trace bookmarks"></div>
                     </section>
                 </div>
                 <div class="trace-meta" id="trace-meta">
@@ -261,6 +257,111 @@
         </main>
 
         <footer class="transport">
+            <section id="file-window" aria-label="Trace file navigation" hidden>
+                <div class="file-overview-heading">
+                    <label class="field-label" for="file-overview">PARSED TRACE</label>
+                    <span class="file-overview-key" aria-label="Activity across all threads">
+                        <span class="file-fetched">Fetched</span>
+                        <span class="file-committed">Committed</span>
+                        <span
+                            class="file-squashed"
+                            title="Squashed instructions. gem5 places these at the last recorded stage, not an observed squash time."
+                            >Squashed</span
+                        >
+                        <span>All threads</span>
+                    </span>
+                    <output id="file-position" aria-label="Visible cycle window"></output>
+                </div>
+                <div id="file-overview-wrap">
+                    <canvas id="file-activity" aria-hidden="true"></canvas>
+                    <div id="file-viewport" aria-hidden="true"></div>
+                    <input id="file-overview" type="range" step="1" aria-describedby="file-read-state" />
+                </div>
+                <div class="file-navigation">
+                    <div class="file-window-buttons" aria-label="Move cycle window">
+                        <button
+                            id="file-previous"
+                            class="quiet-button"
+                            aria-label="Previous cycle window"
+                            title="Previous cycle window"
+                        >
+                            ← <span>Previous</span>
+                        </button>
+                        <button
+                            id="file-next"
+                            class="quiet-button"
+                            aria-label="Next cycle window"
+                            title="Next cycle window"
+                        >
+                            <span>Next</span> →
+                        </button>
+                    </div>
+                    <div class="file-window-buttons" aria-label="Time scale">
+                        <button
+                            id="file-zoom-out"
+                            class="quiet-button"
+                            aria-label="Zoom out time axis"
+                            title="Show more cycles"
+                        >
+                            −
+                        </button>
+                        <button
+                            id="file-zoom-in"
+                            class="quiet-button"
+                            aria-label="Zoom in time axis"
+                            title="Show fewer cycles"
+                        >
+                            +
+                        </button>
+                    </div>
+                    <span class="file-navigation-hint">Detail: scroll to zoom · Shift-drag to pan</span>
+                    <details class="file-navigation-options">
+                        <summary>Navigate</summary>
+                        <div class="file-navigation-panel">
+                            <div class="file-window-row">
+                                <label for="file-cycle"
+                                    >Start cycle<input id="file-cycle" type="number" step="1"
+                                /></label>
+                                <label for="file-span"
+                                    >Window<select id="file-span">
+                                        <option value="16">16 cycles</option>
+                                        <option value="32">32 cycles</option>
+                                        <option value="64">64 cycles</option>
+                                        <option value="128" selected>128 cycles</option>
+                                        <option value="256">256 cycles</option>
+                                        <option value="512">512 cycles</option>
+                                    </select></label
+                                >
+                                <button id="file-go" class="quiet-button">Go</button>
+                            </div>
+                            <label id="file-thread-field" for="file-thread" hidden
+                                >Thread<select id="file-thread"></select
+                            ></label>
+                            <div class="file-window-row file-history">
+                                <button id="file-back" class="quiet-button" aria-label="Back to previous view">
+                                    Back
+                                </button>
+                                <button id="file-forward" class="quiet-button" aria-label="Forward to next view">
+                                    Forward
+                                </button>
+                                <button id="file-bookmark" class="quiet-button">Bookmark</button>
+                            </div>
+                            <label class="file-loop-label" for="file-loop"
+                                ><input id="file-loop" type="checkbox" />Loop window</label
+                            >
+                            <p id="file-summary"></p>
+                            <p id="file-partial" hidden>
+                                Reading in background. This partial view may gain more instructions.
+                            </p>
+                            <p id="file-read-state">
+                                The overview covers parsed cycles. Unread cycles are not yet known.
+                            </p>
+                            <button id="file-close" class="quiet-button">Close file</button>
+                        </div>
+                    </details>
+                </div>
+                <p id="file-window-status" role="status" hidden></p>
+            </section>
             <div class="transport-top">
                 <div class="playback">
                     <button class="transport-button" id="reset" title="Restart trace" aria-label="Restart trace">
@@ -289,7 +390,7 @@
                 </div>
                 <button class="flush-button" id="next-flush"><span>↯</span> Jump to flush <span>→</span></button>
             </div>
-            <div class="timeline-wrap">
+            <div class="timeline-wrap" id="detail-timeline">
                 <canvas id="activity" aria-hidden="true"></canvas>
                 <div id="event-markers"></div>
                 <div id="playhead"></div>

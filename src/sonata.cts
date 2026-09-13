@@ -80,6 +80,7 @@ function start(gl: WebGL2RenderingContext) {
         animationID: null as number | null
     };
     function setPlaying(value: boolean) {
+        if (!value) fileImport.cancelContinuation();
         session.playing = value;
         $("play").textContent = session.playing ? "Ⅱ" : "▶";
         $("play").setAttribute("aria-label", session.playing ? "Pause" : "Play");
@@ -100,7 +101,8 @@ function start(gl: WebGL2RenderingContext) {
 
     function step(delta: number) {
         setPlaying(false);
-        setCycle(Math.floor(session.cycle) + delta);
+        const value = Math.floor(session.cycle) + delta;
+        if (!fileImport.seek(value)) setCycle(value);
     }
 
     function nextFlush() {
@@ -127,7 +129,8 @@ function start(gl: WebGL2RenderingContext) {
                     cycles: next - session.cycle,
                     rate: dt > 0 ? (next - session.cycle) / (dt * session.speed) : 1
                 };
-                session.cycle = next > replay.trace.lastCycle ? replay.trace.firstCycle : next;
+                session.cycle =
+                    fileImport.advance(next) ?? (next > replay.trace.lastCycle ? replay.trace.firstCycle : next);
             }
             render(dt);
             if (now >= clock.nextUI) {
@@ -167,6 +170,31 @@ function start(gl: WebGL2RenderingContext) {
     const activity = createActivity({ camera, clock, scene, gpu, paths, replay, session });
     const { stream, topDown } = activity;
     const renderer = createRenderer({ activity, camera, clock, gpu, session });
+    const fileLayouts = new Map<string, Pick<sonataReplay.Trace, "structure" | "fetchWidth" | "retireWidth">>();
+
+    function retainFileLayout(trace: sonataReplay.Trace, thread: number) {
+        const structure = trace.structure;
+        // 同じ前段構成では観測済みの表示容量を縮めない。実機の容量とは区別する。
+        const key = JSON.stringify([thread, structure.frontNodes, structure.registerRead]);
+        const previous = fileLayouts.get(key);
+        if (previous) {
+            structure.queueCapacity = Math.max(structure.queueCapacity, previous.structure.queueCapacity);
+            structure.robCapacity = Math.max(structure.robCapacity, previous.structure.robCapacity);
+            structure.allocationWidth = Math.max(structure.allocationWidth, previous.structure.allocationWidth);
+            trace.fetchWidth = Math.max(trace.fetchWidth, previous.fetchWidth);
+            trace.retireWidth = Math.max(trace.retireWidth, previous.retireWidth);
+            for (const node of previous.structure.executionNodes) {
+                const current = structure.executionNodes.find((item) => item.id === node.id);
+                if (current) current.pipeCount = Math.max(current.pipeCount, node.pipeCount);
+                else structure.executionNodes.push(structuredClone(node));
+            }
+        }
+        if (fileLayouts.size >= 32 && !fileLayouts.has(key)) fileLayouts.delete(fileLayouts.keys().next().value!);
+        fileLayouts.set(
+            key,
+            structuredClone({ structure, fetchWidth: trace.fetchWidth, retireWidth: trace.retireWidth })
+        );
+    }
 
     function render(dt = 0) {
         if (gpu.contextLost) return;
@@ -181,6 +209,7 @@ function start(gl: WebGL2RenderingContext) {
     function loadTrace(key: string) {
         if (key === "local-file") return;
         fileImport.close();
+        fileLayouts.clear();
         replaySource.loadTrace(key);
         applyTrace();
     }
@@ -191,9 +220,9 @@ function start(gl: WebGL2RenderingContext) {
             updateUI();
         },
         pause: () => setPlaying(false),
-        apply: (trace, preservePosition) => {
-            const position = session.cycle;
-            const selected = session.selectedID;
+        read: () => ({ cycle: session.cycle, selectedID: session.selectedID }),
+        apply: (trace, position) => {
+            retainFileLayout(trace, position.thread);
             replaySource.loadData(trace);
             let option = $("trace-select").querySelector<HTMLOptionElement>('option[value="local-file"]');
             if (!option) {
@@ -202,10 +231,8 @@ function start(gl: WebGL2RenderingContext) {
             }
             option.textContent = trace.label;
             applyTrace();
-            if (preservePosition) {
-                session.cycle = clamp(position, trace.firstCycle, trace.lastCycle);
-                session.selectedID = replay.ops.some((op) => op.id === selected) ? selected : null;
-            }
+            session.cycle = clamp(position.cycle, trace.firstCycle, trace.lastCycle);
+            session.selectedID = replay.ops.some((op) => op.id === position.selectedID) ? position.selectedID : null;
             render();
             updateUI();
         }
@@ -265,10 +292,12 @@ function start(gl: WebGL2RenderingContext) {
     $("next").addEventListener("click", () => step(1));
     $("reset").addEventListener("click", () => {
         session.selectedID = null;
-        setCycle(replay.trace.firstCycle);
+        if (fileImport.source) fileImport.selectWindow(fileImport.source.firstCycle);
+        else setCycle(replay.trace.firstCycle);
     });
     $("timeline").addEventListener("input", () => {
         setPlaying(false);
+        fileImport.interact();
         setCycle(Number($("timeline").value));
     });
     $("speed").addEventListener("change", () => {
@@ -341,6 +370,7 @@ function start(gl: WebGL2RenderingContext) {
             event.target instanceof HTMLSelectElement ||
             event.target instanceof HTMLButtonElement ||
             event.target instanceof HTMLAnchorElement ||
+            (event.target instanceof Element && Boolean(event.target.closest("summary,[contenteditable]"))) ||
             event.ctrlKey ||
             event.metaKey ||
             event.altKey
@@ -610,6 +640,7 @@ function start(gl: WebGL2RenderingContext) {
     }
 
     function updateUI() {
+        fileImport.tick(session.cycle);
         const integer = Math.floor(session.cycle),
             fraction = Math.floor((session.cycle - integer) * 100 + 1e-6);
         $("cycle-value").replaceChildren(
@@ -1100,7 +1131,10 @@ function start(gl: WebGL2RenderingContext) {
                     source: fileImport.source,
                     busy: fileImport.busy,
                     loading: fileImport.loading,
-                    selecting: fileImport.selecting
+                    selecting: fileImport.selecting,
+                    searching: fileImport.searching,
+                    view: fileImport.view,
+                    prefetched: fileImport.prefetched
                 };
             },
             setCamera: camera.setCamera,

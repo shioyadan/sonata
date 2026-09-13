@@ -15,6 +15,7 @@
     "scripts/check-browser.cts",
     "scripts/check-smoke.cts",
     "scripts/check-import.cts",
+    "scripts/check-navigation.cts",
     "scripts/browser-test.cts"
   ]
 }

@@ -3,37 +3,65 @@ import files = require("./trace-file.cts");
 // 途中の命令を反復転送せず、圧縮storeも区間変換もこのWorkerが所有する。
 const send = (response: files.WorkerResponse) => globalThis.postMessage(response);
 const session = files.createFileSession(send);
-let pendingWindows = Promise.resolve();
+type WindowRequest = Extract<files.WorkerRequest, { type: "window" }>;
+let pendingWindow: WindowRequest | null = null;
+let runningWindow = false;
 let closed = false;
+
+async function run(request: Extract<files.WorkerRequest, { type: "open" | "window" | "search" }>) {
+    if (closed) return;
+    try {
+        if (request.type === "open") await session.open(request.file);
+        else if (request.type === "window") await session.window(request);
+        else if (request.type === "search") await session.search(request);
+    } catch (error) {
+        if (closed) return;
+        if (error instanceof Error && error.name === "AbortError") return;
+        if (request.type === "open") {
+            closed = true;
+            pendingWindow = null;
+            session.close();
+        }
+        send({
+            type: "error",
+            request: request.type === "window" || request.type === "search" ? request.request : undefined,
+            operation: request.type === "window" || request.type === "search" ? request.type : undefined,
+            message: error instanceof Error ? error.message : String(error)
+        });
+    }
+}
+async function drainWindows() {
+    if (runningWindow || closed) return;
+    runningWindow = true;
+    try {
+        while (pendingWindow && !closed) {
+            const request = pendingWindow;
+            pendingWindow = null;
+            await run(request);
+        }
+    } finally {
+        runningWindow = false;
+    }
+}
 globalThis.onmessage = (event: MessageEvent<files.WorkerRequest>) => {
     const request = event.data;
     if (request.type === "close") {
         closed = true;
+        pendingWindow = null;
         session.close();
         send({ type: "closed" });
         return;
     }
     if (closed) return;
-    async function run() {
-        if (closed) return;
-        try {
-            if (request.type === "open") await session.open(request.file);
-            else if (request.type === "window") await session.window(request);
-        } catch (error) {
-            if (closed) return;
-            if (error instanceof Error && error.name === "AbortError") return;
-            if (request.type === "open") {
-                closed = true;
-                session.close();
-            }
-            send({
-                type: "error",
-                request: request.type === "window" ? request.request : undefined,
-                message: error instanceof Error ? error.message : String(error)
-            });
-        }
+    if (request.type === "cancel-search") {
+        session.cancelSearch();
+        return;
     }
-    // 入力のEOFを待たずに区間要求を処理する。区間同士だけは直列に保つ。
-    if (request.type === "open") void run();
-    else pendingWindows = pendingWindows.then(run);
+    // 入力のEOFを待たずに検索・区間要求を処理する。区間の実行は一つずつ、
+    // 未実行の区間は最新一つだけ保持し、低速なscanの後ろに古い移動を積まない。
+    if (request.type === "open" || request.type === "search") void run(request);
+    else {
+        pendingWindow = request;
+        void drainWindows();
+    }
 };

@@ -7,6 +7,7 @@ import zlib = require("node:zlib");
 import type { BrowserWindow } from "electron";
 import type browserTest = require("./browser-test.cts");
 const { createBrowserTest, waitFor: waitUntil } = require("./load-test.cjs")("browser-test.cts") as typeof browserTest;
+const reviewNavigation = require("./load-test.cjs")("check-navigation.cts") as typeof import("./check-navigation.cts");
 
 // 外部の実トレースをCIへ持ち込まず、形式・圧縮・区間移動を実際のFile入力で検査する。
 function fixture(count = 320) {
@@ -69,9 +70,11 @@ async function reviewImport(window: BrowserWindow, screenshots: string) {
         const gate = `
             let releaseInput;
             let delayFirstError = false;
+            let testFileName = "";
             const inputGate = new Promise(resolve => releaseInput = resolve);
             File.prototype.stream = function () {
                 const file = this;
+                testFileName = file.name;
                 delayFirstError = file.name === "late-error.kanata";
                 let offset = 0;
                 return new ReadableStream({
@@ -88,7 +91,13 @@ async function reviewImport(window: BrowserWindow, screenshots: string) {
         const receive = `
             const sendTrace = globalThis.postMessage.bind(globalThis);
             let delayedRequest;
+            let holdFinal = false;
+            let finalWindow;
             globalThis.postMessage = data => {
+                if (data.type === "loaded" && data.source.complete && testFileName === "incremental.kanata") holdFinal = true;
+                if (holdFinal && data.type === "window") {
+                    holdFinal = false; finalWindow = data; sendTrace({type: "test-final-held"}); return;
+                }
                 if (delayFirstError && data.type === "window") {
                     delayFirstError = false;
                     delayedRequest = data.request;
@@ -104,6 +113,7 @@ async function reviewImport(window: BrowserWindow, screenshots: string) {
             const receiveTrace = globalThis.onmessage;
             globalThis.onmessage = event => {
                 if (event.data.type === "release-test-input") releaseInput();
+                else if (event.data.type === "release-test-window") { sendTrace(finalWindow); finalWindow = null; }
                 else receiveTrace(event);
             };
         `;
@@ -112,15 +122,18 @@ async function reviewImport(window: BrowserWindow, screenshots: string) {
                 const context = globalThis as typeof globalThis & {
                     importTestWorker?: Worker;
                     importTestHeld?: boolean;
+                    importTestFinalHeld?: boolean;
                 };
                 const NativeWorker = Worker;
                 context.importTestHeld = false;
+                context.importTestFinalHeld = false;
                 globalThis.Worker = new Proxy(NativeWorker, {
                     construct(Target, args) {
                         const instance = new Target(...(args as [string | URL, WorkerOptions?]));
                         context.importTestWorker = instance;
                         instance.addEventListener("message", (event) => {
                             if (event.data.type === "test-window-held") context.importTestHeld = true;
+                            if (event.data.type === "test-final-held") context.importTestFinalHeld = true;
                         });
                         globalThis.Worker = NativeWorker;
                         return instance;
@@ -179,8 +192,33 @@ async function reviewImport(window: BrowserWindow, screenshots: string) {
             await evaluate(({ sonata }) => {
                 sonata.setPlaying(false);
                 sonata.captureAt(621.5);
+                document.getElementById("file-bookmark")!.click();
+                const name = document.querySelector("#file-bookmarks input") as HTMLInputElement;
+                name.focus();
+                name.value = "Editing during parsing";
                 (globalThis as typeof globalThis & { importTestWorker: Worker }).importTestWorker.postMessage({
                     type: "release-test-input"
+                });
+            });
+            await waitFor(
+                () =>
+                    Boolean((globalThis as typeof globalThis & { importTestFinalHeld?: boolean }).importTestFinalHeld),
+                "Final refresh was not held"
+            );
+            assert.ok(
+                await evaluate(
+                    () =>
+                        document.activeElement === document.querySelector("#file-bookmarks input") &&
+                        (document.activeElement as HTMLInputElement).value === "Editing during parsing"
+                ),
+                "A source update replaced the bookmark being edited"
+            );
+            await evaluate(() => {
+                const timeline = document.getElementById("timeline") as HTMLInputElement;
+                timeline.value = "621.75";
+                timeline.dispatchEvent(new Event("input"));
+                (globalThis as typeof globalThis & { importTestWorker: Worker }).importTestWorker.postMessage({
+                    type: "release-test-window"
                 });
             });
             await waitFor(({ sonata }) => !sonata.fileImport.busy, "Background loading did not finish");
@@ -196,7 +234,7 @@ async function reviewImport(window: BrowserWindow, screenshots: string) {
             assert.equal(complete.complete, true);
             assert.equal(complete.count, 6001);
             assert.equal(complete.start, 600);
-            assert.equal(complete.cycle, 621.5, "Finishing background loading reset the playback position");
+            assert.equal(complete.cycle, 621.75, "Finishing background loading reset the playback position");
             assert.ok(complete.finite && complete.hidden);
             assert.equal(complete.status, "");
             // 一度途中表示ができた後でも、Cancelは表示とstoreをまとめて閉じる。
@@ -245,10 +283,12 @@ async function reviewImport(window: BrowserWindow, screenshots: string) {
                 const context = globalThis as typeof globalThis & {
                     importTestWorker?: Worker;
                     importTestHeld?: boolean;
+                    importTestFinalHeld?: boolean;
                 };
                 context.importTestWorker?.postMessage({ type: "release-test-input" });
                 delete context.importTestWorker;
                 delete context.importTestHeld;
+                delete context.importTestFinalHeld;
                 globalThis.sonataTraceWorkerSource = source;
                 document.getElementById("file-close")!.click();
             }, originalSource);
@@ -274,6 +314,8 @@ async function reviewImport(window: BrowserWindow, screenshots: string) {
                     sonata.particles.length > 0 && sonata.particles.every((p) => p.position.every(Number.isFinite))
             )
         );
+
+        const navigation = await reviewNavigation(window, contents);
 
         await evaluate(() => {
             (document.getElementById("file-cycle") as HTMLInputElement).value = "600";
@@ -422,44 +464,96 @@ async function reviewImport(window: BrowserWindow, screenshots: string) {
         assert.ok(gem5End.titles.every((title) => !title.includes("Infinity")));
 
         const bounds = window.getBounds();
-        window.setSize(390, 844);
-        await waitFor(
-            () =>
-                document.getElementById("mobile-details")!.getBoundingClientRect().width > 0 &&
-                Boolean(document.querySelector("#mobile-panel #file-window")),
-            "Mobile trace controls did not appear"
-        );
-        await evaluate(() => document.getElementById("mobile-details")!.click());
-        await waitFor(
-            () =>
-                (document.getElementById("mobile-panel") as HTMLDialogElement).open &&
-                Boolean(document.querySelector("#mobile-panel #file-window")),
-            "File navigation did not move into the mobile panel"
-        );
-        const controls = await evaluate(() => {
-            document.getElementById("file-go")!.scrollIntoView({ block: "center" });
-            return ["trace-open", "file-cycle", "file-span", "file-go", "file-previous", "file-next", "file-close"].map(
-                (id) => {
+        for (const [width, height] of [
+            [320, 568],
+            [390, 844],
+            [932, 430]
+        ]) {
+            window.setSize(width, height);
+            await waitFor(
+                () =>
+                    document.getElementById("mobile-details")!.getBoundingClientRect().width > 0 &&
+                    Boolean(document.querySelector("#mobile-panel #file-tools")),
+                "Mobile trace tools did not appear"
+            );
+            // 二段時間軸と再生は設定dialogを開かずに操作できる。
+            const visible = await evaluate(() =>
+                [
+                    "file-overview",
+                    "file-previous",
+                    "file-next",
+                    "file-zoom-in",
+                    "file-zoom-out",
+                    "timeline",
+                    "play",
+                    "scene"
+                ].map((id) => {
+                    const r = document.getElementById(id)!.getBoundingClientRect();
+                    return {
+                        id,
+                        x: r.x,
+                        y: r.y,
+                        right: r.right,
+                        bottom: r.bottom,
+                        width: r.width,
+                        height: r.height,
+                        vw: innerWidth,
+                        vh: innerHeight
+                    };
+                })
+            );
+            assert.ok(
+                visible.every(
+                    (r) =>
+                        r.x >= 0 &&
+                        r.y >= 0 &&
+                        r.right <= r.vw + 1 &&
+                        r.bottom <= r.vh + 1 &&
+                        r.width > 0 &&
+                        r.height > 0
+                ),
+                `Mobile timelines or scene are clipped: ${JSON.stringify(visible)}`
+            );
+            assert.ok(
+                visible.filter((r) => r.id.startsWith("file-")).every((r) => r.width >= 44 && r.height >= 44),
+                `Mobile file targets are too small: ${JSON.stringify(visible)}`
+            );
+            await evaluate(() => {
+                (document.querySelector(".file-navigation-options") as HTMLDetailsElement).open = true;
+            });
+            const controls = await evaluate(() =>
+                ["file-cycle", "file-span", "file-go", "file-close"].map((id) => {
                     const r = document.getElementById(id)!.getBoundingClientRect();
                     return { id, x: r.x, right: r.right, width: r.width, height: r.height, viewport: innerWidth };
-                }
+                })
             );
-        });
-        assert.ok(
-            controls.every((r) => r.x >= 0 && r.right <= r.viewport && r.width >= 44 && r.height >= 44),
-            `Mobile file controls are clipped or too small: ${JSON.stringify(controls)}`
-        );
-        await test.settle();
-        fs.writeFileSync(
-            path.join(screenshots, "sonata-import-mobile.png"),
-            (await window.webContents.capturePage()).toPNG()
-        );
+            assert.ok(
+                controls.every((r) => r.x >= 0 && r.right <= r.viewport && r.width >= 44 && r.height >= 44),
+                `Mobile navigation controls are clipped: ${JSON.stringify(controls)}`
+            );
+            await evaluate(() => {
+                (document.querySelector(".file-navigation-options") as HTMLDetailsElement).open = false;
+                document.getElementById("mobile-details")!.click();
+            });
+            await waitFor(
+                () =>
+                    (document.getElementById("mobile-panel") as HTMLDialogElement).open &&
+                    Boolean(document.querySelector("#mobile-panel #file-tools")),
+                "Search tools did not open in mobile settings"
+            );
+            await evaluate(() => document.getElementById("mobile-close")!.click());
+            await test.settle();
+            fs.writeFileSync(
+                path.join(screenshots, `sonata-import-mobile-${width}.png`),
+                (await window.webContents.capturePage()).toPNG()
+            );
+        }
         window.setBounds(bounds);
         await waitFor(
             () =>
                 !(document.getElementById("mobile-panel") as HTMLDialogElement).open &&
-                !document.querySelector("#mobile-panel #file-window"),
-            "File navigation did not return to desktop"
+                Boolean(document.querySelector("main .telemetry #file-tools")),
+            "Trace tools did not return to desktop"
         );
 
         await evaluate(() => {
@@ -512,7 +606,8 @@ async function reviewImport(window: BrowserWindow, screenshots: string) {
             canceled: true,
             playbackBeforeEOF: true,
             seekBeforeEOF: true,
-            preservePositionAtEOF: true
+            preservePositionAtEOF: true,
+            navigation
         };
     } finally {
         debuggerAPI.detach();

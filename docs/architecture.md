@@ -1,12 +1,13 @@
 # ソースの構造
 
-編集用の `src/` は TypeScript 13個、CSS 3個、HTML 1個の計17ファイルです。配布時には `dist/sonata.html` 一つへ結合します。画面の配置・記録値・再生時刻と、外観の材質・照明・合成を分けることで、Neon / Aluminum / Paper を同じ再生内容で比較できます。
+編集用の `src/` は TypeScript 14個、CSS 3個、HTML 1個の計18ファイルです。配布時には `dist/sonata.html` 一つへ結合します。画面の配置・記録値・再生時刻と、外観の材質・照明・合成を分けることで、Neon / Aluminum / Paper を同じ再生内容で比較できます。
 
 ## 境界と編集先
 
 | ファイル | 責務 |
 | --- | --- |
-| `src/trace-import.cts` / `src/trace-worker.cts` | File操作とWorkerの入口 |
+| `src/trace-import.cts` / `src/trace-worker.cts` | File操作・区間先読みとWorkerの入口 |
+| `src/trace-navigation.cts` | 全体時間軸、検索結果、履歴・ブックマークと探索操作 |
 | `src/trace-file.cts` | Konata解析・圧縮store・全体索引と寿命 |
 | `src/trace-window.cts` | 選択区間を観測値に沿って再生データへ変換 |
 | `src/sonata.cts` | 起動、再生時計、共通操作、DOM 表示、検証用 API |

@@ -842,6 +842,112 @@ body.cinema .cinema-caption {
     cursor: default;
 }
 
+/* 全体軸と詳細軸を並べても、再生操作と図を画面内に保つ。 */
+@media (min-width: 601px) {
+    #file-window {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        column-gap: 12px;
+    }
+    .file-overview-heading {
+        grid-column: 1 / -1;
+    }
+    #file-overview-wrap {
+        margin-bottom: 4px;
+    }
+}
+@media (max-width: 1100px) {
+    .file-navigation-hint {
+        display: none;
+    }
+}
+@media (max-width: 760px), (max-width: 1000px) and (max-height: 600px) {
+    body:has(#file-window:not([hidden])) {
+        grid-template-rows: calc(56px + env(safe-area-inset-top)) minmax(0, 1fr) auto;
+    }
+    .transport:has(#file-window:not([hidden])) {
+        padding-top: 6px;
+    }
+    #file-window {
+        padding-bottom: 5px;
+        margin-bottom: 5px;
+    }
+    #file-overview-wrap {
+        height: 46px;
+    }
+    .file-overview-heading {
+        gap: 6px;
+    }
+    .file-overview-key {
+        display: none;
+    }
+    #file-position {
+        font-size: 9px;
+    }
+    #file-window :is(button, input[type="number"], select),
+    .trace-import :is(button, input[type="text"], select),
+    .file-navigation-options > summary,
+    .file-loop-label {
+        min-height: 44px;
+    }
+    #file-window button,
+    .trace-import button {
+        min-width: 44px;
+    }
+    .file-navigation-options > summary {
+        font-size: 11px;
+    }
+    .file-window-buttons button span {
+        display: none;
+    }
+    .file-window-buttons button {
+        font-size: 16px;
+    }
+    .file-navigation-panel {
+        font-size: 12px;
+    }
+    .file-bookmark-row > button {
+        flex-basis: 44px;
+    }
+    .file-result-list :is(strong, small) {
+        font-size: 11px;
+    }
+}
+@media (max-width: 600px) and (max-height: 700px) {
+    body:has(#file-window:not([hidden])) #scene {
+        top: 104px;
+        height: calc(100% - 104px);
+    }
+    body:has(#file-window:not([hidden]))
+        :is(
+            .stage-label,
+            .physical-register-id,
+            .register-writeback,
+            .fifo-label,
+            .instruction-stream-label,
+            .recovery-branch
+        ) {
+        margin-top: 104px;
+    }
+    body:has(#file-window:not([hidden])) :is(.mobile-run, .bound-scene, .memory-notice, .trace-event-notice) {
+        display: none;
+    }
+    body:has(#file-window:not([hidden])) .touch-camera {
+        bottom: 6px;
+    }
+    body:has(#file-window:not([hidden])) .flush-alert {
+        top: 104px;
+    }
+}
+@media (min-width: 601px) and (max-width: 1000px) and (max-height: 600px) {
+    body:has(#file-window:not([hidden])) {
+        grid-template-rows: calc(48px + env(safe-area-inset-top)) minmax(0, 1fr) auto;
+    }
+    body:has(#file-window:not([hidden])) .bound-scene {
+        display: none;
+    }
+}
+
 /* 配色 */
 /* 卓上模型のスタイルは、周囲の UI と文字を紙とインクの配色で共用する。 */
 :root[data-theme="light"] {

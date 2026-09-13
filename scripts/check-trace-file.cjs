@@ -5,7 +5,15 @@ const fs = require("node:fs");
 const vm = require("node:vm");
 const path = require("node:path");
 const { stripTypeScriptTypes } = require("node:module");
-const { createFileSession, createTraceIndex, selectOps, maxWindowOps } = require("../src/trace-file.cts");
+const {
+    createFileSession,
+    createTraceIndex,
+    selectOps,
+    searchOps,
+    maxWindowOps,
+    maxOverviewBins,
+    maxSearchHits
+} = require("../src/trace-file.cts");
 async function check() {
     const signal = new AbortController().signal;
     const source = Array.from({ length: 32768 }, (_, id) => ({
@@ -35,6 +43,8 @@ async function check() {
     assert.equal(index.blocks.length, 32);
     assert.deepEqual(index.threads, [0, 1]);
     assert.equal(visits, 0, "Index building must not rescan the compressed store");
+    assert.deepEqual(overviewTotals(index.overview), { fetched: 32768, committed: 32767, flushed: 0 });
+    assert.ok(index.overview.bins.length <= maxOverviewBins);
     visits = 0;
     const ops = await selectOps(trace, index.blocks, 32000, 32127, 0, signal);
     assert.ok(
@@ -103,6 +113,9 @@ async function check() {
         await session.open(new File([complete, incomplete], "gem5-eof.log"));
         const loaded = messages.find((m) => m.type === "loaded");
         assert.equal(loaded.source.opCount, 2);
+        assert.deepEqual(overviewTotals(loaded.source.overview), { fetched: 2, committed: 1, flushed: 0 });
+        assert.equal(overviewBin(loaded.source.overview, 6).committed, 1, "Commit was shifted to the Rt display end");
+        assert.equal(overviewBin(loaded.source.overview, 7).committed, 0);
         assert.equal(loaded.source.lastCycle, 14, "Unretired gem5 stages after the last commit were lost");
         await session.window({ type: "window", request: 1, cycle: 10, span: 128, thread: 0 });
         const result = messages.find((m) => m.type === "window").trace;
@@ -127,13 +140,255 @@ async function check() {
     } finally {
         sparseSession.close();
     }
+    checkOverview();
+    await checkSearch();
+    await checkSearchSession();
     await checkStreaming();
     await checkConcurrentIndex();
     await checkFlushGroups();
     await checkWorkerRequests();
+    await checkWorkerCoalescing();
     console.log(
-        "Trace index: sparse IDs, carry-in, flush groups, EOF, streaming windows, parser fallback, snapshots, cancellation and Worker ordering passed"
+        "Trace index: bounded overview, paged search, sparse IDs, carry-in, flush groups, EOF, streaming windows, parser fallback, snapshots, cancellation and Worker ordering passed"
     );
+}
+
+function overviewTotals(overview) {
+    return overview.bins.reduce(
+        (sum, bin) => ({
+            fetched: sum.fetched + bin.fetched,
+            committed: sum.committed + bin.committed,
+            flushed: sum.flushed + bin.flushed
+        }),
+        { fetched: 0, committed: 0, flushed: 0 }
+    );
+}
+function overviewBin(overview, cycle) {
+    return overview.bins[Math.floor((cycle - overview.firstCycle) / overview.binWidth)];
+}
+function checkOverview() {
+    const index = createTraceIndex();
+    const events = [];
+    // 遠い時刻から始め、逆順・疎な時刻・再書込み・未完了を混ぜる。
+    for (let id = 99999; id >= 0; id--) {
+        const cycle = id % 2 ? id * 100000 : id;
+        const unfinished = id % 11 === 0,
+            flush = !unfinished && id % 3 === 0;
+        const op = {
+            id,
+            tid: id % 3,
+            fetchedCycle: cycle,
+            retiredCycle: cycle + 8,
+            retired: !unfinished && !flush,
+            flush,
+            eof: unfinished,
+            lanes: []
+        };
+        index.observe(op);
+        index.observe(op);
+        events.push([cycle, "fetched"]);
+        if (!unfinished) events.push([cycle + 8, flush ? "flushed" : "committed"]);
+        if (id % 1000 === 0) assert.ok(index.metadata(cycle + 8).overview.bins.length <= maxOverviewBins);
+    }
+    const result = index.finish(1e12);
+    assert.equal(result.overview.scope, "all-threads");
+    assert.deepEqual(result.threads, [0, 1, 2]);
+    assert.ok(result.overview.firstCycle <= 0);
+    assert.ok(result.overview.firstCycle + result.overview.bins.length * result.overview.binWidth > 1e12);
+    const expected = result.overview.bins.map(() => ({ fetched: 0, committed: 0, flushed: 0 }));
+    for (const [cycle, kind] of events)
+        expected[Math.floor((cycle - result.overview.firstCycle) / result.overview.binWidth)][kind]++;
+    assert.deepEqual(result.overview.bins, expected, "Merging overview bins changed event counts or their time range");
+    assert.equal(result.blocks.length, Math.ceil(100000 / 1024));
+    assert.ok(result.blocks.every((block) => block.ids.byteLength === 128 && block.ended.byteLength === 128));
+    const before = structuredClone(result.overview);
+    index.observe({ id: 100000, tid: 0, fetchedCycle: 1, retiredCycle: 2, retired: true, flush: false, lanes: [] });
+    assert.deepEqual(result.overview, before, "Later parser writes mutated a published overview");
+    index.clear();
+    assert.throws(() => index.metadata(0), /No instructions/);
+    index.observe({ id: 0, tid: 1, fetchedCycle: 3, retiredCycle: 7, retired: true, flush: false, lanes: [] });
+    assert.equal(index.metadata(7).overview.firstCycle, 3);
+    assert.deepEqual(overviewTotals(index.metadata(7).overview), { fetched: 1, committed: 1, flushed: 0 });
+
+    // gem5のfetch-only squashに与えた1cycleの表示延長は観測イベントではない。
+    const gem = createTraceIndex();
+    gem.observe(
+        {
+            id: 0,
+            tid: 0,
+            fetchedCycle: 10,
+            retiredCycle: 11,
+            retired: false,
+            flush: true,
+            lanes: [{ stages: [{ name: "F", startCycle: 10, endCycle: 11 }] }]
+        },
+        "gem5"
+    );
+    gem.observe(
+        {
+            id: 1,
+            tid: 0,
+            fetchedCycle: 11,
+            retiredCycle: 16,
+            retired: false,
+            flush: true,
+            lanes: [
+                {
+                    stages: [
+                        { name: "F", startCycle: 11, endCycle: 15 },
+                        { name: "Dc", startCycle: 15, endCycle: 16 }
+                    ]
+                }
+            ]
+        },
+        "gem5"
+    );
+    const overview = gem.metadata(20).overview;
+    assert.equal(overviewBin(overview, 10).flushed, 1);
+    assert.equal(overviewBin(overview, 15).flushed, 1);
+    assert.equal(overviewBin(overview, 16).flushed, 0, "Inferred flush groups leaked into the overview");
+}
+
+async function checkSearch() {
+    const index = createTraceIndex(),
+        ops = new Map();
+    const add = (id, tid = 0) => {
+        const op = {
+            id,
+            tid,
+            fetchedCycle: id,
+            retiredCycle: id + (id % 4) * 10,
+            retired: id % 5 !== 0,
+            flush: id % 5 === 0,
+            eof: id % 17 === 0,
+            labelName: `0xABCD: add x${id}, x2`,
+            labelDetail: id === 8 ? "Specific Detail" : "",
+            lanes: []
+        };
+        ops.set(id, op);
+        index.observe(op);
+    };
+    // 先に高IDを入れても、結果は実在IDの昇順とする。
+    add(1_000_000_000);
+    for (let id = 2999; id >= 0; id--) add(id, id % 2);
+    const trace = { getOpForScan: (id) => ops.get(id) },
+        signal = new AbortController().signal;
+    const search = (kind, query, thread = 0, after) =>
+        searchOps(
+            trace,
+            index.searchSnapshot(after),
+            { type: "search", request: 1, kind, query, thread, after },
+            "onikiri",
+            signal
+        );
+    const page = await search("text", "0xabCD");
+    assert.equal(page.hits.length, maxSearchHits);
+    assert.equal(page.more, true);
+    assert.deepEqual(
+        page.hits.map((hit) => hit.id),
+        Array.from({ length: 40 }, (_, index) => index * 2)
+    );
+    const next = await search("text", "0xabCD", 0, page.hits.at(-1).id);
+    assert.equal(next.hits[0].id, 80);
+    assert.equal(next.hits.length, maxSearchHits);
+    const tail = await search("text", "add", 0, 2990);
+    assert.deepEqual(
+        tail.hits.map((hit) => hit.id),
+        [2992, 2994, 2996, 2998, 1_000_000_000]
+    );
+    assert.equal(tail.more, false);
+    assert.equal((await search("text", "specific DETAIL")).hits[0].id, 8);
+    const missing = await search("id", "1000000001");
+    assert.deepEqual(missing, { hits: [], more: false });
+    assert.equal((await search("id", "1000000000")).hits[0].id, 1_000_000_000);
+    assert.equal((await search("id", "1", 0)).hits.length, 0);
+    assert.equal((await search("id", "1", 1)).hits[0].tid, 1);
+    assert.equal((await search("id", "1000000000", 0, 1_000_000_000)).hits.length, 0);
+    assert.equal((await search("id", "0")).hits[0].endCycle, null, "Unfinished search result invented an end");
+    assert.ok((await search("flush", "")).hits.every((hit) => hit.flush && hit.id % 5 === 0));
+    const long = await search("long", "20");
+    assert.ok(long.hits.length);
+    assert.ok(long.hits.every((hit) => hit.endCycle !== null && hit.endCycle - hit.cycle >= 20 && hit.id % 17 !== 0));
+    for (const [kind, query] of [
+        ["text", ""],
+        ["id", "-1"],
+        ["id", "1.5"],
+        ["long", "NaN"],
+        ["long", ""],
+        ["long", "-1"]
+    ])
+        await assert.rejects(search(kind, query), /Invalid trace search/);
+
+    // 検索を長く走らせても、最初の短いCPU区間で中断できる。
+    let scanned = 0;
+    const abort = new AbortController();
+    const searching = searchOps(
+        {
+            getOpForScan(id) {
+                scanned++;
+                return ops.get(id);
+            }
+        },
+        index.searchSnapshot(),
+        { type: "search", request: 1, kind: "text", query: "missing", thread: 0 },
+        "onikiri",
+        abort.signal
+    );
+    abort.abort();
+    await assert.rejects(searching, { name: "AbortError" });
+    assert.ok(scanned <= 128, `Search did not yield promptly (${scanned} operations)`);
+    const snapshot = index.searchSnapshot(2998);
+    add(2_000_000_000);
+    const captured = await searchOps(
+        trace,
+        snapshot,
+        { type: "search", request: 1, kind: "text", query: "add", thread: 0, after: 2998 },
+        "onikiri",
+        signal
+    );
+    assert.deepEqual(
+        captured.hits.map((hit) => hit.id),
+        [1_000_000_000],
+        "Parser writes expanded a search snapshot"
+    );
+}
+
+async function checkSearchSession() {
+    const box = mailbox(),
+        session = createFileSession(box.send);
+    const input = controlledInput("Kanata\t0004\n" + kanataOp(0) + `L\t0\t0\t late label\n`);
+    const opening = session.open(input);
+    const search = (id, kind = "text", query = "add") => ({ type: "search", request: id, kind, query, thread: 0 });
+    try {
+        const partial = await box.wait((m) => m.type === "loaded");
+        assert.deepEqual(overviewTotals(partial.source.overview), { fetched: 1, committed: 1, flushed: 0 });
+        await session.search(search(1));
+        assert.equal(input.finished, false, "Search waited for EOF");
+        assert.equal(box.messages.find((m) => m.type === "search").hits[0].id, 0);
+        const old = session.search(search(2));
+        const rejected = assert.rejects(old, { name: "AbortError" });
+        await session.search(search(3, "id", "0"));
+        await rejected;
+        assert.ok(!box.messages.some((m) => m.type === "search" && m.request === 2));
+        const cancel = session.search(search(4));
+        const canceled = assert.rejects(cancel, { name: "AbortError" });
+        session.cancelSearch();
+        await canceled;
+        await assert.rejects(session.search({ ...search(5), thread: 99 }), /Invalid trace search thread/);
+        // ズームで得た整数幅を受理し、上下限と小数は拒否する。
+        await session.window({ ...request(6), span: 37 });
+        for (const span of [15, 513, 16.5, Infinity])
+            await assert.rejects(session.window({ ...request(7), span }), /Invalid trace window/);
+        input.finish();
+        await opening;
+        assert.deepEqual(overviewTotals(box.messages.filter((m) => m.type === "loaded").at(-1).source.overview), {
+            fetched: 1,
+            committed: 1,
+            flushed: 0
+        });
+    } finally {
+        session.close();
+    }
 }
 
 // EOFをテスト側で保持する。タイミングの速さではなく、閉じていない入力への応答を検査する。
@@ -503,12 +758,91 @@ async function checkWorkerRequests() {
         box.messages.filter((m) => m.type === "window").map((m) => m.request),
         [1, 2]
     );
+    const search = (id, kind = "text", query = "add") => ({ type: "search", request: id, kind, query, thread: 0 });
+    context.onmessage({ data: search(1) });
     context.onmessage({ data: request(3) });
+    await box.wait((m) => m.type === "window" && m.request === 3);
+    assert.ok(!box.messages.some((m) => m.type === "search"), "A search blocked the next window request");
+    await box.wait((m) => m.type === "search" && m.request === 1);
+    context.onmessage({ data: search(2) });
+    context.onmessage({ data: search(3, "id", "0") });
+    await box.wait((m) => m.type === "search" && m.request === 3);
+    assert.ok(!box.messages.some((m) => m.type === "search" && m.request === 2));
+    context.onmessage({ data: search(4) });
+    context.onmessage({ data: { type: "cancel-search" } });
+    context.onmessage({ data: search(5, "id", "invalid") });
+    const failed = await box.wait((m) => m.type === "error" && m.request === 5);
+    assert.equal(failed.operation, "search", "Search errors cannot be distinguished from independent window IDs");
+    assert.ok(!box.messages.some((m) => m.type === "search" && m.request === 4));
+    context.onmessage({ data: { ...request(5), span: 513 } });
+    await box.wait((m) => m.type === "error" && m.request === 5 && m.operation === "window");
+    context.onmessage({ data: request(6) });
+    context.onmessage({ data: search(6) });
     context.onmessage({ data: { type: "close" } });
     const before = box.messages.length;
     await new Promise((resolve) => setTimeout(resolve, 20));
     assert.equal(box.messages.length, before, "Worker responded after close or ran a queued window");
     assert.ok(input.canceled > 0);
+}
+// scanの完了を手動で保持し、PCの速さに依存せず要求の合流を検査する。
+async function checkWorkerCoalescing() {
+    const box = mailbox(),
+        activity = mailbox(),
+        scans = [],
+        gates = new Map();
+    const context = vm.createContext({
+        postMessage: box.send,
+        Error,
+        require(name) {
+            assert.equal(name, "./trace-file.cts");
+            return {
+                createFileSession(send) {
+                    return {
+                        async window(request) {
+                            scans.push(request.request);
+                            activity.send({ type: "scan", request: request.request });
+                            await new Promise((resolve, reject) => gates.set(request.request, { resolve, reject }));
+                            gates.delete(request.request);
+                            send({ type: "window", request: request.request, trace: {} });
+                        },
+                        async search() {
+                            throw new Error("Search fixture failure");
+                        },
+                        close() {
+                            for (const gate of gates.values()) gate.reject(new DOMException("Closed", "AbortError"));
+                            gates.clear();
+                        }
+                    };
+                }
+            };
+        }
+    });
+    const workerFile = path.join(__dirname, "../src/trace-worker.cts");
+    vm.runInContext(stripTypeScriptTypes(fs.readFileSync(workerFile, "utf8"), { mode: "transform" }), context);
+    context.onmessage({ data: request(1) });
+    await activity.wait((m) => m.request === 1);
+    for (let id = 2; id <= 1000; id++) context.onmessage({ data: request(id) });
+    assert.deepEqual(scans, [1], "A second window scanned while the first was running");
+    gates.get(1).resolve();
+    await activity.wait((m) => m.request === 1000);
+    assert.deepEqual(scans, [1, 1000], "Superseded window requests were still scanned");
+    context.onmessage({ data: request(1001) });
+    context.onmessage({ data: request(1002) });
+    // 検索は区間の待ち列へ入れず、同一IDのwindowエラーと区別する。
+    context.onmessage({ data: { type: "search", request: 1000, kind: "text", query: "x", thread: 0 } });
+    await box.wait((m) => m.type === "error" && m.operation === "search" && m.request === 1000);
+    gates.get(1000).reject(new Error("Window fixture failure"));
+    await box.wait((m) => m.type === "error" && m.operation === "window" && m.request === 1000);
+    await activity.wait((m) => m.request === 1002);
+    assert.deepEqual(scans, [1, 1000, 1002], "A failed window prevented the latest request from running");
+    context.onmessage({ data: request(1003) });
+    context.onmessage({ data: request(1004) });
+    context.onmessage({ data: { type: "close" } });
+    const before = box.messages.length;
+    context.onmessage({ data: request(1005) });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.deepEqual(scans, [1, 1000, 1002], "Close left queued windows runnable");
+    assert.equal(box.messages.length, before, "Closed Worker emitted a late scan response");
 }
 check().catch((error) => {
     console.error(error);

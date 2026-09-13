@@ -469,22 +469,31 @@ main {
     font-size: 11px;
     color: var(--muted);
 }
-.trace-import .quiet-button {
-    min-height: 36px;
+.trace-import .quiet-button,
+#file-window .quiet-button,
+.file-navigation-options > summary {
+    min-height: 32px;
     padding: 6px 10px;
-    border: 1px solid currentColor;
+    border: 1px solid var(--border);
     border-radius: 5px;
+    color: var(--muted);
+}
+.trace-import .quiet-button:hover,
+#file-window .quiet-button:hover,
+.file-navigation-options > summary:hover {
+    color: var(--text);
+    background: color-mix(in srgb, var(--text) 5%, transparent);
 }
 .file-hint {
     display: block;
     margin-top: 6px;
 }
-.trace-import p {
+.trace-import p,
+.file-navigation-panel p {
     overflow-wrap: anywhere;
     line-height: 1.5;
 }
-.trace-import progress,
-#file-overview {
+.trace-import progress {
     width: 100%;
     accent-color: var(--cyan);
 }
@@ -498,25 +507,271 @@ main {
     flex: 1;
     min-width: 0;
 }
-.trace-import input[type="number"],
-.trace-import select {
+.trace-import input[type="text"],
+.trace-import select,
+#file-window input[type="number"],
+#file-window select {
     width: 100%;
     min-width: 0;
-    min-height: 36px;
+    min-height: 32px;
     margin-top: 4px;
-    padding: 4px;
+    padding: 6px;
     background: var(--panel);
-    color: inherit;
-    border: 1px solid currentColor;
+    color: var(--text);
+    border: 1px solid var(--border);
     border-radius: 4px;
 }
-@media (max-width: 760px) {
-    .trace-import :is(button, input[type="number"], select) {
-        min-height: 44px;
-    }
-    .trace-import button {
-        min-width: 44px;
-    }
+
+/* ファイル全体の探索は再生軸の近くに置き、デモの配置は維持する。 */
+body:has(#file-window:not([hidden])) {
+    display: grid;
+    height: 100dvh;
+    grid-template-rows: 70px minmax(0, 1fr) auto 30px;
+}
+body:has(#file-window:not([hidden])) main {
+    height: auto;
+    min-height: 0;
+    overflow: hidden;
+}
+.transport:has(#file-window:not([hidden])) {
+    position: relative;
+    height: auto;
+    padding-top: 10px;
+}
+#file-window {
+    padding-bottom: 8px;
+    margin-bottom: 8px;
+    border-bottom: 1px solid var(--border);
+    font-size: 10px;
+    color: var(--muted);
+}
+.file-overview-heading,
+.file-overview-key,
+.file-navigation,
+.file-window-buttons {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-width: 0;
+}
+.file-overview-heading {
+    min-height: 20px;
+}
+.file-overview-heading .field-label {
+    white-space: nowrap;
+}
+.file-overview-key {
+    gap: 12px;
+    font-size: 9px;
+}
+.file-overview-key > span:not(:last-child)::before {
+    display: inline-block;
+    width: 5px;
+    height: 5px;
+    margin-right: 5px;
+    border-radius: 1px;
+    background: var(--activity-color);
+    content: "";
+}
+.file-fetched {
+    --activity-color: var(--purple);
+}
+.file-committed {
+    --activity-color: var(--cyan);
+}
+.file-squashed {
+    --activity-color: var(--red);
+}
+#file-position {
+    min-width: 0;
+    margin-left: auto;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+    font: 10px monospace;
+    color: var(--text);
+}
+#file-window-status {
+    grid-column: 1 / -1;
+    margin: 4px 0 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+#file-overview-wrap {
+    position: relative;
+    height: 36px;
+    margin: 4px 0 6px;
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    background: color-mix(in srgb, var(--text) 3%, transparent);
+}
+#file-activity {
+    display: block;
+    width: 100%;
+    height: 100%;
+}
+#file-viewport {
+    position: absolute;
+    inset: 0 auto 0 0;
+    min-width: 3px;
+    border: 1px solid var(--cyan);
+    border-radius: 2px;
+    background: color-mix(in srgb, var(--cyan) 12%, transparent);
+    pointer-events: none;
+}
+#file-overview {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    margin: 0;
+    opacity: 0;
+    cursor: ew-resize;
+    touch-action: pan-y;
+}
+#file-overview-wrap:has(input:focus-visible),
+#detail-timeline:has(input:focus-visible) {
+    outline: 2px solid var(--cyan);
+    outline-offset: 3px;
+}
+.file-window-buttons {
+    gap: 4px;
+}
+.file-window-buttons button {
+    min-width: 32px;
+}
+.file-navigation-hint {
+    font-size: 9px;
+}
+.file-navigation-options {
+    position: relative;
+    margin-left: auto;
+}
+.file-navigation-options > summary {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    cursor: pointer;
+    list-style: none;
+}
+.file-navigation-options > summary::after {
+    content: "⌃";
+}
+.file-navigation-options > summary::-webkit-details-marker {
+    display: none;
+}
+.file-navigation-options > summary:focus-visible {
+    outline: 2px solid var(--cyan);
+    outline-offset: 3px;
+}
+.file-navigation-options[open] > summary {
+    color: var(--text);
+    background: var(--panel);
+}
+.file-navigation-panel {
+    position: absolute;
+    right: 0;
+    bottom: calc(100% + 8px);
+    z-index: 10;
+    width: min(380px, calc(100vw - 24px));
+    max-height: 55dvh;
+    padding: 12px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--panel);
+    box-shadow: 0 6px 24px #0003;
+    overflow: auto;
+    overscroll-behavior: contain;
+}
+.file-navigation-panel .file-window-row:first-child {
+    margin-top: 0;
+}
+.file-history button {
+    flex: 1;
+}
+.file-loop-label {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-height: 32px;
+}
+.file-loop-label input {
+    accent-color: var(--cyan);
+}
+#file-partial {
+    color: var(--amber);
+}
+#file-tools {
+    margin-top: 15px;
+    padding-top: 15px;
+    border-top: 1px solid var(--border);
+}
+.file-search-row {
+    display: flex;
+    align-items: end;
+    gap: 6px;
+    margin-top: 4px;
+}
+#file-search-status {
+    margin: 8px 0;
+    font-size: 10px;
+}
+.file-result-list {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+    max-height: 240px;
+    overflow: auto;
+    scrollbar-width: thin;
+}
+.file-result-list button {
+    min-width: 0;
+    padding: 8px;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    color: var(--text);
+    text-align: left;
+    overflow-wrap: anywhere;
+}
+.file-result-list button:hover {
+    background: color-mix(in srgb, var(--text) 5%, transparent);
+}
+.file-result-list :is(strong, small) {
+    display: block;
+    font: 10px/1.4 monospace;
+    font-weight: 400;
+}
+.file-result-list small {
+    margin-top: 3px;
+    color: var(--muted);
+}
+#file-search-more {
+    margin-top: 8px;
+}
+.file-bookmark-heading {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 6px;
+    margin: 16px 0 8px;
+    font-size: 9px;
+}
+.file-bookmark-row {
+    display: flex;
+    gap: 4px;
+}
+.file-bookmark-row > input {
+    flex: 1;
+    margin-top: 0;
+}
+.file-bookmark-row > button {
+    flex: 0 0 32px;
+    padding: 4px;
+    text-align: center;
+}
+.file-bookmark-row > button:last-child {
+    color: var(--muted);
 }
 .select-wrap {
     margin-top: 8px;
