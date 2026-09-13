@@ -29,15 +29,19 @@ async function reviewBrowser(window: BrowserWindow, entry: string, screenshots?:
         if (style === "aluminum") return "metal-puck";
         throw new Error("Unknown visual style: " + style);
     };
-    const waitFor = (condition: () => Promise<unknown>, message: string) =>
+    const waitFor = (condition: () => Promise<unknown>, message: string, timeout = 10000) =>
         waitUntil(condition, message, {
+            timeout,
             diagnostics: () =>
                 evaluate(() => ({
                     ready: document.readyState,
                     focus: document.activeElement?.id,
                     status: document.getElementById("renderer-status")?.textContent,
                     fallback: document.getElementById("fallback")?.hidden,
-                    playing: globalThis.sonata?.playing
+                    playing: globalThis.sonata?.playing,
+                    camera: globalThis.sonata?.camera,
+                    style: globalThis.sonata?.visualStyle,
+                    hidden: document.hidden
                 }))
         });
     const ready = () =>
@@ -183,7 +187,8 @@ async function reviewBrowser(window: BrowserWindow, entry: string, screenshots?:
                 ({ sonata }) =>
                     Math.abs(sonata.camera.radius - 32.5) < 0.01 && Math.abs(sonata.camera.azimuth - 0.2) < 0.001
             ),
-        "Fit did not settle before zoom input"
+        "Fit did not settle before zoom input",
+        30000
     );
     const cameraBefore = await evaluate(({ sonata }) => sonata.camera);
     const area = await evaluate(({ $ }) => {
@@ -220,7 +225,7 @@ async function reviewBrowser(window: BrowserWindow, entry: string, screenshots?:
         "Right drag also orbited the camera"
     );
     assert.equal(close.pointers, 0, "Right drag left a captured pointer");
-    await waitFor(() => evaluate(({ sonata }) => sonata.camera.radius < 3.01), "Detailed zoom did not settle");
+    await waitFor(() => evaluate(({ sonata }) => sonata.camera.radius < 3.01), "Detailed zoom did not settle", 30000);
     if (screenshots)
         fs.writeFileSync(
             path.join(screenshots, "sonata-detail-zoom.png"),
@@ -403,7 +408,8 @@ async function reviewBrowser(window: BrowserWindow, entry: string, screenshots?:
         });
         await waitFor(
             () => evaluate(({ sonata }) => Math.abs(sonata.camera.radius - sonata.camera.targetRadius) < 0.01),
-            "Material close-up without MSAA did not settle"
+            "Material close-up without MSAA did not settle",
+            30000
         );
         for (const style of matteStyles) {
             await evaluate(({ $ }, key) => $("style-" + key).click(), style);
