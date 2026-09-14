@@ -612,6 +612,118 @@ assert.deepEqual(
     [1, 2]
 );
 
+// HEAD / TAIL の演出は更新後だけ動き、FIFO のスロット・終了時刻と独立して復元できる。
+const recordedRob = JSON.stringify({ slots: [...r.slots], snapshots: r.snapshots });
+function markerNear(actual, expected, message) {
+    assert.ok(Math.abs(actual - expected) < 1e-9, `${message}: ${actual} != ${expected}`);
+}
+assert.deepEqual(r.markersAt(-1), { head: 0, tail: 0 });
+assert.deepEqual(r.markersAt(0), { head: 0, tail: 0 }, "Allocation moved its marker before being observed");
+markerNear(r.markersAt(0.2).tail, 0.5, "TAIL must pass through fractional slots");
+markerNear(r.markersAt(0.4).tail, 1, "TAIL must settle promptly after allocation");
+markerNear(r.markersAt(2.2).tail, 2.5, "TAIL must move forward through the capacity boundary");
+assert.equal(r.markersAt(2.4).tail, 0);
+assert.equal(r.markersAt(5).head, 0, "Commit marker anticipated its recorded event");
+assert.equal(r.stateAt(5).head, 1, "Marker easing delayed the real HEAD state");
+markerNear(r.markersAt(5.2).head, 0.5, "HEAD must move after commit");
+markerNear(r.markersAt(8.2).head, 2.5, "HEAD must wrap forward");
+assert.equal(r.markersAt(8.4).head, 0);
+assert.equal(r.markersAt(7.2).tail, 1, "Equal squash and allocation counts restarted an unchanged TAIL");
+const markerSamples = [0.2, 1.1, 2.2, 5.1, 6.35, 7.2, 8.2, 9.4].map((time) => [time, r.markersAt(time)]);
+const recreatedRob = createRobReplay(fixture, 3);
+for (const [time, expected] of [...markerSamples].reverse()) {
+    assert.deepEqual(r.markersAt(time), expected, "Reverse seek changed a marker position");
+    assert.deepEqual(recreatedRob.markersAt(time), expected, "Reload changed a marker position");
+}
+assert.equal(JSON.stringify({ slots: [...r.slots], snapshots: r.snapshots }), recordedRob);
+
+const rollbackRob = createRobReplay(
+    [
+        { id: 0, allocation: 0, end: 10, flush: false },
+        { id: 1, allocation: 1, end: 3, flush: true },
+        { id: 2, allocation: 2, end: 3, flush: true }
+    ],
+    3
+);
+assert.equal(rollbackRob.markersAt(3).tail, 0);
+markerNear(rollbackRob.markersAt(3.1).tail, 2.6875, "Squash must cross the boundary backward");
+markerNear(rollbackRob.markersAt(3.2).tail, 2, "Squash must retreat across each removed slot");
+assert.equal(rollbackRob.markersAt(3.4).tail, 1);
+assert.equal(rollbackRob.markersAt(3.2).head, 0, "Squash moved HEAD");
+const rollbackCropped = createRobReplay([{ id: 0, allocation: 0, end: 10, flush: false }], 3, {
+    time: 3.1,
+    state: rollbackRob.stateAt(3.1),
+    markers: rollbackRob.markerStateAt(3.1)
+});
+for (const time of [3, 3.1, 3.2, 3.4])
+    assert.deepEqual(rollbackCropped.markersAt(time), rollbackRob.markersAt(time), "Window lost squash marker motion");
+const emptyRob = createRobReplay([], 3, { time: 9.2, state: r.stateAt(9.2), markers: r.markerStateAt(9.2) });
+assert.deepEqual(emptyRob.markersAt(9.2), r.markersAt(9.2), "Empty window lost its final commit marker motion");
+assert.deepEqual(emptyRob.markersAt(9.4), r.markersAt(9.4));
+const fullTurn = createRobReplay(
+    Array.from({ length: 3 }, (_, id) => ({ id, allocation: 0, end: 2, flush: false })),
+    3
+);
+markerNear(fullTurn.markersAt(0.2).tail, 1.5, "A full-capacity allocation lost its forward revolution");
+markerNear(fullTurn.markersAt(2.2).head, 1.5, "A full-capacity retirement lost its forward revolution");
+
+const denseRob = createRobReplay(
+    Array.from({ length: 3 }, (_, id) => ({ id, allocation: id / 10, end: 0.5 + id / 10, flush: false })),
+    3
+);
+for (const time of [0.1, 0.2, 0.5, 0.6, 0.7]) {
+    const before = denseRob.markersAt(time - 1e-7),
+        after = denseRob.markersAt(time + 1e-7);
+    for (const pointer of ["head", "tail"]) {
+        const distance = Math.abs(after[pointer] - before[pointer]);
+        assert.ok(Math.min(distance, 3 - distance) < 1e-5, `Dense ${pointer} updates jumped at ${time}`);
+    }
+}
+assert.equal(denseRob.markersAt(0.6).tail, 0, "A HEAD update restarted TAIL easing");
+assert.deepEqual(denseRob.markersAt(1.1), { head: 0, tail: 0 });
+
+// 前6サイクルの記録が共通な隣接窓では、整数の循環位相と小数の表示位置が一致する。
+const windowOps = [
+    { id: 0, allocation: 0, end: 2, flush: false },
+    { id: 1, allocation: 1, end: 8, flush: false },
+    { id: 2, allocation: 3, end: 5, flush: true },
+    { id: 3, allocation: 6, end: 10, flush: false }
+];
+const wholeRob = createRobReplay(windowOps, 4);
+const croppedRob = createRobReplay(windowOps.slice(1), 4, { time: 8.1, state: wholeRob.stateAt(8.1) });
+for (const time of [6, 6.1, 6.2, 8, 8.1, 8.2, 10, 10.2, 10.4])
+    assert.deepEqual(croppedRob.markersAt(time), wholeRob.markersAt(time), `Window changed markers at ${time}`);
+
+// 補間中の終了命令が窓から抜けても、継続時刻・逆シーク・直後の更新を同じ軌道へつなぐ。
+const closeOps = [
+    { id: 0, allocation: 0, end: 2, flush: false },
+    { id: 1, allocation: 1, end: 2.1, flush: false },
+    { id: 2, allocation: 1.5, end: 2.3, flush: false }
+];
+const closeRob = createRobReplay(closeOps, 4);
+const closeCropped = createRobReplay(closeOps.slice(2), 4, {
+    time: 2.2,
+    state: closeRob.stateAt(2.2),
+    markers: closeRob.markerStateAt(2.2)
+});
+for (const time of [2.7, 2.4, 2.3, 2.25, 2.2, 2.15, 2.1]) {
+    assert.deepEqual(
+        closeCropped.markersAt(time),
+        closeRob.markersAt(time),
+        `Cropped interpolation changed at ${time}`
+    );
+    assert.equal(closeCropped.stateAt(time).head, closeRob.stateAt(time).head);
+}
+
+// 観測が増えて整数位置が変わった場合は、以前の補間を使って新しい更新を隠さない。
+const oldRob = createRobReplay(closeOps.slice(0, 1), 4);
+const additionalRob = createRobReplay(closeOps, 4, {
+    time: 2.2,
+    state: oldRob.stateAt(2.2),
+    markers: oldRob.markerStateAt(2.2)
+});
+assert.deepEqual(additionalRob.markersAt(2.2), closeRob.markersAt(2.2));
+
 require("../data/traces.js");
 assert.equal(globalThis.embeddedFlowTraces.length, 5);
 assert.ok(!globalThis.embeddedFlowTraces.some((t) => t.key === "pressure-release"));
@@ -796,6 +908,15 @@ for (const trace of globalThis.embeddedFlowTraces) {
             assert.equal(e.slot, (snapshot.head + i) % replay.capacity, `${trace.key}: contiguous FIFO`)
         );
         assert.equal(snapshot.tail, (snapshot.head + expected.length) % replay.capacity);
+        const markers = replay.markersAt(snapshot.time + 0.17);
+        for (const slot of Object.values(markers))
+            assert.ok(Number.isFinite(slot) && slot >= 0 && slot < replay.capacity, `${trace.key}: invalid ROB marker`);
+        if (replay.stateAt(snapshot.time + 0.4) === snapshot)
+            assert.deepEqual(
+                replay.markersAt(snapshot.time + 0.4),
+                { head: snapshot.head, tail: snapshot.tail },
+                `${trace.key}: ROB markers did not settle at the observed state`
+            );
     }
     const returns = memoryCompletions(ops);
     assert.equal(

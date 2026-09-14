@@ -176,6 +176,8 @@ type RobSnapshot<T> = {
     retired: number[];
     squashed: number[];
 };
+type RobMarkerMotion = { time: number; from: number; target: number };
+type RobMarkers = { head: RobMarkerMotion; tail: RobMarkerMotion };
 type FeedGroup = { time: number; start: number; count: number };
 type FeedState = {
     phase: "flow" | "notice" | "rewind" | "discard" | "refill";
@@ -208,7 +210,7 @@ type Broadcast = { producer: number; column: number | null; rows: (number | unde
 function createRobReplay<T extends RobOperation>(
     ops: readonly T[],
     capacity: number,
-    continuity?: { time: number; state: RobSnapshot<T> }
+    continuity?: { time: number; state: RobSnapshot<T>; markers?: RobMarkers }
 ) {
     const events = new Map<number, { allocate: T[] }>(),
         slots = new Map<number, number>();
@@ -226,6 +228,19 @@ function createRobReplay<T extends RobOperation>(
         tail = 0;
     const queue: QueueEntry<T>[] = [],
         snapshots: RobSnapshot<T>[] = [];
+    const headMotion: RobMarkerMotion[] = [{ time: -Infinity, from: 0, target: 0 }],
+        tailMotion: RobMarkerMotion[] = [{ time: -Infinity, from: 0, target: 0 }];
+    const markerDuration = 0.4;
+    function markerValue(motion: RobMarkerMotion, time: number) {
+        if (!Number.isFinite(motion.time) || time >= motion.time + markerDuration) return motion.target;
+        return motion.from + (motion.target - motion.from) * smooth((time - motion.time) / markerDuration);
+    }
+    function moveMarker(motions: RobMarkerMotion[], time: number, delta: number) {
+        if (!delta) return;
+        const previous = motions.at(-1)!;
+        // 更新後だけ補間する。循環前の値を保ち、squash は後退、連続更新は現在位置からつなぐ。
+        motions.push({ time, from: markerValue(previous, time), target: previous.target + delta });
+    }
     for (const time of [...events.keys()].sort((a, b) => a - b)) {
         const retired: number[] = [],
             squashed: number[] = [];
@@ -243,7 +258,8 @@ function createRobReplay<T extends RobOperation>(
         }
         if (queue.some((entry) => entry.op.end <= time)) throw new Error(`Trace is not FIFO at cycle ${time}.`);
         if (!queue.length) head = tail;
-        for (const op of events.get(time)!.allocate.sort((a, b) => a.id - b.id)) {
+        const allocated = events.get(time)!.allocate.sort((a, b) => a.id - b.id);
+        for (const op of allocated) {
             if (queue.length >= capacity) throw new Error(`ROB capacity exceeded at cycle ${time}.`);
             if (queue.length && queue.at(-1)!.op.id >= op.id)
                 throw new Error(`ROB allocation order regressed at cycle ${time}.`);
@@ -252,6 +268,8 @@ function createRobReplay<T extends RobOperation>(
             tail = (tail + 1) % capacity;
         }
         snapshots.push({ time, head, tail, entries: [...queue], retired, squashed });
+        moveMarker(headMotion, time, retired.length);
+        moveMarker(tailMotion, time, allocated.length - squashed.length);
     }
     const empty: RobSnapshot<T> = { time: -Infinity, head: 0, tail: 0, entries: [], retired: [], squashed: [] };
     function stateAt(time: number) {
@@ -263,6 +281,24 @@ function createRobReplay<T extends RobOperation>(
             else hi = mid;
         }
         return snapshots[lo - 1] ?? empty;
+    }
+    function markerAt(motions: RobMarkerMotion[], time: number) {
+        let lo = 0,
+            hi = motions.length;
+        while (lo < hi) {
+            const mid = (lo + hi) >>> 1;
+            if (motions[mid].time <= time) lo = mid + 1;
+            else hi = mid;
+        }
+        return motions[Math.max(0, lo - 1)];
+    }
+    function markerStateAt(time: number): RobMarkers {
+        return { head: markerAt(headMotion, time), tail: markerAt(tailMotion, time) };
+    }
+    function markersAt(time: number) {
+        const motion = markerStateAt(time);
+        const slot = (value: number) => ((value % capacity) + capacity) % capacity;
+        return { head: slot(markerValue(motion.head, time)), tail: slot(markerValue(motion.tail, time)) };
     }
     if (continuity) {
         const previous = continuity.state;
@@ -290,9 +326,30 @@ function createRobReplay<T extends RobOperation>(
                 snapshot.head = shift(snapshot.head);
                 snapshot.tail = shift(snapshot.tail);
             }
+            for (const motion of [...headMotion, ...tailMotion]) {
+                motion.from += offset;
+                motion.target += offset;
+            }
+        }
+        if (continuity.markers) {
+            const retainMotion = (motions: RobMarkerMotion[], previous: RobMarkerMotion) => {
+                const next = markerAt(motions, continuity.time);
+                const offset = next.target - previous.target;
+                // 窓から直前の終了命令が抜けても、同じ整数位置へ向かう補間だけを定数量で引き継ぐ。
+                if (!Number.isFinite(previous.time) || next.time > previous.time || offset % capacity !== 0) return;
+                const retained = { time: previous.time, from: previous.from + offset, target: next.target };
+                const index = motions.findIndex((motion) => motion.time >= retained.time);
+                const start = index < 0 ? motions.length : index;
+                if (motions[start]?.time === retained.time) motions[start] = retained;
+                else motions.splice(start, 0, retained);
+                for (let i = start + 1; i < motions.length; i++)
+                    motions[i].from = markerValue(motions[i - 1], motions[i].time);
+            };
+            retainMotion(headMotion, continuity.markers.head);
+            retainMotion(tailMotion, continuity.markers.tail);
         }
     }
-    return { capacity, slots, snapshots, stateAt };
+    return { capacity, slots, snapshots, stateAt, markersAt, markerStateAt };
 }
 
 function memoryCompletions<
@@ -1256,7 +1313,11 @@ function prepareTrace(trace: TraceData, continuity?: { at: number; replay: Repla
         ops,
         trace.structure.robCapacity,
         continuity?.replay.trace.structure.robCapacity === trace.structure.robCapacity
-            ? { time: continuity.at, state: continuity.replay.robReplay.stateAt(continuity.at) }
+            ? {
+                  time: continuity.at,
+                  state: continuity.replay.robReplay.stateAt(continuity.at),
+                  markers: continuity.replay.robReplay.markerStateAt(continuity.at)
+              }
             : undefined
     );
     for (const op of ops) op.robSlot = robReplay.slots.get(op.id);
