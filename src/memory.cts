@@ -35,6 +35,15 @@ type MemoryOperation = Pick<
     Operation,
     "memoryKind" | "stages" | "flush" | "unfinished" | "completion" | "issue" | "end"
 >;
+function recordedWaitStart(stages: Stage[]) {
+    // Onikiriが明示した応答待ちだけを使い、Cmなどから推定した待機と区別する。
+    return stages.find(
+        (stage) =>
+            stage.node === "memory-wait" &&
+            stage.names.length > 0 &&
+            stage.names.every((name) => name === "Xlm" || name === "Xlu")
+    )?.start;
+}
 function observeAccesses<T extends MemoryOperation>(ops: T[]) {
     const accesses = new Map<T, { start: number; end: number; stages: Stage[] }[]>();
     const minimum: Record<AccessKind, number | null> = { load: null, store: null };
@@ -69,8 +78,7 @@ function observeAccesses<T extends MemoryOperation>(ops: T[]) {
                 !group.stages[0].names.some((n) => n === "Is" || n === "X")
             )
                 continue;
-            const duration =
-                (group.stages.find((stage) => stage.node === "memory-wait")?.start ?? group.end) - group.start;
+            const duration = (recordedWaitStart(group.stages) ?? group.end) - group.start;
             if (duration > 0) minimum[kind] = Math.min(minimum[kind] ?? Infinity, duration);
         }
     }
@@ -122,7 +130,7 @@ function prepareMemory(ops: Operation[], trace: replayModel.Trace) {
         if (base == null) continue;
         for (const group of groups) {
             // 記録の段から明示した待機を、別区間の最短値で管路へ戻さない。
-            const untilWait = group.stages.find((stage) => stage.node === "memory-wait")?.start ?? group.end;
+            const untilWait = recordedWaitStart(group.stages) ?? group.end;
             const duration = Math.min(base, untilWait - group.start);
             const first = group.stages[0];
             const replacement: Stage[] = [

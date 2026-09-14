@@ -6,28 +6,40 @@ import type { BrowserWindow } from "electron";
 import type browserTest = require("./browser-test.cts");
 const { createBrowserTest, waitFor } = require("./load-test.cjs")("browser-test.cts") as typeof browserTest;
 
-function fixture() {
+function fixture(dense = false) {
     const events: { cycle: number; id: number; text: string }[] = [];
-    for (let id = 0; id < 160; id++) {
-        const fetch = id * 2;
+    for (let id = 0; id < (dense ? 1200 : 160); id++) {
+        const fetch = dense ? Math.floor(id / 16) : id * 2;
         const issue = fetch + (id % 7 === 0 ? 8 : 5);
         const memory = id % 50 === 0;
         const latency = memory ? (id === 50 ? 12 : 3) : 1;
         const label = memory ? "lw x1, 0(x2)" : id % 53 === 0 ? "sw x1, 0(x2)" : "add x1, x2, x3";
         events.push({ cycle: fetch, id, text: `I\t${id}\t${id}\t0\nL\t${id}\t0\t${label}` });
-        const stages = [
-            ["F", fetch, fetch + 1],
-            ["Rn", fetch + 1, fetch + 3],
-            ["Sc", fetch + 3, issue],
-            ["X", issue, issue + latency],
-            ["Rw", issue + latency, fetch + 21],
-            ["Cm", fetch + 21, fetch + 22]
-        ] as const;
+        const stages = dense
+            ? ([
+                  ["F", fetch, fetch + 80],
+                  ["Rn", fetch + 80, fetch + 81],
+                  ["Sr", fetch + 81, fetch + 82],
+                  ["rs", fetch + 82, fetch + 84],
+                  ["I", fetch + 84, fetch + 85],
+                  ["X", fetch + 85, fetch + 86],
+                  ["Wb", fetch + 86, fetch + 87],
+                  ["f", fetch + 87, fetch + 300],
+                  ["Cm", fetch + 300, fetch + 301]
+              ] as const)
+            : ([
+                  ["F", fetch, fetch + 1],
+                  ["Rn", fetch + 1, fetch + 3],
+                  ["Sc", fetch + 3, issue],
+                  ["X", issue, issue + latency],
+                  ["Rw", issue + latency, fetch + 21],
+                  ["Cm", fetch + 21, fetch + 22]
+              ] as const);
         for (const [name, start, end] of stages) {
             events.push({ cycle: start, id, text: `S\t${id}\t0\t${name}` });
             events.push({ cycle: end, id, text: `E\t${id}\t0\t${name}` });
         }
-        events.push({ cycle: fetch + 22, id, text: `R\t${id}\t${id}\t0` });
+        events.push({ cycle: fetch + (dense ? 301 : 22), id, text: `R\t${id}\t${id}\t0` });
     }
     events.sort((a, b) => a.cycle - b.cycle || a.id - b.id);
     const lines = ["Kanata\t0004", "C=\t0"];
@@ -183,6 +195,57 @@ async function reviewFilePlayback(window: BrowserWindow) {
     assert.ok(flush.disabled, "A preceding squash incorrectly enabled the next-event button");
     assert.equal(flush.markers, 0, "A context event created a marker outside the selected timeline");
     await evaluate(() => document.getElementById("file-close")!.click());
+    await evaluate((_page, text) => {
+        const data = new DataTransfer();
+        data.items.add(new File([text], "dense.kanata"));
+        document.dispatchEvent(new DragEvent("drop", { dataTransfer: data }));
+    }, fixture(true));
+    await ready();
+    await evaluate(({ sonata }) => sonata.setPlaying(true));
+    for (const fraction of [0.5, 0.25, 0.65]) {
+        const target = await evaluate(({ sonata }, fraction) => {
+            const input = document.getElementById("file-overview") as HTMLInputElement;
+            input.value = String(Number(input.min) + (Number(input.max) - Number(input.min)) * fraction);
+            input.dispatchEvent(new Event("input"));
+            input.dispatchEvent(new Event("change"));
+            return sonata.fileImport.view?.start;
+        }, fraction);
+        await waitFor(
+            async () =>
+                evaluate(
+                    ({ sonata }, previous) => !sonata.fileImport.selecting && sonata.trace.firstCycle !== previous,
+                    target
+                ),
+            "Dense global navigation did not settle",
+            {
+                diagnostics: () => evaluate(() => document.getElementById("import-status")!.textContent)
+            }
+        );
+        const position = await evaluate(({ sonata }) => {
+            return { cycle: sonata.cycle, playing: sonata.playing, count: sonata.particles.length };
+        });
+        assert.equal(position.playing, true, "Dense global navigation stopped playback");
+        assert.equal(position.count, 1200, "Dense navigation lost live instructions");
+        await waitFor(
+            async () => evaluate(({ sonata }, cycle) => sonata.cycle > cycle, position.cycle),
+            "Playback froze after dense global navigation"
+        );
+    }
+    await evaluate(({ sonata }) => {
+        sonata.setPlaying(false);
+        sonata.setCamera("plan");
+        document.getElementById("zoom-fit")!.click();
+    });
+    assert.ok(await evaluate(({ sonata }) => sonata.camera.targetRadius > 33), "Fit ignored the expanded board");
+    assert.equal(await evaluate(({ sonata }) => sonata.renderer.error), 0);
+    await evaluate(() => document.getElementById("file-close")!.click());
+    assert.equal(await evaluate(({ sonata }) => sonata.camera.targetRadius), 33, "Fit did not return to the demo size");
+    const zoom = await evaluate(({ sonata }) => {
+        document.getElementById("zoom-in")!.click();
+        return sonata.camera.targetRadius;
+    });
+    await evaluate(({ sonata }) => sonata.loadTrace("rename-rush"));
+    assert.equal(await evaluate(({ sonata }) => sonata.camera.targetRadius), zoom, "A rebuild discarded manual zoom");
     return rows;
 }
 export = reviewFilePlayback;

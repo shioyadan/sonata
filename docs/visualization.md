@@ -174,3 +174,5 @@ gem5 の **Rename rush / x86 recovery** は `O3CPUAll` に実際に出力され�
 予測ミスした分岐自身は younger wrong-path と一緒に消しません。RSD の記録された分岐 #4454 は 4068 cycle の flush 後も ROB に残り、紫の印と `MISPREDICT #4454 / ROB · PRESERVED` が位置を示します。gem5 では squash 群の直前の命令が実行済みかつ生存している分岐の場合に限り、`RECOVERY BRANCH ≈` として候補を示します。原因の確定情報ではありません。実際に commit すると印も出口に追従して消えます。
 
 描画検証時の画像は `artifacts/screenshots/` に保存します。状態は `sonata.dependencyMatrix`、`sonata.registers`、`sonata.registerReads`、`sonata.registerReadCells`、`sonata.registerAllocationCells`、`sonata.renameMapWords`、`sonata.issuePaths`、`sonata.registerLayout`、`sonata.recoveryBranches` で確認できます。検査では行とスケジューラ占有数の一致、共有 producer 列、RSD のロードのソース数、未知の依存を勝手に解決しないこと、writeback と flush 復元、分岐自身の ROB 残存も確認します。
+
+任意ログの高密度表示では命令の半径を維持し、ROBの列数と前段の格子を増やします。schedulerの表示行数には補間中の予約席も含みます。依存未観測で128行を超える場合は横並びのバンクとし、架空の依存行列は補いません。基板と入力経路も追従し、Fitで広がった構造全体を見られます。

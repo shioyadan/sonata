@@ -23,7 +23,7 @@ type Options = {
     storeClock?: StoreClock | null;
     storeWaits?: readonly StoreWait[];
 };
-const limits = { operations: 16384, stages: 131072, cycles: 512, active: 512, queue: 128, rob: 224, width: 32 };
+const limits = { operations: 16384, stages: 131072, cycles: 512, active: 2048, queue: 256, rob: 2048, width: 32 };
 type ExecutionKind = "integer" | "memory" | "branch";
 interface StructureProfile {
     detected: DetectedStageStructure | null;

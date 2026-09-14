@@ -167,6 +167,7 @@ function start(gl: WebGL2RenderingContext) {
         viewport: gpu,
         world: $("world"),
         autoCamera: $("auto-camera"),
+        sceneBounds: scene.layoutBounds,
         onPick(x, y) {
             const closest = activity.visibleParticles
                 .map((p) => ({ p, d: Math.hypot(p.screen[0] - x, p.screen[1] - y) }))
@@ -212,6 +213,7 @@ function start(gl: WebGL2RenderingContext) {
     function rebuildWorld(reuse = false) {
         const previous = scene.worldBuildCount();
         paths.setGround(scene.buildWorld(reuse));
+        camera.fitLayout();
         activity.reset();
         if (scene.worldBuildCount() !== previous) renderer.buildMaterialShadow();
     }
@@ -251,6 +253,7 @@ function start(gl: WebGL2RenderingContext) {
             }
             option.textContent = trace.label;
             applyTrace(sameThread);
+            if (!sameThread) camera.setCamera(camera.cameraMode);
             session.cycle = clamp(position.cycle, trace.firstCycle, trace.lastCycle);
             session.selectedID = replay.ops.some((op) => op.id === position.selectedID) ? position.selectedID : null;
             render();

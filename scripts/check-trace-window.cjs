@@ -655,7 +655,7 @@ const dense = Array.from({ length: limits.active + 1 }, (_, id) =>
     ])
 );
 assert.throws(() => convert(dense), /simultaneous instructions/);
-const fullRob = Array.from({ length: limits.rob + 1 }, (_, id) => {
+const fullRob = Array.from({ length: 225 }, (_, id) => {
     const allocation = id * 0.05 + 0.2,
         issue = id === 0 ? 25 : allocation + 0.1,
         end = 50 + id * 0.05;
@@ -667,7 +667,15 @@ const fullRob = Array.from({ length: limits.rob + 1 }, (_, id) => {
         ["Cm", end - 1, end]
     ]);
 });
-assert.throws(() => convert(fullRob), /ROB requires 232 entries/);
+// 同時表示上限とは独立にROB容量の拒否を検査し、通常上限では受け入れる。
+const robLimit = limits.rob;
+try {
+    limits.rob = 224;
+    assert.throws(() => convert(fullRob), /ROB requires 232 entries/);
+} finally {
+    limits.rob = robLimit;
+}
+assert.equal(convert(fullRob).structure.robCapacity, 232);
 // 保存順を逆転・重複させても、Coreの2passへはID順で同じ標本を渡す。
 const profiles = createProfiles(),
     profileOps = new Map();

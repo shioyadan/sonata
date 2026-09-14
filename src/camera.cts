@@ -16,11 +16,13 @@ function createCamera({
     viewport,
     world,
     autoCamera,
+    sceneBounds,
     onPick
 }: {
     viewport: Viewport;
     world: HTMLElement;
     autoCamera: HTMLElement;
+    sceneBounds?: () => { left: number; right: number; back: number; front: number };
     onPick(x: number, y: number): void;
 }) {
     const camera = {
@@ -31,6 +33,7 @@ function createCamera({
         targetAzimuth: 0.2,
         targetElevation: 0.73,
         targetRadius: 32.5,
+        maxCameraRadius: 62,
         focus: [0, 0, 0] as Vec3,
         targetFocus: [0, 0, 0] as Vec3,
         autoOrbit: true,
@@ -38,8 +41,11 @@ function createCamera({
         viewProjection: new Float32Array(16),
         eye: [0, 20, 30] as Vec3
     };
-    const minCameraRadius = 3,
-        maxCameraRadius = 62;
+    const minCameraRadius = 3;
+    let fitted: string | null = null;
+    let fittedBounds: string | undefined;
+    const targetState = () =>
+        JSON.stringify([camera.targetAzimuth, camera.targetElevation, camera.targetRadius, camera.targetFocus]);
     function project(p: Vec3): Vec3 {
         const m = camera.viewProjection;
         const w = m[3] * p[0] + m[7] * p[1] + m[11] * p[2] + m[15];
@@ -68,10 +74,29 @@ function createCamera({
             camera.targetAzimuth = 0.2;
             camera.targetRadius = 32.5;
         }
+        // 大きい観測容量で基板が広がった場合も、Fitで全体へ戻れるようにする。
+        camera.maxCameraRadius = 62;
+        const bounds = sceneBounds?.();
+        if (bounds) {
+            const scale = Math.max(1, (bounds.right - bounds.left) / 29.4, (bounds.front - bounds.back) / 15);
+            if (scale > 1.001) {
+                camera.targetFocus = [(bounds.left + bounds.right) / 2, 0, (bounds.back + bounds.front) / 2];
+                camera.targetRadius *= scale;
+                camera.maxCameraRadius *= scale;
+            }
+        }
         document
             .querySelectorAll<HTMLButtonElement>("[data-view]")
             .forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.view === mode)));
+        fitted = targetState();
+        fittedBounds = JSON.stringify(bounds);
         viewport.resize();
+    }
+
+    function fitLayout() {
+        // Fit後に利用者が回転・拡大・平行移動していなければ、構造の拡大にも追従する。
+        if (fitted !== null && fitted === targetState() && fittedBounds !== JSON.stringify(sceneBounds?.()))
+            setCamera(camera.cameraMode);
     }
 
     function toggleAuto(value = !camera.autoOrbit) {
@@ -134,7 +159,7 @@ function createCamera({
             camera.targetRadius = clamp(
                 (oldRadius * pinch!.distance) / next.distance,
                 minCameraRadius,
-                maxCameraRadius
+                camera.maxCameraRadius
             );
             const scale = camera.targetRadius / oldRadius,
                 units =
@@ -155,7 +180,7 @@ function createCamera({
                 camera.targetRadius = clamp(
                     camera.targetRadius * Math.exp(dy * 0.008),
                     minCameraRadius,
-                    maxCameraRadius
+                    camera.maxCameraRadius
                 );
             else {
                 camera.targetAzimuth -= dx * 0.006;
@@ -185,7 +210,7 @@ function createCamera({
             camera.targetRadius = clamp(
                 camera.targetRadius * Math.exp(event.deltaY * 0.001),
                 minCameraRadius,
-                maxCameraRadius
+                camera.maxCameraRadius
             );
         },
         { passive: false }
@@ -218,11 +243,11 @@ function createCamera({
     return Object.assign(camera, {
         project,
         setCamera,
+        fitLayout,
         toggleAuto,
         update,
         pointers,
-        minCameraRadius,
-        maxCameraRadius
+        minCameraRadius
     });
 }
 

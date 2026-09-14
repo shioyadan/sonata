@@ -1130,6 +1130,7 @@ app.whenReady()
     })
     .catch((error) => {
         console.error(error);
+        if (errors.length) console.error("Renderer errors:", errors);
         fs.rmSync(isolated, { recursive: true, force: true });
         app.exit(1);
     });

@@ -4,7 +4,7 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs"),
     vm = require("node:vm");
 const { createReplay, createRobReplay, createWaitPlayback, createEmptyPlayback } = require("../src/replay-model.cts");
-const { instructionType } = require("../src/memory.cts");
+const { instructionType, observedMinimum } = require("../src/memory.cts");
 const { createScene, styles } = require("../src/scene.cts");
 const { createPaths } = require("../src/geometry.cts");
 const data = {};
@@ -237,6 +237,30 @@ function waitFixture(label, stages, completion, end = 200) {
     };
     const replay = createReplay({ samples: [source] }).loadTrace(source.key);
     return { source, replay, target: createWaitPlayback(source, replay.ops) };
+}
+// 推定した待機開始でアクセス基準を短縮しない。明示されたOnikiriのミス待ちだけを保護する。
+for (const [name, minimum, pipeEnd] of [
+    ["Cm", 115, 8],
+    ["Rw", 115, 8],
+    ["Xlm", 1, 6],
+    ["Xlu", 1, 6]
+]) {
+    const waiting = waitFixture(
+        "ldr x0, [x1]",
+        [
+            ["F", "front-0", 0, 4],
+            ["I", "issue", 4, 5],
+            ["X", "exec-memory", 5, 6],
+            [name, "memory-wait", 6, 120]
+        ],
+        120
+    );
+    assert.equal(observedMinimum(waiting.source.ops).load, minimum, `${name}: incorrect access reference`);
+    assert.equal(
+        waiting.replay.ops[0].stages.find((stage) => stage.node === "exec-load").end,
+        pipeEnd,
+        `${name}: inferred and recorded wait starts were confused`
+    );
 }
 const loadWait = waitFixture(
     "ldr x0, [x1]",
