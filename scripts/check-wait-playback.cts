@@ -241,6 +241,19 @@ async function reviewWaitPlayback(window: BrowserWindow) {
             "Acceleration changed the recorded stages or times"
         );
 
+        // 長い待機の途中へシークし、残りが16cycle未満でも静止が続く区間を確かめる。
+        await playAt(96);
+        await until(
+            (s) => s.status!.includes("Fast-forwarding wait") && s.cycle < 106,
+            "Seeking into a shorter stationary wait did not accelerate"
+        );
+        await until(
+            (s) => s.cycle >= 106 && !s.status!.includes("Fast-forwarding wait"),
+            "The shorter wait did not restore normal speed before the next fetch"
+        );
+        await evaluate(({ sonata }) => sonata.setPlaying(false));
+        assert.ok((await state()).cycle < 108, "The shorter wait skipped the next fetch");
+
         await playAt(8);
         await until((s) => s.status!.includes("Fast-forwarding wait"), "The repeated wait did not accelerate");
         await toggle("file-speed-waits", false);
@@ -358,6 +371,7 @@ async function reviewWaitPlayback(window: BrowserWindow) {
         return {
             incrementalWait: true,
             fetchWait: true,
+            shorterWait: true,
             nextEvent: true,
             offAndPause: true,
             loop: true,

@@ -58,6 +58,7 @@ function createTraceImport({
     let fastWait = false;
     let skipNotice = "";
     let noticeUntil = 0;
+    const accelerationDelay = 0.15;
 
     function resetAcceleration() {
         emptySeconds = 0;
@@ -273,7 +274,7 @@ function createTraceImport({
                 : null;
         const target = empty === null || Math.min(empty, safeUntil) - cycle < 16 ? null : Math.min(empty, safeUntil);
         emptySeconds = target === null ? 0 : emptySeconds + seconds;
-        if (target !== null && emptySeconds >= 0.35) {
+        if (target !== null && emptySeconds >= accelerationDelay) {
             const destination = Math.min(target, source.lastCycle);
             if (destination <= displayed.end) {
                 describeSkip(read().cycle, destination);
@@ -303,7 +304,7 @@ function createTraceImport({
             waitUntil = target === null ? null : Math.min(target, safeUntil);
             waitSeconds = waitUntil === null ? 0 : waitSeconds + seconds;
         }
-        const accelerating = waitUntil !== null && waitSeconds >= 0.35;
+        const accelerating = waitUntil !== null && waitSeconds >= accelerationDelay;
         showFastWait(accelerating);
         if (accelerating) {
             // 加速分で次の窓の未確認イベントを通り過ぎない。
