@@ -3,7 +3,7 @@
 const assert = require("node:assert/strict");
 const fs = require("node:fs"),
     vm = require("node:vm");
-const { createReplay, createRobReplay } = require("../src/replay-model.cts");
+const { createReplay, createRobReplay, createWaitPlayback, createEmptyPlayback } = require("../src/replay-model.cts");
 const { instructionType } = require("../src/memory.cts");
 const { createScene, styles } = require("../src/scene.cts");
 const { createPaths } = require("../src/geometry.cts");
@@ -214,6 +214,92 @@ for (const label of ["str x0, [x1]", "amoadd.w x0, x1, (x2)"]) {
             .detail.includes("LATENCY ?")
     );
 }
+// 実際の prepareMemory を経由し、短い通過と長い待機を加速判定でも区別する。
+function waitFixture(label, stages, completion, end = 200) {
+    const source = {
+        ...trace,
+        lastCycle: end,
+        ops: [operation(1, label, completion, { stages, end })],
+        demo: { ...trace.demo, events: [] },
+        storeCompletions: undefined,
+        displayProfile: { memoryMinimum: { load: 3, store: 1 }, memoryKinds: ["load", "store"] }
+    };
+    const replay = createReplay({ samples: [source] }).loadTrace(source.key);
+    return { source, replay, target: createWaitPlayback(source, replay.ops) };
+}
+const loadWait = waitFixture(
+    "ldr x0, [x1]",
+    [
+        ["F", "front-0", 0, 4],
+        ["Is", "issue", 4, 5],
+        ["X", "exec-memory", 5, 8],
+        ["Ma", "memory-wait", 8, 70],
+        ["Mc", "exec-memory", 70, 120]
+    ],
+    120
+);
+assert.deepEqual(
+    loadWait.replay.ops[0].stages.slice(2).map(({ node, start, end }) => [node, start, end]),
+    [
+        ["exec-load", 5, 8],
+        ["memory-wait", 8, 120],
+        ["rob", 120, 200]
+    ]
+);
+assert.equal(loadWait.target(6), null, "The short LOAD pipe traversal must retain normal speed");
+assert.equal(loadWait.target(14), 68, "LOAD WAIT must accelerate up to the next recorded Mc boundary");
+assert.equal(loadWait.target(70), null, "A raw transition hidden by display grouping still changes state");
+assert.equal(loadWait.target(75.999), null);
+assert.equal(loadWait.target(76), 118);
+assert.equal(loadWait.target(120), null, "Recorded completion must return to normal speed");
+assert.equal(loadWait.target(126), 198);
+assert.equal(createEmptyPlayback(loadWait.source)(14), null, "LOAD WAIT must not become an empty interval");
+assert.equal(createWaitPlayback(loadWait.source)(76), null, "Without prepared stages, execution remains conservative");
+const loadWithGap = structuredClone(loadWait.source);
+loadWithGap.ops[0][6] = loadWithGap.ops[0][6].filter(([name]) => name !== "Ma");
+const gapReplay = createReplay({ samples: [loadWithGap] }).loadTrace(loadWithGap.key);
+assert.equal(
+    createWaitPlayback(loadWithGap, gapReplay.ops)(20),
+    null,
+    "Display grouping must not fabricate waiting across a gap in raw observations"
+);
+for (const change of ["missing", "unfinished", "unknown"]) {
+    const source = structuredClone(loadWait.source);
+    if (change === "missing") source.ops[0][6] = [];
+    if (change === "unfinished") source.ops[0][12] = true;
+    if (change === "unknown") source.ops[0][6][3][1] = "unknown";
+    const replay = createReplay({ samples: [source] }).loadTrace(source.key);
+    assert.equal(
+        createWaitPlayback(source, replay.ops)(20),
+        null,
+        `${change} observations must block wait acceleration`
+    );
+}
+const retryWait = waitFixture(
+    "sw x1, 0(x2)",
+    [
+        ["F", "front-0", 0, 4],
+        ["Is", "issue", 4, 5],
+        ["X", "exec-memory", 5, 6],
+        ["Rw", "memory-wait", 6, 100],
+        ["Is", "issue", 100, 101],
+        ["Rr", "register-read", 101, 130],
+        ["X", "exec-memory", 130, 131],
+        ["Rw", "memory-wait", 131, 180]
+    ],
+    180,
+    240
+);
+assert.equal(retryWait.replay.ops[0].stages.find((stage) => stage.start === 6).node, "rob");
+assert.equal(retryWait.target(12), 98, "A STORE waiting in ROB must return to normal before retry issue");
+assert.equal(retryWait.target(100), null);
+assert.equal(retryWait.target(110), null, "A retry's register read remains visible even when long");
+assert.equal(retryWait.target(130.5), null, "A retried STORE must traverse its pipe at normal speed");
+assert.equal(retryWait.target(137), 178);
+assert.equal(retryWait.target(180), null);
+assert.equal(retryWait.target(186), 238);
+console.log("memory wait playback: prepared LOAD/ROB waits, raw transitions, retry reads and unknown intervals");
+
 for (const sample of samples) {
     const before = JSON.stringify(sample),
         { replay, scene, paths } = setup(sample);

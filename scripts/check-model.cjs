@@ -381,6 +381,63 @@ const missWait = createWaitPlayback(
 );
 assert.equal(missWait(56), 98, "A recorded event's wait may accelerate between its visible start and end");
 assert.equal(missWait(106), 198);
+// 元命令が窓外へ出た後や直接シークした場合も、各書込み完了の手前で通常速度へ戻す。
+const carriedStores = emptyTrace([], {
+    firstCycle: 128,
+    lastCycle: 256,
+    emptyTailUntil: 500,
+    storeWaits: [
+        [1, 0, 10, 200],
+        [2, 20, 30, 400]
+    ]
+});
+const carriedStoreWait = createWaitPlayback(carriedStores);
+assert.equal(carriedStoreWait(128), 198);
+assert.equal(carriedStoreWait(160), 198, "Seeking into a write wait must retain the nearest completion");
+assert.equal(carriedStoreWait(200), null);
+assert.equal(carriedStoreWait(205.999), null, "Every write completion keeps its full animation margin");
+assert.equal(carriedStoreWait(206), 398, "One completed store must not hide another store's remaining wait");
+assert.equal(carriedStoreWait(398), null);
+assert.equal(carriedStoreWait(406), null, "Completed stores must not invent a later wait");
+assert.equal(createEmptyPlayback(carriedStores)(128), null, "A carried store wait is not empty");
+assert.equal(createEmptyPlayback(carriedStores)(206), null);
+assert.equal(createEmptyPlayback(carriedStores)(406), 500);
+const boundedStore = { ...carriedStores, emptyTailUntil: undefined };
+assert.equal(createWaitPlayback(boundedStore)(206), 256, "Store waits must respect the confirmed window horizon");
+assert.equal(
+    createWaitPlayback({ ...carriedStores, feedPreview: [{ id: 3, fetch: 250 }] })(206),
+    248,
+    "An out-of-window write wait must stop before an unknown future instruction"
+);
+const upcomingStore = emptyTrace([], { storeWaits: [[1, 100, 150, 200]] });
+assert.equal(createWaitPlayback(upcomingStore)(20), null, "A future store must not create a present wait");
+assert.equal(createWaitPlayback(upcomingStore)(140), null, "Write waiting begins at recorded retirement");
+assert.equal(createWaitPlayback(upcomingStore)(156), 198);
+assert.equal(createEmptyPlayback(upcomingStore)(20), 98);
+const legacyStoreOp = waitOp(1, 0, 20);
+legacyStoreOp[5] = "str x0, [x1]";
+const legacyStore = emptyTrace([legacyStoreOp], { storeCompletions: [[1, 200]], lastCycle: 250 });
+assert.equal(createWaitPlayback(legacyStore)(26), 198, "Recorded legacy store completions retain write waits");
+assert.equal(createEmptyPlayback(legacyStore)(26), null);
+for (const [field, value] of [
+    [4, 1],
+    [12, true],
+    [5, "amoadd.w x0, x1, (x2)"]
+]) {
+    const op = [...legacyStoreOp];
+    op[field] = value;
+    assert.equal(
+        createWaitPlayback({ ...legacyStore, ops: [op] })(26),
+        null,
+        "Squashed, unfinished and atomic instructions must not invent post-retirement write waits"
+    );
+}
+assert.equal(
+    createWaitPlayback(emptyTrace([], { storeCompletions: [[1, 100]] }))(20),
+    null,
+    "An orphan legacy completion is an event, not evidence of a preceding wait"
+);
+
 console.log("wait playback: stationary stages, observed transitions, unknown intervals and independent empty mode");
 
 // 滞在時間や同一実行モジュール内の重複区間ではなく、境界の通過を数える。

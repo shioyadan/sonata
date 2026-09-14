@@ -120,6 +120,8 @@ interface TraceData {
     parser: string;
     ops: CompactOperation[];
     storeCompletions?: [number, number][];
+    // 観測したコミット後の書込み待ち。元命令が表示窓の外でも境界を保持する。
+    storeWaits?: [id: number, fetch: number, start: number, end: number][];
     feedPreview?: Pick<FeedInstruction, "id" | "fetch" | "label" | "kind">[];
     // 現在窓の後に追加 fetch がないと確認できた末端。省略時は窓外を推測しない。
     emptyTailUntil?: number;
@@ -392,6 +394,18 @@ function createPlaybackGaps(trace: TraceData, busy: [number, number][]): (cycle:
     };
 }
 
+function recordedStoreWaits(trace: TraceData) {
+    if (trace.storeWaits) return trace.storeWaits;
+    const completions = new Map(trace.storeCompletions ?? []);
+    // 古いデモ形式からは、通常ストアに明示された書込み完了だけを採用する。
+    return trace.ops.flatMap((op): NonNullable<TraceData["storeWaits"]> => {
+        const end = completions.get(op[0]);
+        return !op[4] && !op[12] && memoryModel.instructionType(op[5]) === "store" && end != null && end > op[3]
+            ? [[op[0], op[2], op[3], end]]
+            : [];
+    });
+}
+
 function createEmptyPlayback(trace: TraceData): (cycle: number) => number | null {
     const busy: [number, number][] = [],
         storeTimes = new Map(trace.storeCompletions ?? []);
@@ -400,16 +414,23 @@ function createEmptyPlayback(trace: TraceData): (cycle: number) => number | null
         const end = op[12] ? Infinity : op[4] ? (op[11] ?? op[3]) : op[3];
         busy.push([op[2], Math.max(end, storeTimes.get(op[0]) ?? end)]);
     }
+    for (const [, fetch, , end] of recordedStoreWaits(trace)) busy.push([fetch, end]);
     for (const event of trace.demo.events ?? []) busy.push([event.cycle, event.endCycle ?? event.cycle]);
     return createPlaybackGaps(trace, busy);
 }
 
-function createWaitPlayback(trace: TraceData): (cycle: number) => number | null {
+function createWaitPlayback(
+    trace: TraceData,
+    prepared?: readonly Pick<Instruction, "id" | "stages">[]
+): (cycle: number) => number | null {
     const busy: [number, number][] = [],
-        waiting: [number, number][] = [];
+        waiting: [number, number][] = [],
+        displayStages = new Map(prepared?.map((op) => [op.id, op.stages]));
     const protect = (time: number | null | undefined) => {
         if (time != null && Number.isFinite(time)) busy.push([time, time]);
     };
+    const stationary = (node: string) =>
+        node.startsWith("front-") || node === "issue" || node === "rob" || node === "memory-wait";
     for (const op of trace.ops) {
         const fetch = op[2],
             end = op[4] ? (op[11] ?? op[3]) : op[3];
@@ -429,14 +450,36 @@ function createWaitPlayback(trace: TraceData): (cycle: number) => number | null 
         protect(end);
         for (const time of [op[7], op[8], op[9]]) protect(time);
         let covered = fetch;
-        for (const [, node, rawStart, rawEnd] of [...op[6]].sort((a, b) => a[2] - b[2])) {
+        // 表示用にまとめた段だけでは、元の Mc 等の変化や観測の欠落が消えてしまう。
+        for (const [, , rawStart, rawEnd] of [...op[6]].sort((a, b) => a[2] - b[2])) {
             const start = Math.max(fetch, rawStart),
                 stop = Math.min(end, rawEnd);
             if (stop < start) continue;
             if (start > covered) busy.push([covered, start]);
             protect(start);
             protect(stop);
-            if (node.startsWith("front-") || node === "issue" || node === "rob" || node === "memory-wait") {
+            covered = Math.max(covered, stop);
+        }
+        if (covered < end) busy.push([covered, end]);
+        const stages = displayStages.get(op[0]) ?? op[6].map(([, node, start, end]) => ({ node, start, end }));
+        if (
+            !stages.length ||
+            stages.some(
+                (stage) => !Number.isFinite(stage.start) || !Number.isFinite(stage.end) || stage.end < stage.start
+            )
+        ) {
+            busy.push([fetch, end]);
+            continue;
+        }
+        covered = fetch;
+        for (const { node, start: rawStart, end: rawEnd } of [...stages].sort((a, b) => a.start - b.start)) {
+            const start = Math.max(fetch, rawStart),
+                stop = Math.min(end, rawEnd);
+            if (stop < start) continue;
+            if (start > covered) busy.push([covered, start]);
+            protect(start);
+            protect(stop);
+            if (stationary(node)) {
                 waiting.push([start, stop]);
             } else {
                 // 実行・レジスタ読出し・未知のノードは区間全体の移動を保つ。
@@ -445,6 +488,13 @@ function createWaitPlayback(trace: TraceData): (cycle: number) => number | null 
             covered = Math.max(covered, stop);
         }
         if (covered < end) busy.push([covered, end]);
+    }
+    for (const [, fetch, start, end] of recordedStoreWaits(trace)) {
+        protect(fetch);
+        protect(start);
+        protect(end);
+        if (Number.isFinite(fetch) && Number.isFinite(start) && Number.isFinite(end) && start >= fetch && end > start)
+            waiting.push([start, end]);
     }
     for (const op of trace.evidence?.scheduling?.ops ?? []) {
         for (const dependency of op.dependencies) protect(dependency.ready);
