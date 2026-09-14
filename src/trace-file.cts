@@ -106,10 +106,9 @@ function checkAbort(signal: AbortSignal) {
 // ページ復元の速さに依存せず、操作要求とParserへ短い間隔で制御を返す。
 // 通常の命令ごとにはPromiseを作らず、実際にyieldする時だけ待つ。
 function createScanYield(signal: AbortSignal) {
-    let visited = 0,
-        started = performance.now();
+    let started = performance.now();
     return () => {
-        if (++visited % 128 !== 0 && performance.now() - started < 8) return;
+        if (performance.now() - started < 8) return;
         return yieldTask().then(() => {
             checkAbort(signal);
             started = performance.now();

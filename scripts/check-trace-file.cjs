@@ -393,24 +393,32 @@ async function checkSearch() {
     ])
         await assert.rejects(search(kind, query), /Invalid trace search/);
 
-    // 検索を長く走らせても、最初の短いCPU区間で中断できる。
-    let scanned = 0;
-    const abort = new AbortController();
-    const searching = searchOps(
-        {
-            getOpForScan(id) {
-                scanned++;
-                return ops.get(id);
-            }
-        },
-        index.searchSnapshot(),
-        { type: "search", request: 1, kind: "text", query: "missing", thread: 0 },
-        "onikiri",
-        abort.signal
-    );
-    abort.abort();
-    await assert.rejects(searching, { name: "AbortError" });
-    assert.ok(scanned <= 128, `Search did not yield promptly (${scanned} operations)`);
+    // 重いpage復元が8msを超えた時点で検索も中断できる。
+    const originalNow = performance.now;
+    let elapsed = 0,
+        scanned = 0;
+    performance.now = () => elapsed;
+    try {
+        const abort = new AbortController();
+        const searching = searchOps(
+            {
+                getOpForScan(id) {
+                    scanned++;
+                    elapsed += 9;
+                    return ops.get(id);
+                }
+            },
+            index.searchSnapshot(),
+            { type: "search", request: 1, kind: "text", query: "missing", thread: 0 },
+            "onikiri",
+            abort.signal
+        );
+        abort.abort();
+        await assert.rejects(searching, { name: "AbortError" });
+        assert.equal(scanned, 1, "Search did not yield after an expensive page read");
+    } finally {
+        performance.now = originalNow;
+    }
     const snapshot = index.searchSnapshot(2998);
     add(2_000_000_000);
     const captured = await searchOps(
@@ -547,7 +555,7 @@ function kanataOp(id, end = true) {
 }
 const request = (id, cycle = 0) => ({ type: "window", request: id, cycle, span: 16, thread: 0 });
 
-// 件数・経過時間のどちらでも同じblockの途中で制御を返す。実時間の速度には依存しない。
+// 安価な走査は件数だけで止めず、重いpageでは同じblockの途中で制御を返す。
 async function checkScanCancellation() {
     const blocks = [
         { firstID: 0, lastID: 1023, firstCycle: 0, lastCycle: 2048, ids: new Uint32Array(32).fill(0xffffffff) }
@@ -555,7 +563,7 @@ async function checkScanCancellation() {
     for (const byTime of [false, true]) {
         const originalNow = performance.now;
         let elapsed = 0;
-        if (byTime) performance.now = () => elapsed;
+        performance.now = () => elapsed;
         try {
             for (const preview of [false, true]) {
                 const controller = new AbortController();
@@ -579,14 +587,19 @@ async function checkScanCancellation() {
                 const selecting = preview
                     ? selectPreview(trace, blocks, 0, 2048, 0, controller.signal)
                     : selectOps(trace, blocks, 0, 2048, 0, controller.signal);
-                const rejection = assert.rejects(selecting, { name: "AbortError" });
-                controller.abort();
-                await rejection;
-                assert.ok(
-                    reads <= (byTime ? 1 : 128),
-                    `${preview ? "Preview" : "Window"} did not yield within its scan budget (${reads} reads)`
-                );
-                assert.ok(reads > 0, "The cancellation fixture did not start a scan");
+                if (byTime) {
+                    const rejection = assert.rejects(selecting, { name: "AbortError" });
+                    controller.abort();
+                    await rejection;
+                    assert.equal(
+                        reads,
+                        1,
+                        `${preview ? "Preview" : "Window"} did not yield after an expensive page read`
+                    );
+                } else {
+                    assert.equal(reads, 1024, "A cheap scan yielded solely because of its instruction count");
+                    await selecting;
+                }
             }
         } finally {
             performance.now = originalNow;
@@ -602,23 +615,30 @@ async function checkWindowCancellation() {
     const opening = session.open(input);
     try {
         await box.wait((message) => message.type === "loaded" && message.source.opCount === 512);
-        const first = session.window(request(100));
-        const canceledFirst = assert.rejects(first, { name: "AbortError" });
-        session.cancelWindow();
-        await canceledFirst;
-        assert.ok(!box.messages.some((message) => message.type === "window" && message.request === 100));
+        const originalNow = performance.now;
+        let elapsed = 0;
+        performance.now = () => ++elapsed;
+        try {
+            const first = session.window(request(100));
+            const canceledFirst = assert.rejects(first, { name: "AbortError" });
+            session.cancelWindow();
+            await canceledFirst;
+            assert.ok(!box.messages.some((message) => message.type === "window" && message.request === 100));
 
-        const old = session.window(request(101));
-        const oldRejected = assert.rejects(old, { name: "AbortError" });
-        const latest = session.window(request(102, 200));
-        const latestRejected = assert.rejects(latest, { name: "AbortError" });
-        await oldRejected;
-        session.cancelWindow();
-        await latestRejected;
-        assert.ok(
-            !box.messages.some((message) => message.type === "window"),
-            "A canceled window emitted an old result"
-        );
+            const old = session.window(request(101));
+            const oldRejected = assert.rejects(old, { name: "AbortError" });
+            const latest = session.window(request(102, 200));
+            const latestRejected = assert.rejects(latest, { name: "AbortError" });
+            await oldRejected;
+            session.cancelWindow();
+            await latestRejected;
+            assert.ok(
+                !box.messages.some((message) => message.type === "window"),
+                "A canceled window emitted an old result"
+            );
+        } finally {
+            performance.now = originalNow;
+        }
 
         // 旧要求の終了後も新しいcontrollerを保持し、Parserと別の操作は使い続けられる。
         await session.window(request(103, 400));
@@ -846,37 +866,51 @@ async function checkFileStructure() {
 }
 
 async function checkConcurrentIndex() {
-    const index = createTraceIndex(),
-        ops = new Map();
-    const add = (id) => {
-        const op = {
-            id,
-            tid: 0,
-            fetchedCycle: 0,
-            retiredCycle: 5,
-            retired: true,
-            flush: false,
-            labelName: `original ${id}`,
-            lanes: []
+    const originalNow = performance.now;
+    let elapsed = 0;
+    performance.now = () => ++elapsed;
+    try {
+        const index = createTraceIndex(),
+            ops = new Map();
+        const add = (id) => {
+            const op = {
+                id,
+                tid: 0,
+                fetchedCycle: 0,
+                retiredCycle: 5,
+                retired: true,
+                flush: false,
+                labelName: `original ${id}`,
+                lanes: []
+            };
+            ops.set(id, op);
+            index.observe(op);
         };
-        ops.set(id, op);
-        index.observe(op);
-    };
-    // 疎な129命令で命令数によるyieldを跨ぎ、後続blockのIDも固定されることを確認する。
-    for (let block = 0; block < 129; block++) add(block * 1024);
-    const snapshot = index.snapshot(0, 5);
-    const selecting = selectOps({ getOpForScan: (id) => ops.get(id) }, snapshot, 0, 5, 0, new AbortController().signal);
-    ops.get(0).labelName = "updated by parser";
-    add(128 * 1024 + 1);
-    add(129 * 1024);
-    const selected = await selecting;
-    assert.equal(selected.length, 129, "Parser writes expanded an in-flight window's ID snapshot");
-    assert.equal(selected[0].labelName, "original 0", "Parser mutation changed an already selected operation");
-    assert.equal(index.snapshot(0, 5).length, 130);
-    const abort = new AbortController();
-    const pending = selectOps({ getOpForScan: (id) => ops.get(id) }, index.snapshot(0, 5), 0, 5, 0, abort.signal);
-    abort.abort();
-    await assert.rejects(pending, { name: "AbortError" });
+        // 偽時計で8msのyieldを跨ぎ、疎な後続blockのIDも固定されることを確認する。
+        for (let block = 0; block < 129; block++) add(block * 1024);
+        const snapshot = index.snapshot(0, 5);
+        const selecting = selectOps(
+            { getOpForScan: (id) => ops.get(id) },
+            snapshot,
+            0,
+            5,
+            0,
+            new AbortController().signal
+        );
+        ops.get(0).labelName = "updated by parser";
+        add(128 * 1024 + 1);
+        add(129 * 1024);
+        const selected = await selecting;
+        assert.equal(selected.length, 129, "Parser writes expanded an in-flight window's ID snapshot");
+        assert.equal(selected[0].labelName, "original 0", "Parser mutation changed an already selected operation");
+        assert.equal(index.snapshot(0, 5).length, 130);
+        const abort = new AbortController();
+        const pending = selectOps({ getOpForScan: (id) => ops.get(id) }, index.snapshot(0, 5), 0, 5, 0, abort.signal);
+        abort.abort();
+        await assert.rejects(pending, { name: "AbortError" });
+    } finally {
+        performance.now = originalNow;
+    }
 }
 
 async function checkFlushGroups() {
