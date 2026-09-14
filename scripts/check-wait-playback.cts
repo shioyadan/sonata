@@ -25,6 +25,26 @@ function fixture() {
     );
 }
 
+function memoryFixture(kind: "load" | "store") {
+    return (
+        [0, 10]
+            .map((fetch, id) => {
+                const tick = (cycle: number) => 1000 + cycle * 1000;
+                const complete = kind === "load" ? (id === 0 ? 7 : 114) : fetch + 5;
+                return [
+                    `O3PipeView:fetch:${tick(fetch)}:0x1000:0:${id + 1}: ${kind === "load" ? "ldr x0, [x1]" : "str x0, [x1]"}`,
+                    `O3PipeView:decode:${tick(fetch + 1)}`,
+                    `O3PipeView:rename:${tick(fetch + 2)}`,
+                    `O3PipeView:dispatch:${tick(fetch + 3)}`,
+                    `O3PipeView:issue:${tick(fetch + 4)}`,
+                    `O3PipeView:complete:${tick(complete)}`,
+                    `O3PipeView:retire:${tick(complete + 1)}${kind === "store" ? `:store:${tick(300 + id * 50)}` : ""}`
+                ].join("\n");
+            })
+            .join("\n") + "\n"
+    );
+}
+
 async function reviewWaitPlayback(window: BrowserWindow) {
     const { evaluate } = createBrowserTest(window);
     const state = () =>
@@ -54,6 +74,21 @@ async function reviewWaitPlayback(window: BrowserWindow) {
             id,
             checked
         );
+    async function open(text: string) {
+        await evaluate((_page, text) => {
+            const transfer = new DataTransfer();
+            transfer.items.add(new File([text], "wait-playback.log"));
+            document.dispatchEvent(new DragEvent("drop", { dataTransfer: transfer, cancelable: true }));
+        }, text);
+        await until((s) => Boolean(s.complete) && !s.busy, "The waiting file did not load");
+    }
+    async function go(cycle: number) {
+        await evaluate((_page, cycle) => {
+            (document.getElementById("file-cycle") as HTMLInputElement).value = String(cycle);
+            document.getElementById("file-go")!.click();
+        }, cycle);
+        await until((s) => s.start === cycle && !s.busy, "The waiting window did not load");
+    }
     try {
         assert.equal(
             await evaluate(() => (document.getElementById("file-speed-waits") as HTMLInputElement).checked),
@@ -151,7 +186,73 @@ async function reviewWaitPlayback(window: BrowserWindow) {
             return sonata.cycle - before;
         });
         assert.ok(continued > 3, "The next window silently returned to normal waiting speed");
-        return { fetchWait: true, nextEvent: true, offAndPause: true, loop: true, narrowWindows: true };
+
+        await open(memoryFixture("load"));
+        assert.equal(await evaluate(({ sonata }) => sonata.memoryTiming.minimum.load), 3);
+        const loadPosition = await evaluate(({ sonata }) => {
+            sonata.captureAt(25);
+            const before = sonata.particles.find((p) => p.id === 1)!;
+            sonata.captureAt(30);
+            const after = sonata.particles.find((p) => p.id === 1)!;
+            return { before: before.pathPosition, after: after.pathPosition, state: after.state };
+        });
+        assert.equal(loadPosition.state, "waiting", "The slow load must have reached LOAD WAIT");
+        assert.deepEqual(loadPosition.after, loadPosition.before, "The candidate load wait is still moving");
+        await playAt(25);
+        await until((s) => s.status!.includes("Fast-forwarding wait"), "LOAD WAIT was not accelerated");
+        await until(
+            (s) => s.cycle >= 112 && !s.status!.includes("Fast-forwarding wait"),
+            "The load completion was not approached at normal speed"
+        );
+        await evaluate(({ sonata }) => sonata.setPlaying(false));
+        assert.ok((await state()).cycle < 114, "The recorded load completion was skipped");
+
+        await open(memoryFixture("store"));
+        await go(250);
+        const stores = await evaluate(({ sonata }) => ({
+            ops: sonata.trace.ops.length,
+            waits: sonata.trace.storeWaits
+        }));
+        assert.equal(stores.ops, 0, "Retired stores must not be reintroduced as live instructions");
+        assert.deepEqual(
+            stores.waits?.map(([, , , end]) => end).sort((a, b) => a - b),
+            [300, 350]
+        );
+        await playAt(250);
+        await until((s) => s.status!.includes("Fast-forwarding wait"), "Post-retire store waiting did not accelerate");
+        await until(
+            (s) => s.cycle >= 298 && !s.status!.includes("Fast-forwarding wait"),
+            "The first store completion was skipped"
+        );
+        await evaluate(({ sonata }) => sonata.setPlaying(false));
+        assert.ok((await state()).cycle < 300);
+        await playAt(306);
+        await until(
+            (s) => s.status!.includes("Fast-forwarding wait"),
+            "Waiting between store completions did not accelerate"
+        );
+        await until(
+            (s) => s.cycle >= 348 && !s.status!.includes("Fast-forwarding wait"),
+            "The last store completion was skipped"
+        );
+        await until((s) => !s.playing && s.cycle === 350, "Playback stopped before the last recorded store completion");
+        await go(250);
+        await playAt(250);
+        await until(
+            (s) => s.status!.includes("Fast-forwarding wait"),
+            "Reverse seeking changed the observed store wait"
+        );
+        await evaluate(({ sonata }) => sonata.setPlaying(false));
+        return {
+            fetchWait: true,
+            nextEvent: true,
+            offAndPause: true,
+            loop: true,
+            narrowWindows: true,
+            loadWait: true,
+            storeCompletions: true,
+            reverseStoreSeek: true
+        };
     } finally {
         await evaluate(() => {
             document.getElementById("file-close")!.click();

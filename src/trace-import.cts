@@ -16,7 +16,10 @@ function createTraceImport({
     pause
 }: {
     reset: () => void;
-    apply: (trace: replay.Trace, position: { cycle: number; selectedID: number | null; thread: number }) => void;
+    apply: (
+        trace: replay.Trace,
+        position: { cycle: number; selectedID: number | null; thread: number }
+    ) => readonly Pick<replay.Operation, "id" | "stages">[];
     read: () => { cycle: number; selectedID: number | null };
     pause: () => void;
 }) {
@@ -55,7 +58,6 @@ function createTraceImport({
     let fastWait = false;
     let skipNotice = "";
     let noticeUntil = 0;
-    const storeWait = new Map<number, { firstFetch: number; until: number }>();
 
     function resetAcceleration() {
         emptySeconds = 0;
@@ -111,7 +113,6 @@ function createTraceImport({
         displayed = null;
         emptyTarget = null;
         waitTarget = null;
-        storeWait.clear();
         resetAcceleration();
         prefetch = null;
         prefetchError = null;
@@ -216,19 +217,10 @@ function createTraceImport({
                 : { cycle: selection.view.cycle, selectedID: selection.view.selectedID ?? null };
         position.cycle = Math.max(trace.firstCycle, Math.min(trace.lastCycle, position.cycle));
         const view = { ...selection.view, start: trace.firstCycle, ...position };
-        apply(trace, { ...position, thread: view.thread });
+        const operations = apply(trace, { ...position, thread: view.thread });
         displayed = { view, end: trace.lastCycle };
-        // 窓移動で元のstoreが外れても待機を守るが、未fetchのstoreで冒頭を止めない。
-        const fetches = new Map(trace.ops.map((op) => [op[0], op[2]]));
-        for (const [id, time] of trace.storeCompletions ?? []) {
-            const previous = storeWait.get(view.thread);
-            storeWait.set(view.thread, {
-                firstFetch: Math.min(previous?.firstFetch ?? Infinity, fetches.get(id) ?? trace.firstCycle),
-                until: Math.max(previous?.until ?? -Infinity, time + 6)
-            });
-        }
         emptyTarget = replay.createEmptyPlayback(trace);
-        waitTarget = replay.createWaitPlayback(trace);
+        waitTarget = replay.createWaitPlayback(trace, operations);
         waitUntil = null;
         fastWait = false;
         if (selection.mode !== "continue") {
@@ -266,15 +258,10 @@ function createTraceImport({
         }
         // 未解析の命令が後から現れ得る間は、空白と断定して飛ばさない。
         const cycle = read().cycle;
-        const stores = storeWait.get(displayed.view.thread);
-        const storeStart = stores ? stores.firstFetch - 2 : Infinity;
-        const limitTarget = (target: number | null) =>
-            target === null ? null : Math.min(target, cycle < storeStart ? storeStart : Infinity);
-        const canAccelerate =
-            source.complete && (!stores || cycle < storeStart || cycle >= stores.until) && !error && !prefetchError;
+        const canAccelerate = source.complete && !error && !prefetchError;
         const target =
             canAccelerate && element<HTMLInputElement>("file-skip-empty").checked
-                ? limitTarget(emptyTarget?.(cycle) ?? null)
+                ? (emptyTarget?.(cycle) ?? null)
                 : null;
         emptySeconds = target === null ? 0 : emptySeconds + seconds;
         if (target !== null && emptySeconds >= 0.35) {
@@ -303,7 +290,7 @@ function createTraceImport({
         } else {
             // 開始後は短くなった残りも進めるが、窓交換時には記録から判定し直す。
             if (waitUntil !== null && cycle >= waitUntil) waitUntil = null;
-            waitUntil ??= limitTarget(waitTarget?.(cycle) ?? null);
+            waitUntil ??= waitTarget?.(cycle) ?? null;
             waitSeconds = waitUntil === null ? 0 : waitSeconds + seconds;
         }
         const accelerating = waitUntil !== null && waitSeconds >= 0.35;

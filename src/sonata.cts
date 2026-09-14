@@ -254,6 +254,7 @@ function start(gl: WebGL2RenderingContext) {
             session.selectedID = replay.ops.some((op) => op.id === position.selectedID) ? position.selectedID : null;
             render();
             updateUI();
+            return replay.ops;
         }
     });
     function applyTrace(reuse = false) {
