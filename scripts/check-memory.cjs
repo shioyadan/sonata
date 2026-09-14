@@ -284,10 +284,11 @@ assert.deepEqual(
 assert.equal(loadWait.target(6), null, "The short LOAD pipe traversal must retain normal speed");
 assert.equal(loadWait.target(14), 68, "LOAD WAIT must accelerate up to the next recorded Mc boundary");
 assert.equal(loadWait.target(70), null, "A raw transition hidden by display grouping still changes state");
-assert.equal(loadWait.target(75.999), null);
-assert.equal(loadWait.target(76), 118);
+assert.equal(loadWait.target(71.999), null);
+assert.equal(loadWait.target(72), 118);
 assert.equal(loadWait.target(120), null, "Recorded completion must return to normal speed");
-assert.equal(loadWait.target(126), 198);
+assert.equal(loadWait.target(122.999), null, "LOAD WAIT notification keeps its three-cycle margin");
+assert.equal(loadWait.target(123), 198);
 assert.equal(createEmptyPlayback(loadWait.source)(14), null, "LOAD WAIT must not become an empty interval");
 assert.equal(createWaitPlayback(loadWait.source)(76), null, "Without prepared stages, execution remains conservative");
 const loadWithGap = structuredClone(loadWait.source);

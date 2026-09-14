@@ -272,16 +272,16 @@ const waitOp = (id, fetch, end, stages = [["F", "front-0", fetch, end]], options
 const initialWait = emptyTrace([waitOp(1, 0, 111), emptyOp(2, 108, 125)]),
     originalInitialWait = structuredClone(initialWait),
     waitPlayback = createWaitPlayback(initialWait);
-assert.equal(waitPlayback(5.999), null, "The initial fetch and entry animation must play normally");
-assert.equal(waitPlayback(6), 106, "A long initial fetch wait must stop before the next instruction fetch");
-assert.equal(waitPlayback(90), 106);
-assert.equal(waitPlayback(90.001), null, "The remaining wait must still be at least sixteen cycles");
+assert.equal(waitPlayback(1.999), null, "The initial fetch and entry animation must play normally");
+assert.equal(waitPlayback(2), 106, "A long initial fetch wait must stop before the next instruction fetch");
+assert.equal(waitPlayback(98), 106);
+assert.equal(waitPlayback(98.001), null, "The remaining wait must still be at least eight cycles");
 assert.equal(waitPlayback(106), null);
 assert.equal(waitPlayback(130), null, "Wait acceleration must not enable empty-gap skipping");
 assert.equal(waitPlayback(-1), null);
 assert.equal(waitPlayback(NaN), null);
 assert.deepEqual(initialWait, originalInitialWait, "Wait acceleration must not change recorded stages or times");
-assert.equal(waitPlayback(6), 106, "Reverse seeking must not alter the wait boundaries");
+assert.equal(waitPlayback(2), 106, "Reverse seeking must not alter the wait boundaries");
 assert.equal(createEmptyPlayback(initialWait)(6), null, "The empty-only mode must still preserve live waits");
 
 for (const node of ["front-0", "issue", "rob", "memory-wait"]) {
@@ -374,7 +374,8 @@ for (const extra of [
     const target = createWaitPlayback(emptyTrace([waitOp(1, 0, 200)], extra));
     assert.equal(target(6), 48, "Recorded side effects must interrupt a stationary wait");
     assert.equal(target(50), null);
-    assert.equal(target(55.999), null);
+    assert.equal(target(51.999), null);
+    assert.equal(target(52), extra.demo ? 98 : 198, "Ordinary side effects keep two cycles of normal playback");
 }
 const missWait = createWaitPlayback(
     emptyTrace([waitOp(1, 0, 200)], { demo: { events: [{ kind: "icache-miss", cycle: 50, endCycle: 100, id: 1 }] } })
@@ -395,8 +396,8 @@ const carriedStoreWait = createWaitPlayback(carriedStores);
 assert.equal(carriedStoreWait(128), 198);
 assert.equal(carriedStoreWait(160), 198, "Seeking into a write wait must retain the nearest completion");
 assert.equal(carriedStoreWait(200), null);
-assert.equal(carriedStoreWait(205.999), null, "Every write completion keeps its full animation margin");
-assert.equal(carriedStoreWait(206), 398, "One completed store must not hide another store's remaining wait");
+assert.equal(carriedStoreWait(201.999), null, "Every write completion keeps its full animation margin");
+assert.equal(carriedStoreWait(202), 398, "One completed store must not hide another store's remaining wait");
 assert.equal(carriedStoreWait(398), null);
 assert.equal(carriedStoreWait(406), null, "Completed stores must not invent a later wait");
 assert.equal(createEmptyPlayback(carriedStores)(128), null, "A carried store wait is not empty");
@@ -437,6 +438,79 @@ assert.equal(
     null,
     "An orphan legacy completion is an event, not evidence of a preceding wait"
 );
+
+// 20cyごとに段が変わる短い待機も、残8cyと前後2cyの境界を守って扱う。
+const shortWait = createWaitPlayback(
+    emptyTrace(
+        [
+            waitOp(1, 0, 40, [
+                ["F", "front-0", 0, 20],
+                ["Rn", "front-1", 20, 40]
+            ])
+        ],
+        { lastCycle: 40 }
+    )
+);
+assert.equal(shortWait(2), 18);
+assert.equal(shortWait(10), 18);
+assert.equal(shortWait(10.001), null);
+assert.equal(shortWait(18), null);
+assert.equal(shortWait(21.999), null);
+assert.equal(shortWait(22), 38);
+assert.equal(shortWait(10), 18, "Seeking backwards must retain the shorter wait threshold");
+const shortHorizon = emptyTrace([waitOp(1, 0, 100)], { firstCycle: 12, lastCycle: 24 });
+assert.equal(createWaitPlayback(shortHorizon)(12), 24, "A short confirmed window can contain a useful wait");
+assert.equal(createWaitPlayback(shortHorizon)(16.001), null);
+assert.equal(
+    createEmptyPlayback({ ...shortHorizon, ops: [] })(12),
+    null,
+    "Empty skipping must retain its sixteen-cycle minimum"
+);
+
+const survivingWait = waitOp(1, 0, 200);
+const afterRetire = createWaitPlayback(emptyTrace([survivingWait, waitOp(2, 0, 40)]));
+assert.equal(afterRetire(41.999), null, "The two-cycle commit exit must finish before acceleration");
+assert.equal(afterRetire(42), 198);
+for (const stages of [[["F", "front-0", 0, 40]], []]) {
+    const afterSquash = createWaitPlayback(
+        emptyTrace([survivingWait, waitOp(2, 0, 10, stages, { flush: true, flushCycle: 40 })])
+    );
+    assert.equal(afterSquash(45.999), null, "Squash recovery must retain six cycles even without recorded stages");
+    assert.equal(afterSquash(46), 198);
+}
+const recoveryNotice = createWaitPlayback(
+    emptyTrace([survivingWait], {
+        demo: { events: [{ kind: "branch-mispredict", cycle: 40, endCycle: 70, id: 1 }] }
+    })
+);
+assert.equal(recoveryNotice(45.999), null);
+assert.equal(recoveryNotice(46), 68);
+assert.equal(recoveryNotice(75.999), null);
+assert.equal(recoveryNotice(76), 198);
+assert.equal(recoveryNotice(46), 68, "Reverse seeking must retain recovery margins");
+
+const notifiedLoad = waitOp(1, 0, 100, [
+    ["F", "front-0", 0, 5],
+    ["Is", "exec-memory", 5, 30],
+    ["Cm", "rob", 30, 100]
+]);
+notifiedLoad[8] = 5;
+notifiedLoad[9] = 30;
+const loadWait = createWaitPlayback(emptyTrace([notifiedLoad]), [
+    {
+        id: 1,
+        stages: [
+            { names: ["F"], node: "front-0", start: 0, end: 5 },
+            { names: ["Is"], node: "exec-load", start: 5, end: 10 },
+            { names: ["Is"], node: "memory-wait", start: 10, end: 30 },
+            { names: ["Cm"], node: "rob", start: 30, end: 100 }
+        ]
+    }
+]);
+assert.equal(loadWait(6), null, "Prepared access movement remains fully protected");
+assert.equal(loadWait(12), 28);
+assert.equal(loadWait(32.999), null, "The 2.8-cycle LOAD WAIT notification must finish before accelerating");
+assert.equal(loadWait(33), 98);
 
 console.log("wait playback: stationary stages, observed transitions, unknown intervals and independent empty mode");
 

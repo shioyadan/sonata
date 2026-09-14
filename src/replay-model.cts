@@ -410,10 +410,12 @@ function advancePlayback(
     return time;
 }
 
-function createPlaybackGaps(trace: TraceData, busy: [number, number][]): (cycle: number) => number | null {
-    const minimumGap = 16,
-        before = 2,
-        after = 6,
+function createPlaybackGaps(
+    trace: TraceData,
+    busy: [number, number][],
+    { minimumGap = 16, after = 6 } = {}
+): (cycle: number) => number | null {
+    const before = 2,
         gaps: [number, number][] = [],
         nextFetch = trace.feedPreview?.reduce((first, op) => Math.min(first, op.fetch), Infinity) ?? Infinity,
         until = Math.max(
@@ -485,8 +487,9 @@ function createWaitPlayback(
     const busy: [number, number][] = [],
         waiting: [number, number][] = [],
         displayStages = new Map(prepared?.map((op) => [op.id, op.stages]));
-    const protect = (time: number | null | undefined) => {
-        if (time != null && Number.isFinite(time)) busy.push([time, time]);
+    const protect = (time: number | null | undefined, after = 2) => {
+        // 通常の後2cyへ、個別の演出に必要な長さだけ加える。記録時刻は変えない。
+        if (time != null && Number.isFinite(time)) busy.push([time, time + after - 2]);
     };
     const stationary = (node: string) =>
         node.startsWith("front-") || node === "issue" || node === "rob" || node === "memory-wait";
@@ -498,6 +501,7 @@ function createWaitPlayback(
             busy.push([fetch, Infinity]);
             continue;
         }
+        protect(end, op[4] ? 6 : 2);
         if (
             !op[6].length ||
             op[6].some(([, , start, stop]) => !Number.isFinite(start) || !Number.isFinite(stop) || stop < start)
@@ -506,7 +510,6 @@ function createWaitPlayback(
             continue;
         }
         protect(fetch);
-        protect(end);
         for (const time of [op[7], op[8], op[9]]) protect(time);
         let covered = fetch;
         // 表示用にまとめた段だけでは、元の Mc 等の変化や観測の欠落が消えてしまう。
@@ -530,6 +533,14 @@ function createWaitPlayback(
             busy.push([fetch, end]);
             continue;
         }
+        // LOAD WAITの完了通知は移動1.2cy＋到着後の減衰を含め2.8cy続く。
+        if (
+            !op[4] &&
+            op[9] != null &&
+            op[9] <= end &&
+            stages.some((stage) => stage.node === "memory-wait" && stage.start < op[9]!)
+        )
+            protect(op[9], 3);
         covered = fetch;
         for (const { node, start: rawStart, end: rawEnd } of [...stages].sort((a, b) => a.start - b.start)) {
             const start = Math.max(fetch, rawStart),
@@ -559,8 +570,9 @@ function createWaitPlayback(
         for (const dependency of op.dependencies) protect(dependency.ready);
     }
     for (const event of trace.demo.events ?? []) {
-        protect(event.cycle);
-        protect(event.endCycle);
+        const after = event.kind === "branch-mispredict" ? 6 : 2;
+        protect(event.cycle, after);
+        protect(event.endCycle, after);
     }
     // 空白のスキップとは独立した設定なので、実在する待機区間の外は候補にしない。
     waiting.sort((a, b) => a[0] - b[0]);
@@ -570,7 +582,7 @@ function createWaitPlayback(
         cursor = Math.max(cursor, end);
     }
     busy.push([cursor, Infinity]);
-    return createPlaybackGaps(trace, busy);
+    return createPlaybackGaps(trace, busy, { minimumGap: 8, after: 2 });
 }
 
 function measureTransfers(
