@@ -47,8 +47,10 @@ interface SceneNode {
     compact?: boolean;
     latency?: number;
     matrixDepth?: number;
+    matrixBanks?: number;
     mapWords?: number;
     instructionSlots?: number;
+    instructionRows?: number;
     grid?: { rows: [Vector, Vector][]; columns: [Vector, Vector][] };
     element?: HTMLDivElement;
 }
@@ -193,10 +195,26 @@ function createScene({ gpu, replay, session }: SceneOptions) {
             : [node.x, node.h + 0.26, node.z];
     }
 
+    function inputPosition(): Vector {
+        const first = scene.nodes.get(replay.trace.structure.frontNodes[0].id)!;
+        return [Math.min(-15.6, first.x - first.w / 2 - 1.4), 0.8, 0];
+    }
+
+    function layoutBounds() {
+        if (replay.trace.key !== "local-file") return { left: -14.7, right: 14.7, back: -7.1, front: 7.9 };
+        const nodes = [...scene.nodes.values()];
+        return {
+            left: Math.min(-14.7, ...nodes.map((n) => n.x - n.w / 2 - 0.5)),
+            right: Math.max(14.7, ...nodes.map((n) => n.x + n.w / 2 + 0.5)),
+            back: Math.min(-7.1, ...nodes.map((n) => n.z - n.d / 2 - 0.5)),
+            front: Math.max(7.9, ...nodes.map((n) => n.z + n.d / 2 + 0.5))
+        };
+    }
+
     function linkPort(id: string, output: boolean, lane: number, count: number): Vector {
         const n = scene.nodes.get(id)!,
             offset = lane - (count - 1) / 2;
-        if (!n) return [id === "input" ? -15.6 : 15.8, 0.8, offset * 0.3];
+        if (!n) return [id === "input" ? inputPosition()[0] : 15.8, 0.8, offset * 0.3];
         if (id === "commit") {
             const p = commitSlot(lane)[output ? "outlet" : "inlet"];
             return [n.x + (output ? 1 : -1) * (n.w / 2 + 0.01), p[1], p[2]];
@@ -274,11 +292,16 @@ function createScene({ gpu, replay, session }: SceneOptions) {
 
     function matrixPosition(row: number, column = -1): Vector {
         const n = scene.nodes.get("issue")!,
-            columns = replay.dependencyReplay.columnCount;
+            columns = replay.dependencyReplay.columnCount,
+            banks = n.matrixBanks ?? 1,
+            rows = Math.ceil(replay.trace.structure.queueCapacity / banks),
+            bank = Math.floor(row / rows),
+            width = n.w / banks,
+            x = n.x + (bank - (banks - 1) / 2) * width;
         return [
-            n.x + (column < 0 ? -0.44 * n.w + (row % 2) * 0.28 : (-0.28 + ((column + 0.5) * 0.68) / columns) * n.w),
+            x + (column < 0 ? -0.44 * width + (row % 2) * 0.28 : (-0.28 + ((column + 0.5) * 0.68) / columns) * width),
             n.h + 0.23,
-            n.z - n.matrixDepth! / 2 + ((row + 0.5) * n.matrixDepth!) / replay.trace.structure.queueCapacity
+            n.z - n.matrixDepth! / 2 + (((row % rows) + 0.5) * n.matrixDepth!) / rows
         ];
     }
 
@@ -306,15 +329,22 @@ function createScene({ gpu, replay, session }: SceneOptions) {
         return [...scene.nodes.values()].find((n) => n.names?.includes("Rn"));
     }
 
-    function renameInstructionPosition(slot: number): Vector {
-        const n = renameNode()!,
-            rows = Math.max(2, replay.trace.fetchWidth),
+    function frontInstructionPosition(
+        node: Pick<SceneNode, "x" | "z" | "h" | "instructionSlots" | "instructionRows">,
+        slot: number
+    ): Vector {
+        const n = node,
+            rows = n.instructionRows ?? Math.max(2, replay.trace.fetchWidth),
             columns = Math.ceil(n.instructionSlots! / rows);
         return [
             n.x + (Math.floor(slot / rows) - (columns - 1) / 2) * 0.32,
             n.h + 0.34,
             n.z + ((slot % rows) - (rows - 1) / 2) * 0.38
         ];
+    }
+
+    function renameInstructionPosition(slot: number): Vector {
+        return frontInstructionPosition(renameNode()!, slot);
     }
 
     function renameWordLayout(index: number): {
@@ -374,9 +404,14 @@ function createScene({ gpu, replay, session }: SceneOptions) {
         return [n.x + n.w * 0.5 + 0.03, lane.inlet[1], lane.inlet[2]];
     }
 
+    function robColumns() {
+        const capacity = replay.trace.structure.robCapacity;
+        return capacity > 224 ? Math.ceil(Math.sqrt((capacity * 0.28) / 0.3)) : capacity > 96 ? 8 : 4;
+    }
+
     function robCell(slot: number, lift = 0): Vector {
         const n = scene.nodes.get("rob")!,
-            columns = replay.trace.structure.robCapacity > 96 ? 8 : 4,
+            columns = robColumns(),
             rows = Math.ceil(replay.trace.structure.robCapacity / columns);
         const column = Math.floor(slot / rows),
             offset = slot % rows;
@@ -384,14 +419,21 @@ function createScene({ gpu, replay, session }: SceneOptions) {
         return [
             n.x + ((column - (columns - 1) / 2) * n.w * 0.8) / columns,
             n.h + 0.15 + lift,
-            n.z + ((row - (rows - 1) / 2) * 6.65) / Math.max(1, rows - 1)
+            n.z + ((row - (rows - 1) / 2) * (n.d - 1.35)) / Math.max(1, rows - 1)
         ];
     }
 
     function robWrap(lift = 0): Vector[] {
         const first = robCell(0, lift),
             last = robCell(replay.trace.structure.robCapacity - 1, lift);
-        return [last, [last[0] + 0.32, last[1], last[2] - 0.26], [first[0] - 0.32, first[1], first[2] - 0.26], first];
+        const outside: Vector = [last[0] + 0.32, last[1], last[2] - (last[2] === first[2] ? 0.26 : 0)];
+        return [
+            last,
+            outside,
+            ...(last[2] === first[2] ? [] : [[outside[0], outside[1], first[2] - 0.26] as Vector]),
+            [first[0] - 0.32, first[1], first[2] - 0.26],
+            first
+        ];
     }
 
     // 表示マーカーだけをセル間で補間し、折り返し・循環も固定配線と同じ経路を通す。
@@ -512,7 +554,7 @@ function createScene({ gpu, replay, session }: SceneOptions) {
             if (replay.trace.evidence.registers.kind === "configuration")
                 rn.detail = `${rn.mapWords} LOGICAL · MAP NOT LOGGED`;
         }
-        if (rn)
+        if (rn && replay.trace.key !== "local-file")
             rn.instructionSlots = Math.max(
                 1,
                 preserveCapacity && previous.get(rn.id)?.names?.join() === rn.names?.join()
@@ -522,6 +564,28 @@ function createScene({ gpu, replay, session }: SceneOptions) {
                     op.stages.filter((s) => s.names.includes("Rn")).map((s) => (s.displaySlot ?? 0) + 1)
                 )
             );
+        if (replay.trace.key === "local-file") {
+            // 長く滞在する前段命令を同じfetchレーンへ重ねず、固定サイズの格子へ置く。
+            for (const descriptor of front) {
+                const node = scene.nodes.get(descriptor.id)!;
+                node.instructionSlots = Math.max(
+                    1,
+                    preserveCapacity ? (previous.get(node.id)?.instructionSlots ?? 1) : 1,
+                    ...replay.ops.flatMap((op) =>
+                        op.stages.filter((stage) => stage.node === node.id).map((stage) => (stage.displaySlot ?? 0) + 1)
+                    )
+                );
+                node.instructionRows = Math.max(
+                    2,
+                    replay.trace.fetchWidth,
+                    Math.ceil(Math.sqrt((node.instructionSlots * 0.32) / 0.38)),
+                    preserveCapacity ? (previous.get(node.id)?.instructionRows ?? 0) : 0
+                );
+                const columns = Math.ceil(node.instructionSlots / node.instructionRows);
+                node.w = Math.max(node.w, (columns - 1) * 0.32 + 0.48);
+                node.d = Math.max(node.d, (node.instructionRows - 1) * 0.38 + 0.48);
+            }
+        }
         const scheduler = makeNode(
             "issue",
             "SCHEDULER",
@@ -534,8 +598,26 @@ function createScene({ gpu, replay, session }: SceneOptions) {
             `${replay.trace.structure.queueCapacity} ROWS × ${replay.dependencyReplay.columnCount} COLS · ${replay.trace.evidence?.scheduling.kind === "recorded" ? "RECORDED" : replay.trace.key === "local-file" ? "UNOBSERVED" : "RAW ESTIMATE"}`
         );
         // 駒を縮めずに置けるよう、待機列の行間と筐体の奥行きを確保する。
-        scheduler.matrixDepth = Math.max(scheduler.w * 0.68, replay.trace.structure.queueCapacity * 0.14);
+        if (replay.trace.key === "local-file" && !replay.trace.evidence && replay.trace.structure.queueCapacity > 128) {
+            // 依存未観測の大きな待機列は、未知の依存列を補わず128行ずつ並べる。
+            scheduler.matrixBanks = Math.ceil(replay.trace.structure.queueCapacity / 128);
+            scheduler.x -= (scheduler.w * (scheduler.matrixBanks - 1)) / 2;
+            scheduler.w *= scheduler.matrixBanks;
+            scheduler.detail = `${replay.trace.structure.queueCapacity} ROWS · ${scheduler.matrixBanks} BANKS · UNOBSERVED`;
+        }
+        scheduler.matrixDepth = Math.max(
+            (scheduler.w / (scheduler.matrixBanks ?? 1)) * 0.68,
+            Math.ceil(replay.trace.structure.queueCapacity / (scheduler.matrixBanks ?? 1)) * 0.14
+        );
         scheduler.d = Math.max(scheduler.d, scheduler.matrixDepth / 0.84);
+        if (replay.trace.key === "local-file") {
+            let right = scheduler.x - scheduler.w / 2 - 0.3;
+            for (const descriptor of [...front].reverse()) {
+                const node = scene.nodes.get(descriptor.id)!;
+                node.x = Math.min(node.x, right - node.w / 2);
+                right = node.x - node.w / 2 - 0.4;
+            }
+        }
         // STORE より下で LOAD と LOAD WAIT をまとめる。再生側の経路順は変更しない。
         const order = ["exec-integer", "exec-branch", "exec-store", "exec-load", "exec-memory"];
         const units = [...replay.memory.executionNodes].sort((a, b) => order.indexOf(a.id) - order.indexOf(b.id));
@@ -544,10 +626,12 @@ function createScene({ gpu, replay, session }: SceneOptions) {
             const memory = n.kind === "memory";
             const latency = n.latency;
             const width = 0.78 + 1.17 * latency;
-            const depth = memory ? Math.max(1.25, n.pipeCount * 0.38 + 0.65) : 3.05;
+            const depth = Math.max(memory ? 1.25 : 3.05, n.pipeCount * (memory ? 0.38 : 0.3) + 0.65);
             const z =
                 n.id === "exec-integer"
-                    ? -4.2
+                    ? depth === 3.05
+                        ? -4.2
+                        : -5.725 + depth / 2
                     : Math.max(n.id === "exec-branch" ? 0 : 2.7, executionEdge + 0.4 + depth / 2);
             executionEdge = z + depth / 2;
             const label = {
@@ -602,7 +686,11 @@ function createScene({ gpu, replay, session }: SceneOptions) {
             wait.instructionSlots = slots;
         }
         // 左端を保って右へ広げ、メモリ待ちからの接続線が逆向きになるのを避ける。
-        const robWidth = replay.trace.structure.robCapacity > 96 ? 3.0 : 2.45;
+        const robWidth = Math.max(replay.trace.structure.robCapacity > 96 ? 3.0 : 2.45, (robColumns() * 0.3) / 0.8),
+            robDepth =
+                replay.trace.structure.robCapacity > 224
+                    ? Math.max(8, (Math.ceil(replay.trace.structure.robCapacity / robColumns()) - 1) * 0.28 + 1.35)
+                    : 8;
         const robLeft = Math.max(
             5.575,
             ...[...scene.nodes.values()]
@@ -615,7 +703,7 @@ function createScene({ gpu, replay, session }: SceneOptions) {
             robLeft + robWidth / 2,
             0,
             robWidth,
-            8.0,
+            robDepth,
             0.65,
             session.style.palette.blue,
             `${replay.trace.structure.robCapacity} ENTRIES · HEAD → COMMIT`
@@ -626,7 +714,7 @@ function createScene({ gpu, replay, session }: SceneOptions) {
             Math.max(11.1, robLeft + robWidth + 1.6),
             0,
             2.15,
-            3.0,
+            Math.max(3.0, (replay.trace.retireWidth * 0.3) / 0.8),
             0.65,
             session.style.palette.integer,
             `${replay.trace.retireWidth} SLOTS / CYCLE`
@@ -1045,7 +1133,14 @@ function createScene({ gpu, replay, session }: SceneOptions) {
             const p = matrixPosition(r),
                 segment: [Vector, Vector] = [
                     [p[0], y, p[2]],
-                    [x1, y, p[2]]
+                    [
+                        n.matrixBanks
+                            ? matrixPosition(r, replay.dependencyReplay.columnCount - 1)[0] +
+                              ((n.w / n.matrixBanks) * 0.34) / replay.dependencyReplay.columnCount
+                            : x1,
+                        y,
+                        p[2]
+                    ]
                 ];
             n.grid.rows.push(segment);
             line(
@@ -1055,6 +1150,7 @@ function createScene({ gpu, replay, session }: SceneOptions) {
                 session.style.matte ? (r % 8 === 0 ? 0.42 : 0.27) : r % 8 === 0 ? 0.24 : 0.13
             );
         }
+        if (n.matrixBanks) return;
         for (let c = 0; c < replay.dependencyReplay.columnCount; c++) {
             const x = matrixPosition(0, c)[0],
                 segment: [Vector, Vector] = [
@@ -1271,12 +1367,41 @@ function createScene({ gpu, replay, session }: SceneOptions) {
             stars: number[] = [],
             shadows: number[] = [],
             tris: TriangleData = { triangles: [], materials: [], shadows };
+        const bounds = layoutBounds(),
+            centerX = (bounds.left + bounds.right) / 2,
+            centerZ = (bounds.back + bounds.front) / 2,
+            boardWidth = bounds.right - bounds.left,
+            boardDepth = bounds.front - bounds.back;
         if (session.style.matte) {
             flatQuad(tris, 0, baseLevels.table, 0, 200, 200, session.style.background);
-            contactShadow(shadows, 0, baseLevels.table + 0.002, 0.4, 29.4, 15, 0.35);
+            contactShadow(shadows, centerX, baseLevels.table + 0.002, centerZ, boardWidth, boardDepth, 0.35);
         }
-        box(tris, lines, 0, -0.65, 0.4, 28.8, 0.36, 14.4, session.style.palette.floor, 0.5, baseLevels.lowerBoard);
-        box(tris, lines, 0, -0.81, 0.4, 29.4, 0.1, 15, session.style.palette.floor, 0.22, baseLevels.table);
+        box(
+            tris,
+            lines,
+            centerX,
+            -0.65,
+            centerZ,
+            boardWidth - 0.6,
+            0.36,
+            boardDepth - 0.6,
+            session.style.palette.floor,
+            0.5,
+            baseLevels.lowerBoard
+        );
+        box(
+            tris,
+            lines,
+            centerX,
+            -0.81,
+            centerZ,
+            boardWidth,
+            0.1,
+            boardDepth,
+            session.style.palette.floor,
+            0.22,
+            baseLevels.table
+        );
         if (!session.style.matte) {
             for (let x = -28; x <= 28; x += 1)
                 line(lines, [x, -0.84, -22], [x, -0.84, 22], session.style.palette.floor, x % 4 === 0 ? 0.27 : 0.12);
@@ -1503,6 +1628,9 @@ function createScene({ gpu, replay, session }: SceneOptions) {
         crossesMapWords,
         renameNode,
         renameInstructionPosition,
+        frontInstructionPosition,
+        inputPosition,
+        layoutBounds,
         renameWordLayout,
         physicalColumns,
         physicalTagPosition,

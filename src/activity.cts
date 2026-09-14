@@ -518,7 +518,7 @@ function createActivity({ camera, clock, scene, gpu, paths, replay, session }: A
                     fade * 0.85
                 );
             }
-            if (issue.column !== null) {
+            if (issue.column !== null && !n.matrixBanks) {
                 // 選択された行の命令は右へ抜ける。選択信号はその端を回り込み、
                 // 対応するエントリの列を下から上へ進む。
                 const progress =
@@ -815,7 +815,12 @@ function createActivity({ camera, clock, scene, gpu, paths, replay, session }: A
             d = [-15.5, 0.8, 0],
             q = 1 - u;
         return a.map(
-            (v, i) => q * q * q * v + 3 * q * q * u * b[i] + 3 * q * u * u * c[i] + u * u * u * d[i]
+            (v, i) =>
+                q * q * q * v +
+                3 * q * q * u * b[i] +
+                3 * q * u * u * c[i] +
+                u * u * u * d[i] +
+                (i === 0 ? scene.inputPosition()[0] + 15.6 : 0)
         ) as Vector;
     }
 

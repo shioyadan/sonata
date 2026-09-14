@@ -196,7 +196,7 @@ type FeedState = {
 };
 type PlaybackOptions = { duration?: number; reducedMotion?: boolean };
 type BoundCategory = "active" | "badSpeculation" | "frontend" | "backend" | "unresolved";
-type DependencyOperation = Pick<Instruction, "id" | "end" | "allocation" | "issue" | "issueSlot">;
+type DependencyOperation = Pick<Instruction, "id" | "end" | "allocation" | "issue" | "completion" | "issueSlot">;
 type DependencyCell = {
     consumer: number;
     producer: number;
@@ -815,7 +815,7 @@ function createDependencyReplay(
     const byID = new Map((evidence?.ops ?? []).map((o) => [o.id, o]));
     const count = capacity ?? Math.max(1, ...ops.map((o) => (o.issueSlot ?? -1) + 1));
     const resident = (op: DependencyOperation, time: number) =>
-        op.allocation != null && op.allocation <= time && time < Math.min(op.issue ?? op.end, op.end);
+        op.allocation != null && op.allocation <= time && time < Math.min(op.issue ?? op.completion ?? op.end, op.end);
     function columnAt(id: number, time: number) {
         const op = ops.find((o) => o.id === id);
         return op && resident(op, time) ? op.issueSlot : null;
@@ -1082,15 +1082,19 @@ function prepareTrace(trace: TraceData, continuity?: { at: number; replay: Repla
         }
     }
 
-    function allocateRenameSlots() {
-        const ends: number[] = [];
+    function allocateFrontSlots() {
+        const endsByNode = new Map<string, number[]>();
         const entries = ops.flatMap((op) =>
             op.stages.flatMap((stage, index) =>
-                stage.names.includes("Rn") ? [{ op, stage, next: op.stages[index + 1] }] : []
+                stage.names.includes("Rn") || (trace.key === "local-file" && stage.node.startsWith("front-"))
+                    ? [{ op, stage, next: op.stages[index + 1] }]
+                    : []
             )
         );
         // 同時に滞在する命令を別々に置く。退場の補間中も元の場所を再利用しない。
         for (const { op, stage, next } of entries.sort((a, b) => a.stage.start - b.stage.start || a.op.id - b.op.id)) {
+            const ends = endsByNode.get(stage.node) ?? [];
+            endsByNode.set(stage.node, ends);
             let slot = ends.findIndex((end) => end <= stage.start);
             if (slot < 0) slot = ends.length;
             stage.displaySlot = slot;
@@ -1166,7 +1170,7 @@ function prepareTrace(trace: TraceData, continuity?: { at: number; replay: Repla
         };
     });
     const memory = memoryModel.prepareMemory(ops, trace);
-    allocateRenameSlots();
+    allocateFrontSlots();
     const commitGroups = new Map();
     for (const op of ops
         .filter((o) => !o.flush && !o.unfinished)
@@ -1198,7 +1202,7 @@ function prepareTrace(trace: TraceData, continuity?: { at: number; replay: Repla
     });
     allocateSlots(
         (o) => o.allocation,
-        (o) => o.issue ?? o.end,
+        (o) => o.issue ?? o.completion ?? o.end,
         "issueSlot"
     );
     if (continuity || trace.key === "local-file") {
@@ -1207,7 +1211,9 @@ function prepareTrace(trace: TraceData, continuity?: { at: number; replay: Repla
         const issueUses: SlotUse[] = ops
             .filter((op) => op.allocation != null)
             .map((op) => {
-                const intervals = [{ start: op.allocation!, end: Math.min(op.end, op.issue ?? op.end) }];
+                const intervals = [
+                    { start: op.allocation!, end: Math.min(op.end, op.issue ?? op.completion ?? op.end) }
+                ];
                 for (const [index, stage] of op.stages.entries()) {
                     if (stage.node !== "issue") continue;
                     const next = op.stages[index + 1];
@@ -1224,15 +1230,21 @@ function prepareTrace(trace: TraceData, continuity?: { at: number; replay: Repla
                     }
                 };
             });
-        // 128行の表示上限内で補間用の場所を確保する。実機容量の追加観測ではない。
+        // 256行の表示上限内で補間用の場所を確保する。実機容量の追加観測ではない。
         // 予約だけで上限を超える場合は、この窓の通常割当を残す。
-        const queueCapacity = Math.max(trace.structure.queueCapacity, preserveSlots(issueUses, at, 128) ?? 0);
+        const queueCapacity = Math.max(trace.structure.queueCapacity, preserveSlots(issueUses, at, 256) ?? 0);
         if (queueCapacity !== trace.structure.queueCapacity)
             trace = { ...trace, structure: { ...trace.structure, queueCapacity } };
-        for (const kind of ["rename", "memory-wait"] as const) {
+        const displayNodes = [
+            ...trace.structure.frontNodes
+                .filter((node) => trace.key === "local-file" || node.names.includes("Rn"))
+                .map((node) => node.id),
+            "memory-wait"
+        ];
+        for (const node of displayNodes) {
             const uses = ops.flatMap((op) =>
                 op.stages.flatMap((stage, index): SlotUse[] => {
-                    if (kind === "rename" ? !stage.names.includes("Rn") : stage.node !== "memory-wait") return [];
+                    if (stage.node !== node) return [];
                     const next = op.stages[index + 1];
                     const end = Math.min(op.end, next ? next.start + stageTransition(next) : stage.end);
                     const old = previous
@@ -1249,8 +1261,8 @@ function prepareTrace(trace: TraceData, continuity?: { at: number; replay: Repla
                     ];
                 })
             );
-            const count = preserveSlots(uses, at);
-            if (kind === "memory-wait" && count !== null) memory.waitSlots.load = count;
+            const count = preserveSlots(uses, at, node.startsWith("front-") ? 4096 : 512);
+            if (node === "memory-wait" && count !== null) memory.waitSlots.load = count;
         }
         for (const node of memory.executionNodes.filter((node) => node.kind === "memory")) {
             const groups = new Map<number, Instruction[]>();

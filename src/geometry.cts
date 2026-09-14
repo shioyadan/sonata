@@ -40,6 +40,8 @@ interface PathNode {
     pipeCount?: number;
     latency?: number;
     names?: string[];
+    instructionRows?: number;
+    instructionSlots?: number;
 }
 interface Lane {
     inlet: Vec3;
@@ -54,6 +56,7 @@ interface PathScene {
     robCell(index: number, height: number): Vec3;
     executionLane(node: PathNode, index: number): Lane;
     renameInstructionPosition(index: number): Vec3;
+    frontInstructionPosition(node: PathNode, index: number): Vec3;
     commitSlot(index: number | undefined): Lane;
     issueRowExit(index: number): Vec3;
 }
@@ -461,6 +464,8 @@ function createPaths<T extends PathOperation>({
             const travel = stage.entryCycles != null ? (n.latency ?? 1) * 0.78 : stage.end - stage.start - arrival;
             const progress = clamp((t - stage.start - arrival) / Math.max(0.001, travel));
             return lane.inlet.map((v, i) => mix(v, lane.outlet[i], progress)) as Vec3;
+        } else if (n.instructionRows !== undefined) {
+            return scene.frontInstructionPosition(n, stage.displaySlot ?? 0);
         } else if (n.names?.includes("Rn")) {
             return scene.renameInstructionPosition(stage.displaySlot ?? 0);
         } else {
@@ -539,7 +544,9 @@ function createPaths<T extends PathOperation>({
 
     function occupancy(t: number) {
         const active = replay.ops.filter((o) => o.fetch <= t && o.end > t);
-        const issued = active.filter((o) => o.allocation != null && t >= o.allocation && t < (o.issue ?? o.end));
+        const issued = active.filter(
+            (o) => o.allocation != null && t >= o.allocation && t < (o.issue ?? o.completion ?? o.end)
+        );
         const rob = active.filter((o) => o.allocation != null && t >= o.allocation);
         const windowStart = Math.max(replay.trace.firstCycle, t - 16),
             elapsed = t - windowStart;

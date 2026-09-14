@@ -126,6 +126,8 @@ for (const [index, sample] of samples.entries()) {
     assert.equal(first.replay.ops.length, sample.ops.length);
     assert.ok(first.placement.nodes.size > 0);
     checkRobMarkerPath(first);
+    if (sample.structure.robCapacity <= 224)
+        assert.equal(first.placement.nodes.get("rob").d, 8, "Ordinary ROB depth changed");
     const registers = first.placement.nodes.get("register-read");
     if (registers)
         for (const connection of first.placement.connections.filter((c) => c.from === "register-read"))
@@ -157,3 +159,173 @@ for (const [index, sample] of samples.entries()) {
 }
 assert.equal(JSON.stringify(samples), original, "Preparing a scene changed the embedded traces");
 console.log(`Scene isolation: ${samples.length} demos and ${instructions} instructions passed without DOM / WebGL`);
+
+// 高密度のローカルログでも、命令を落とさず同じ大きさで段・FIFOへ配置する。
+const denseTrace = {
+    ...samples[0],
+    key: "local-file",
+    firstCycle: 0,
+    lastCycle: 1100,
+    fetchWidth: 16,
+    retireWidth: 16,
+    evidence: undefined,
+    topDown: undefined,
+    storeCompletions: [],
+    storeWaits: [],
+    feedPreview: [],
+    demo: { ...samples[0].demo, events: [], bookmarks: [] },
+    structure: {
+        queueCapacity: 256,
+        robCapacity: 2048,
+        allocationWidth: 16,
+        frontNodes: [
+            { id: "front-0", names: ["F"] },
+            { id: "front-1", names: ["D"] }
+        ],
+        executionNodes: [{ id: "exec-integer", kind: "integer", names: ["X"], pipeCount: 16 }],
+        memoryWait: null
+    },
+    ops: Array.from({ length: 1200 }, (_, id) => {
+        const fetch = Math.floor(id / 16),
+            allocation = 100 + fetch,
+            end = 1000 + fetch;
+        return [
+            id,
+            id,
+            fetch,
+            end,
+            0,
+            "add x0, x1, x2",
+            [
+                ["F", "front-0", fetch, 90],
+                ["D", "front-1", 90, allocation],
+                ["Q", "issue", allocation, allocation + 1],
+                ["X", "exec-integer", allocation + 1, allocation + 2],
+                ["f", "rob", allocation + 2, end]
+            ],
+            allocation,
+            allocation + 1,
+            allocation + 2,
+            "exec-integer"
+        ];
+    })
+};
+const denseSource = createReplay({ samples: [denseTrace] }),
+    denseReplay = denseSource.loadTrace("local-file"),
+    denseSession = { style: styles.neon },
+    denseScene = createScene({ replay: denseReplay, session: denseSession }),
+    densePaths = createPaths({ scene: denseScene, replay: denseReplay, session: denseSession });
+denseScene.buildLayout();
+function checkSpacing(positions, node, label) {
+    assert.equal(
+        new Set(positions.map((position) => position.join())).size,
+        positions.length,
+        `${label}: positions overlapped`
+    );
+    for (const [index, position] of positions.entries()) {
+        assert.ok(position.every(Number.isFinite));
+        assert.ok(Math.abs(position[0] - node.x) + 0.12 <= node.w / 2 + 1e-9, `${label}: instruction escaped in X`);
+        assert.ok(Math.abs(position[2] - node.z) + 0.12 <= node.d / 2 + 1e-9, `${label}: instruction escaped in Z`);
+        for (let next = index + 1; next < positions.length; next++)
+            assert.ok(
+                Math.hypot(...position.map((value, axis) => value - positions[next][axis])) >= 0.24 - 1e-9,
+                `${label}: instruction centers were too close`
+            );
+    }
+}
+for (const [time, node] of [
+    [85, "front-0"],
+    [95, "front-1"],
+    [500, "rob"]
+]) {
+    const positions = denseReplay.ops.map((op) => densePaths.positionAt(op, time));
+    assert.equal(positions.filter(Boolean).length, 1200, `${node}: lost visible instructions`);
+    checkSpacing(positions, denseScene.nodes.get(node), node);
+}
+checkSpacing(
+    Array.from({ length: 2048 }, (_, slot) => denseScene.robCell(slot)),
+    denseScene.nodes.get("rob"),
+    "full ROB"
+);
+checkRobMarkerPath({ placement: denseScene, replay: denseReplay });
+const scheduler = denseScene.nodes.get("issue");
+assert.equal(scheduler.matrixBanks, 2);
+assert.ok(scheduler.matrixDepth <= 128 * 0.14);
+checkSpacing(
+    Array.from({ length: 256 }, (_, slot) => denseScene.matrixPosition(slot)),
+    scheduler,
+    "256 scheduler seats"
+);
+const execution = denseScene.nodes.get("exec-integer");
+checkSpacing(
+    Array.from({ length: 16 }, (_, slot) => denseScene.executionLane(execution, slot).inlet),
+    execution,
+    "16 execution lanes"
+);
+checkSpacing(
+    Array.from({ length: 16 }, (_, slot) => denseScene.commitSlot(slot).inlet),
+    denseScene.nodes.get("commit"),
+    "16 commit lanes"
+);
+const nodes = [...denseScene.nodes.values()],
+    bounds = denseScene.layoutBounds();
+for (const node of nodes) {
+    assert.ok(node.x - node.w / 2 >= bounds.left && node.x + node.w / 2 <= bounds.right);
+    assert.ok(node.z - node.d / 2 >= bounds.back && node.z + node.d / 2 <= bounds.front);
+}
+for (const [index, front] of denseTrace.structure.frontNodes.entries()) {
+    const node = denseScene.nodes.get(front.id),
+        next = denseScene.nodes.get(denseTrace.structure.frontNodes[index + 1]?.id ?? "issue");
+    assert.ok(node.x + node.w / 2 < next.x - next.w / 2, "Expanded front units overlapped");
+}
+const firstNode = denseScene.nodes.get("front-0");
+assert.ok(denseScene.inputPosition()[0] < firstNode.x - firstNode.w / 2, "Input moved inside the expanded frontend");
+const positions = denseReplay.ops.map((op) => densePaths.positionAt(op, 95)),
+    slots = denseReplay.ops.map((op) => op.stages[1].displaySlot);
+denseSource.loadData({ ...denseTrace, firstCycle: 90, lastCycle: 218 }, { continuityAt: 95 });
+denseScene.buildLayout(true);
+assert.deepEqual(
+    denseReplay.ops.map((op) => op.stages[1].displaySlot),
+    slots,
+    "Window continuity reassigned frontend seats"
+);
+assert.deepEqual(
+    denseReplay.ops.map((op) => densePaths.positionAt(op, 95)),
+    positions,
+    "Window continuity moved frontend instructions"
+);
+console.log("Dense scene: 1200 simultaneous instructions, 2048 ROB entries and 16 lanes passed");
+
+const completedWithoutIssue = {
+    ...denseTrace,
+    structure: { ...denseTrace.structure, queueCapacity: 16, robCapacity: 32 },
+    ops: [
+        [
+            0,
+            0,
+            0,
+            100,
+            0,
+            "nop",
+            [
+                ["F", "front-0", 0, 10],
+                ["f", "rob", 10, 100]
+            ],
+            10,
+            null,
+            10,
+            "exec-integer"
+        ]
+    ]
+};
+const nopReplay = createReplay({ samples: [completedWithoutIssue] }).loadTrace("local-file"),
+    nopScene = createScene({ replay: nopReplay, session: denseSession });
+nopScene.buildLayout();
+const nopPaths = createPaths({ scene: nopScene, replay: nopReplay, session: denseSession });
+assert.equal(
+    nopReplay.dependencyReplay.stateAt(20).rows.length,
+    0,
+    "A committable operation without issue occupied the scheduler"
+);
+assert.equal(nopPaths.occupancy(20).issued.length, 0, "Scheduler occupancy ignored an observed completion");
+assert.equal(nopReplay.robReplay.stateAt(20).entries.length, 1, "The committable operation disappeared from ROB");

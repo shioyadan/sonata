@@ -207,21 +207,21 @@ expanded.source.loadData(joined, { continuityAt: 4.1 });
 assert.equal(expanded.replay.trace.structure.queueCapacity, 2);
 assert.equal(joined.structure.queueCapacity, 1);
 assert.notEqual(expanded.replay.ops[0].issueSlot, expanded.replay.ops[1].issueSlot);
-// 128行に収まらないのが補間予約だけの場合は通常割当に戻し、読める区間を拒否しない。
+// 256行に収まらないのが補間予約だけの場合は通常割当に戻し、読める区間を拒否しない。
 const fullOps = [
-    operation(0, 0, 2, 130, 132),
-    ...Array.from({ length: 127 }, (_, i) => operation(i + 1, i + 1, i + 3, 201 + i, 301 + i))
+    operation(0, 0, 2, 258, 260),
+    ...Array.from({ length: 255 }, (_, i) => operation(i + 1, i + 1, i + 3, 401 + i, 701 + i))
 ];
-const full = trace(fullOps, 0, 131);
-full.structure.queueCapacity = 128;
-full.structure.robCapacity = 224;
+const full = trace(fullOps, 0, 259);
+full.structure.queueCapacity = 256;
+full.structure.robCapacity = 512;
 const crowded = fixture(full);
-const fullNext = trace([...fullOps, operation(128, 128, 130, 428, 430)], 130, 160);
-fullNext.structure.queueCapacity = 128;
-fullNext.structure.robCapacity = 224;
-crowded.source.loadData(fullNext, { continuityAt: 130.1 });
-assert.equal(crowded.replay.trace.structure.queueCapacity, 128);
-assert.ok(crowded.replay.ops.every((op) => op.issueSlot < 128));
+const fullNext = trace([...fullOps, operation(256, 256, 258, 1018, 1020)], 258, 288);
+fullNext.structure.queueCapacity = 256;
+fullNext.structure.robCapacity = 512;
+crowded.source.loadData(fullNext, { continuityAt: 258.1 });
+assert.equal(crowded.replay.trace.structure.queueCapacity, 256);
+assert.ok(crowded.replay.ops.every((op) => op.issueSlot < 256));
 fifo(crowded.replay);
 
 // 境界前のflushは演出中だけ残し、後続のflushを発生前に適用しない。
