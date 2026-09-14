@@ -9,6 +9,7 @@ const {
     flushPlaybackRate,
     advancePlayback,
     createEmptyPlayback,
+    createWaitPlayback,
     measureTransfers,
     createDependencyReplay,
     createRegisterReplay,
@@ -261,6 +262,126 @@ assert.equal(registerEvent(40), null);
 assert.equal(registerEvent(46), 78);
 assert.equal(registerEvent(80), null);
 console.log("empty playback: lifetimes, observed events, animation margins and confirmed gap boundaries");
+
+// 生存中でも静止した待機は加速できるが、移動と記録された状態変化を跨がない。
+const waitOp = (id, fetch, end, stages = [["F", "front-0", fetch, end]], options) => {
+    const op = emptyOp(id, fetch, end, options);
+    op[6] = stages;
+    return op;
+};
+const initialWait = emptyTrace([waitOp(1, 0, 111), emptyOp(2, 108, 125)]),
+    originalInitialWait = structuredClone(initialWait),
+    waitPlayback = createWaitPlayback(initialWait);
+assert.equal(waitPlayback(5.999), null, "The initial fetch and entry animation must play normally");
+assert.equal(waitPlayback(6), 106, "A long initial fetch wait must stop before the next instruction fetch");
+assert.equal(waitPlayback(90), 106);
+assert.equal(waitPlayback(90.001), null, "The remaining wait must still be at least sixteen cycles");
+assert.equal(waitPlayback(106), null);
+assert.equal(waitPlayback(130), null, "Wait acceleration must not enable empty-gap skipping");
+assert.equal(waitPlayback(-1), null);
+assert.equal(waitPlayback(NaN), null);
+assert.deepEqual(initialWait, originalInitialWait, "Wait acceleration must not change recorded stages or times");
+assert.equal(waitPlayback(6), 106, "Reverse seeking must not alter the wait boundaries");
+assert.equal(createEmptyPlayback(initialWait)(6), null, "The empty-only mode must still preserve live waits");
+
+for (const node of ["front-0", "issue", "rob", "memory-wait"]) {
+    const target = createWaitPlayback(emptyTrace([waitOp(1, 0, 200, [["Wait", node, 0, 200]])]));
+    assert.equal(target(6), 198, `${node} must permit its recorded stationary interior`);
+}
+for (const node of ["exec-integer", "exec-branch", "exec-memory", "register-read", "unknown", "commit"]) {
+    const target = createWaitPlayback(emptyTrace([waitOp(1, 0, 200), waitOp(2, 0, 100, [["Moving", node, 0, 100]])]));
+    assert.equal(target(6), null, `${node} must preserve movement even while another instruction waits`);
+    assert.equal(target(106), 198);
+}
+const stageChanges = createWaitPlayback(
+    emptyTrace([
+        waitOp(1, 0, 200, [
+            ["F", "front-0", 0, 80],
+            ["Rn", "front-1", 80, 120],
+            ["X", "exec-integer", 120, 130],
+            ["Cm", "rob", 130, 200]
+        ])
+    ])
+);
+assert.equal(stageChanges(6), 78);
+assert.equal(stageChanges(86), 118);
+assert.equal(stageChanges(125), null);
+assert.equal(stageChanges(136), 198);
+const missingStages = createWaitPlayback(
+    emptyTrace([
+        waitOp(1, 0, 200),
+        waitOp(2, 0, 200, [
+            ["F", "front-0", 0, 30],
+            ["Rn", "front-1", 80, 130]
+        ])
+    ])
+);
+assert.equal(missingStages(6), 28);
+assert.equal(missingStages(40), null, "A gap in another live instruction's stages is not known waiting");
+assert.equal(missingStages(86), 128);
+assert.equal(missingStages(150), null, "An unobserved stage tail is not known waiting");
+for (const op of [
+    emptyOp(2, 0, 200),
+    waitOp(2, 0, 200, undefined, { unfinished: true }),
+    waitOp(2, 0, Infinity),
+    waitOp(2, 0, NaN),
+    waitOp(2, 0, -1),
+    waitOp(2, 0, 200, [["F", "front-0", 0, Infinity]])
+]) {
+    assert.equal(
+        createWaitPlayback(emptyTrace([waitOp(1, 0, 200), op]))(20),
+        null,
+        "Missing stages, unfinished instructions and unknown endpoints must block acceleration"
+    );
+}
+const lifecycle = waitOp(1, 0, 200);
+lifecycle[7] = 50;
+lifecycle[8] = 100;
+lifecycle[9] = 150;
+const lifecycleWait = createWaitPlayback(emptyTrace([lifecycle]));
+assert.equal(lifecycleWait(6), 48);
+assert.equal(lifecycleWait(56), 98);
+assert.equal(lifecycleWait(106), 148);
+assert.equal(lifecycleWait(156), 198);
+const squashedWait = createWaitPlayback(
+    emptyTrace([waitOp(1, 0, 10, [["F", "front-0", 0, 100]], { flush: true, flushCycle: 100 })])
+);
+assert.equal(squashedWait(6), 98, "The effective squash cycle determines the end of the wait");
+assert.equal(squashedWait(100), null);
+assert.equal(
+    createWaitPlayback(emptyTrace([waitOp(1, 0, 40, undefined, { flush: true, flushCycle: 0 })]))(6),
+    null,
+    "A squash at zero must not leave a fabricated wait after the instruction ends"
+);
+
+const boundaryWait = [waitOp(1, 0, 1_000_000_000)];
+assert.equal(createWaitPlayback(emptyTrace(boundaryWait, { firstCycle: 16, lastCycle: 32 }))(16), 32);
+assert.equal(createWaitPlayback(emptyTrace(boundaryWait, boundaryWindow))(16), 999_999_998);
+assert.equal(
+    createWaitPlayback(emptyTrace(boundaryWait, { lastCycle: 32, emptyTailUntil: 200 }))(16),
+    200,
+    "Known waits may use a confirmed prefix but may not assume the unobserved remainder"
+);
+assert.equal(createWaitPlayback(emptyTrace([], { emptyTailUntil: 1_000_000_000 }))(16), null);
+for (const extra of [
+    { storeCompletions: [[9, 50]] },
+    { evidence: { scheduling: { ops: [{ id: 1, dependencies: [{ id: 9, ready: 50 }] }] } } },
+    { evidence: { registers: { events: [{ cycle: 50 }] } } },
+    { evidence: { registers: { allocation: { events: [{ cycle: 50 }] } } } },
+    { evidence: { registers: { reads: [{ cycle: 50 }] } } },
+    { demo: { events: [{ kind: "icache-miss", cycle: 50, endCycle: 100, id: 1 }] } }
+]) {
+    const target = createWaitPlayback(emptyTrace([waitOp(1, 0, 200)], extra));
+    assert.equal(target(6), 48, "Recorded side effects must interrupt a stationary wait");
+    assert.equal(target(50), null);
+    assert.equal(target(55.999), null);
+}
+const missWait = createWaitPlayback(
+    emptyTrace([waitOp(1, 0, 200)], { demo: { events: [{ kind: "icache-miss", cycle: 50, endCycle: 100, id: 1 }] } })
+);
+assert.equal(missWait(56), 98, "A recorded event's wait may accelerate between its visible start and end");
+assert.equal(missWait(106), 198);
+console.log("wait playback: stationary stages, observed transitions, unknown intervals and independent empty mode");
 
 // 滞在時間や同一実行モジュール内の重複区間ではなく、境界の通過を数える。
 const transfers = measureTransfers(
