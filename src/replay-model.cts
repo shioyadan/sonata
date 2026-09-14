@@ -39,6 +39,8 @@ interface Instruction {
     commitSlot?: number;
     feedText?: string;
 }
+type FeedInstruction = Pick<Instruction, "id" | "fetch" | "label" | "kind" | "feedText"> &
+    Partial<Pick<Instruction, "end" | "flush">>;
 type ReadInterval = { start: number; end: number; sources?: { physical: number; hex: string }[] };
 type RegisterSource = { logical: number; physical: number; previous?: number };
 type CompactStage = [name: string, node: string, start: number, end: number];
@@ -118,6 +120,11 @@ interface TraceData {
     parser: string;
     ops: CompactOperation[];
     storeCompletions?: [number, number][];
+    feedPreview?: Pick<FeedInstruction, "id" | "fetch" | "label" | "kind">[];
+    displayProfile?: {
+        memoryMinimum: { load: number | null; store: number | null };
+        memoryKinds: ("load" | "store" | "atomic")[];
+    };
     label: string;
     fileName: string;
     initialCycle: number;
@@ -194,7 +201,11 @@ type DependencyCell = {
 };
 type Broadcast = { producer: number; column: number | null; rows: (number | undefined)[]; progress: number };
 
-function createRobReplay<T extends RobOperation>(ops: readonly T[], capacity: number) {
+function createRobReplay<T extends RobOperation>(
+    ops: readonly T[],
+    capacity: number,
+    continuity?: { time: number; state: RobSnapshot<T> }
+) {
     const events = new Map<number, { allocate: T[] }>(),
         slots = new Map<number, number>();
     const at = (time: number) => {
@@ -248,6 +259,34 @@ function createRobReplay<T extends RobOperation>(ops: readonly T[], capacity: nu
             else hi = mid;
         }
         return snapshots[lo - 1] ?? empty;
+    }
+    if (continuity) {
+        const previous = continuity.state;
+        const next = stateAt(continuity.time);
+        const oldSlots = new Map(previous.entries.map(({ op, slot }) => [op.id, slot]));
+        const offsets = new Set(
+            next.entries.flatMap(({ op, slot }) => {
+                const old = oldSlots.get(op.id);
+                return old === undefined ? [] : [(old - slot + capacity) % capacity];
+            })
+        );
+        // 共通の生存命令が示す循環位相だけを合わせ、FIFO・終了イベントは変更しない。
+        const offset =
+            offsets.size === 1
+                ? offsets.values().next().value!
+                : !previous.entries.length && !next.entries.length
+                  ? (previous.tail - next.tail + capacity) % capacity
+                  : 0;
+        if (offset) {
+            const shift = (slot: number) => (slot + offset) % capacity;
+            for (const [id, slot] of slots) slots.set(id, shift(slot));
+            const entries = new Set(snapshots.flatMap((snapshot) => snapshot.entries));
+            for (const entry of entries) entry.slot = shift(entry.slot);
+            for (const snapshot of [empty, ...snapshots]) {
+                snapshot.head = shift(snapshot.head);
+                snapshot.tail = shift(snapshot.tail);
+            }
+        }
     }
     return { capacity, slots, snapshots, stateAt };
 }
@@ -371,7 +410,7 @@ function measureTransfers(
 }
 // このカーソルは流入する命令列の表示だけを制御し、プロセッサの時刻は巻き戻さない。
 function createFeedReplay(
-    orderedOps: readonly Pick<Instruction, "id" | "fetch" | "flush" | "end">[],
+    orderedOps: readonly Pick<FeedInstruction, "id" | "fetch" | "flush" | "end">[],
     {
         firstCycle = -Infinity,
         lastCycle = Infinity,
@@ -384,7 +423,7 @@ function createFeedReplay(
     orderedOps.forEach((op, index) => {
         if (groups.at(-1)?.time === op.fetch) groups.at(-1)!.count++;
         else groups.push({ time: op.fetch, start: index, count: 1 });
-        if (op.flush && op.end >= firstCycle && op.end <= lastCycle) {
+        if (op.flush && op.end != null && op.end >= firstCycle && op.end <= lastCycle) {
             if (!squashes.has(op.end)) squashes.set(op.end, []);
             squashes.get(op.end)!.push({ id: op.id, index });
         }
@@ -723,8 +762,17 @@ function createRegisterReplay(input: RegisterEvidence | null | undefined) {
 // 未読込みの管理部分から、描画に渡せる準備済みの状態を作る。
 function createReplay({ samples }: { samples: readonly TraceData[] }) {
     let current: ReplayState | null = null;
-    function loadData(trace: TraceData): ReplayState {
-        const prepared = prepareTrace(trace);
+    function loadData(trace: TraceData, options?: { continuityAt: number }): ReplayState {
+        const at = options?.continuityAt;
+        const continuity =
+            current &&
+            at !== undefined &&
+            Number.isFinite(at) &&
+            at >= Math.max(current.trace.firstCycle, trace.firstCycle) &&
+            at <= Math.min(current.trace.lastCycle, trace.lastCycle)
+                ? { at, replay: current }
+                : undefined;
+        const prepared = prepareTrace(trace, continuity);
         // 利用側が持つ参照を保ち、準備中や失敗時の状態を公開しない。
         if (current) Object.assign(current, prepared);
         else current = prepared;
@@ -743,8 +791,55 @@ function createReplay({ samples }: { samples: readonly TraceData[] }) {
     };
 }
 
+type SlotUse = {
+    intervals: { start: number; end: number }[];
+    preferred?: number;
+    assign: (slot: number) => void;
+};
+
+// 直前窓の位置を先に予約し、追加命令が後から使う場所を奪わないようにする。
+function preserveSlots(uses: SlotUse[], at: number, limit = 512) {
+    const slots: { start: number; end: number }[][] = [];
+    const pending: SlotUse[] = [];
+    const assignments = new Map<SlotUse, number>();
+    const overlaps = (slot: number, use: SlotUse) =>
+        use.intervals.some(({ start, end }) => {
+            if (end <= start) return false;
+            const intervals = slots[slot] ?? [];
+            let lo = 0,
+                hi = intervals.length;
+            while (lo < hi) {
+                const mid = (lo + hi) >>> 1;
+                if (intervals[mid].end <= start) lo = mid + 1;
+                else hi = mid;
+            }
+            return lo < intervals.length && intervals[lo].start < end;
+        });
+    function reserve(use: SlotUse, slot: number) {
+        slots[slot] ??= [];
+        slots[slot].push(...use.intervals.filter(({ start, end }) => end > start));
+        slots[slot].sort((a, b) => a.start - b.start);
+        assignments.set(use, slot);
+    }
+    const active = (use: SlotUse) => use.intervals.some(({ start, end }) => start <= at && at < end);
+    // 途中読込みで滞在が延びた場合も、現在見えている命令の予約を優先する。
+    for (const use of [...uses].sort((a, b) => Number(active(b)) - Number(active(a)))) {
+        if (use.preferred !== undefined && use.preferred < limit && !overlaps(use.preferred, use))
+            reserve(use, use.preferred);
+        else pending.push(use);
+    }
+    for (const use of pending.sort((a, b) => a.intervals[0].start - b.intervals[0].start)) {
+        let slot = 0;
+        while (slot < limit && overlaps(slot, use)) slot++;
+        if (slot === limit) return null;
+        reserve(use, slot);
+    }
+    for (const [use, slot] of assignments) use.assign(slot);
+    return slots.length;
+}
+
 // 命令と表示スロットはこの読込み専用の状態に組み立てる。
-function prepareTrace(trace: TraceData): ReplayState {
+function prepareTrace(trace: TraceData, continuity?: { at: number; replay: ReplayState }): ReplayState {
     function allocateSlots(
         start: (op: Instruction) => number | null | undefined,
         end: (op: Instruction) => number | undefined,
@@ -813,7 +908,8 @@ function prepareTrace(trace: TraceData): ReplayState {
         return {
             id,
             rid,
-            index,
+            // ファイルの前段・接続レーンは、窓内の配列順による再採番を避ける。
+            index: trace.key === "local-file" ? id : index,
             fetch,
             end,
             flush: !!flush,
@@ -855,16 +951,22 @@ function prepareTrace(trace: TraceData): ReplayState {
         group.push(op);
         commitGroups.set(time, group);
     }
-    const feedOps = [...ops].sort((a, b) => a.fetch - b.fetch || a.id - b.id);
+    const ids = new Set(ops.map((op) => op.id));
+    const feedOps: FeedInstruction[] = [...ops, ...(trace.feedPreview ?? []).filter((op) => !ids.has(op.id))].sort(
+        (a, b) => a.fetch - b.fetch || a.id - b.id
+    );
     const fetchGroups: FeedGroup[] = [];
     feedOps.forEach((op, index) => {
         op.feedText = `${String(op.id).padStart(6, "0")}  ${op.label.trim().replace(/\s+/g, " ")}`.slice(0, 42);
         if (fetchGroups.at(-1)?.time === op.fetch) fetchGroups.at(-1)!.count++;
         else fetchGroups.push({ time: op.fetch, start: index, count: 1 });
     });
+    // 読込み窓の前後にある記録も、進行中の演出と既存の直前減速だけに使う。
+    const eventFirstCycle = trace.firstCycle - (trace.key === "local-file" ? 6 : 0);
+    const eventLastCycle = trace.lastCycle + (trace.key === "local-file" ? 1 : 0);
     const feedReplay = createFeedReplay(feedOps, {
-        firstCycle: trace.firstCycle,
-        lastCycle: trace.lastCycle,
+        firstCycle: eventFirstCycle,
+        lastCycle: eventLastCycle,
         rows: feedRows,
         lead: feedLead
     });
@@ -873,6 +975,102 @@ function prepareTrace(trace: TraceData): ReplayState {
         (o) => o.issue ?? o.end,
         "issueSlot"
     );
+    if (continuity || trace.key === "local-file") {
+        const previous = new Map(continuity?.replay.ops.map((op) => [op.id, op]));
+        const at = continuity?.at ?? trace.firstCycle;
+        const issueUses: SlotUse[] = ops
+            .filter((op) => op.allocation != null)
+            .map((op) => {
+                const intervals = [{ start: op.allocation!, end: Math.min(op.end, op.issue ?? op.end) }];
+                for (const [index, stage] of op.stages.entries()) {
+                    if (stage.node !== "issue") continue;
+                    const next = op.stages[index + 1];
+                    const end = Math.min(op.end, next ? next.start + stageTransition(next) : stage.end);
+                    const last = intervals.at(-1)!;
+                    if (stage.start <= last.end) last.end = Math.max(last.end, end);
+                    else intervals.push({ start: stage.start, end });
+                }
+                return {
+                    intervals,
+                    preferred: previous.get(op.id)?.issueSlot,
+                    assign: (slot) => {
+                        op.issueSlot = slot;
+                    }
+                };
+            });
+        // 128行の表示上限内で補間用の場所を確保する。実機容量の追加観測ではない。
+        // 予約だけで上限を超える場合は、この窓の通常割当を残す。
+        const queueCapacity = Math.max(trace.structure.queueCapacity, preserveSlots(issueUses, at, 128) ?? 0);
+        if (queueCapacity !== trace.structure.queueCapacity)
+            trace = { ...trace, structure: { ...trace.structure, queueCapacity } };
+        for (const kind of ["rename", "memory-wait"] as const) {
+            const uses = ops.flatMap((op) =>
+                op.stages.flatMap((stage, index): SlotUse[] => {
+                    if (kind === "rename" ? !stage.names.includes("Rn") : stage.node !== "memory-wait") return [];
+                    const next = op.stages[index + 1];
+                    const end = Math.min(op.end, next ? next.start + stageTransition(next) : stage.end);
+                    const old = previous
+                        .get(op.id)
+                        ?.stages.find((value) => value.node === stage.node && value.start === stage.start);
+                    return [
+                        {
+                            intervals: [{ start: stage.start, end }],
+                            preferred: old?.displaySlot,
+                            assign: (slot) => {
+                                stage.displaySlot = slot;
+                            }
+                        }
+                    ];
+                })
+            );
+            const count = preserveSlots(uses, at);
+            if (kind === "memory-wait" && count !== null) memory.waitSlots.load = count;
+        }
+        for (const node of memory.executionNodes.filter((node) => node.kind === "memory")) {
+            const groups = new Map<number, Instruction[]>();
+            for (const op of ops.filter((op) => op.execution === node.id)) {
+                const start = op.stages.find((stage) => stage.node === node.id)?.start ?? Infinity;
+                if (!groups.has(start)) groups.set(start, []);
+                groups.get(start)!.push(op);
+            }
+            for (const group of groups.values()) {
+                const used = new Set<number>();
+                for (const op of group) {
+                    const lane = previous.get(op.id)?.pipeLane;
+                    if (lane !== undefined && lane < node.pipeCount) {
+                        op.pipeLane = lane;
+                        used.add(lane);
+                    }
+                }
+                for (const op of group) {
+                    const old = previous.get(op.id)?.pipeLane;
+                    if (old !== undefined && old < node.pipeCount) continue;
+                    const lane = !used.has(op.pipeLane!)
+                        ? op.pipeLane
+                        : Array.from({ length: node.pipeCount }, (_, i) => i).find((i) => !used.has(i));
+                    if (lane !== undefined) op.pipeLane = lane;
+                    used.add(op.pipeLane!);
+                }
+            }
+        }
+        for (const group of commitGroups.values() as Iterable<Instruction[]>) {
+            const used = new Set<number>();
+            for (const op of group) {
+                const slot = previous.get(op.id)?.commitSlot;
+                if (slot !== undefined) {
+                    op.commitSlot = slot;
+                    used.add(slot);
+                }
+            }
+            for (const op of group) {
+                if (previous.get(op.id)?.commitSlot !== undefined) continue;
+                let slot = 0;
+                while (used.has(slot)) slot++;
+                op.commitSlot = slot;
+                used.add(slot);
+            }
+        }
+    }
     const dependencyReplay = createDependencyReplay(ops, trace.evidence?.scheduling, trace.structure.queueCapacity);
     const registerReplay = createRegisterReplay(trace.evidence?.registers);
     const regs = trace.evidence?.registers;
@@ -887,13 +1085,17 @@ function prepareTrace(trace: TraceData): ReplayState {
               ])
           ].sort((a, b) => a - b)
         : [];
-    const robReplay = createRobReplay(ops, trace.structure.robCapacity);
+    const robReplay = createRobReplay(
+        ops,
+        trace.structure.robCapacity,
+        continuity?.replay.trace.structure.robCapacity === trace.structure.robCapacity
+            ? { time: continuity.at, state: continuity.replay.robReplay.stateAt(continuity.at) }
+            : undefined
+    );
     for (const op of ops) op.robSlot = robReplay.slots.get(op.id);
     const memoryEvents = memoryCompletions(ops);
     const flushEvents = [
-        ...new Set(
-            ops.filter((o) => o.flush && o.end >= trace.firstCycle && o.end <= trace.lastCycle).map((o) => o.end)
-        )
+        ...new Set(ops.filter((o) => o.flush && o.end >= eventFirstCycle && o.end <= eventLastCycle).map((o) => o.end))
     ].sort((a, b) => a - b);
     const branchRecoveries = findRecoveryBranches(ops, trace.demo.events, flushEvents, trace.parser.startsWith("gem5"));
 
@@ -936,7 +1138,7 @@ interface ReplayState {
     dependencyReplay: ReturnType<typeof createDependencyReplay>;
     registerReplay: ReturnType<typeof createRegisterReplay>;
     registerTags: number[];
-    feedOps: Instruction[];
+    feedOps: FeedInstruction[];
     fetchGroups: FeedGroup[];
     feedReplay: ReturnType<typeof createFeedReplay>;
 }

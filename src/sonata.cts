@@ -105,9 +105,16 @@ function start(gl: WebGL2RenderingContext) {
         if (!fileImport.seek(value)) setCycle(value);
     }
 
+    function windowFlushEvents() {
+        return replay.flushEvents.filter(
+            (cycle) => cycle >= replay.trace.firstCycle && cycle <= replay.trace.lastCycle
+        );
+    }
+
     function nextFlush() {
-        if (!replay.flushEvents.length) return;
-        const t = replay.flushEvents.find((t) => t > session.cycle + 0.1) ?? replay.flushEvents[0];
+        const events = windowFlushEvents();
+        if (!events.length) return;
+        const t = events.find((t) => t > session.cycle + 0.1) ?? events[0];
         setCycle(Math.max(replay.trace.firstCycle, t - 0.65));
         setPlaying(true);
     }
@@ -201,10 +208,11 @@ function start(gl: WebGL2RenderingContext) {
         renderer.render(dt);
         updateLabels(dt);
     }
-    function rebuildWorld() {
-        paths.setGround(scene.buildWorld());
+    function rebuildWorld(reuse = false) {
+        const previous = scene.worldBuildCount();
+        paths.setGround(scene.buildWorld(reuse));
         activity.reset();
-        renderer.buildMaterialShadow();
+        if (scene.worldBuildCount() !== previous) renderer.buildMaterialShadow();
     }
     function loadTrace(key: string) {
         if (key === "local-file") return;
@@ -222,25 +230,36 @@ function start(gl: WebGL2RenderingContext) {
         pause: () => setPlaying(false),
         read: () => ({ cycle: session.cycle, selectedID: session.selectedID }),
         apply: (trace, position) => {
+            const sameThread = fileImport.view?.thread === position.thread;
+            const overlapStart = Math.max(replay.trace.firstCycle, trace.firstCycle);
+            const overlapEnd = Math.min(replay.trace.lastCycle, trace.lastCycle);
             retainFileLayout(trace, position.thread);
-            replaySource.loadData(trace);
+            const sameFront =
+                JSON.stringify([replay.trace.structure.frontNodes, replay.trace.structure.registerRead]) ===
+                JSON.stringify([trace.structure.frontNodes, trace.structure.registerRead]);
+            const continuityAt =
+                sameThread && sameFront && overlapStart <= overlapEnd
+                    ? clamp(session.cycle, overlapStart, overlapEnd)
+                    : undefined;
+            replaySource.loadData(trace, continuityAt === undefined ? undefined : { continuityAt });
+            retainFileLayout(replay.trace, position.thread);
             let option = $("trace-select").querySelector<HTMLOptionElement>('option[value="local-file"]');
             if (!option) {
                 option = new Option(trace.label, "local-file");
                 $("trace-select").append(option);
             }
             option.textContent = trace.label;
-            applyTrace();
+            applyTrace(sameThread);
             session.cycle = clamp(position.cycle, trace.firstCycle, trace.lastCycle);
             session.selectedID = replay.ops.some((op) => op.id === position.selectedID) ? position.selectedID : null;
             render();
             updateUI();
         }
     });
-    function applyTrace() {
+    function applyTrace(reuse = false) {
         $("trace-select").value = replay.trace.key;
         session.selectedID = null;
-        rebuildWorld();
+        rebuildWorld(reuse);
         session.cycle = replay.trace.initialCycle;
         showTrace();
     }
@@ -379,6 +398,9 @@ function start(gl: WebGL2RenderingContext) {
         if (event.code === "Space") {
             event.preventDefault();
             setPlaying(!session.playing);
+        } else if (fileImport.source && (event.key === "PageUp" || event.key === "PageDown")) {
+            event.preventDefault();
+            $(event.key === "PageUp" ? "file-previous" : "file-next").click();
         } else if (event.key === "ArrowLeft") {
             event.preventDefault();
             step(-1);
@@ -825,8 +847,9 @@ function start(gl: WebGL2RenderingContext) {
         $("width-value").textContent = `${replay.trace.fetchWidth}-WIDE FETCH`;
         $("queue-label").textContent = replay.trace.machineOrder === "in-order" ? "Schedule queue" : "Scheduler";
         $("rob-label").textContent = replay.trace.machineOrder === "in-order" ? "Completion buffer" : "Reorder buffer";
-        $("next-flush").disabled = replay.flushEvents.length === 0;
-        $("next-flush").title = replay.flushEvents.length
+        const flushEvents = windowFlushEvents();
+        $("next-flush").disabled = flushEvents.length === 0;
+        $("next-flush").title = flushEvents.length
             ? `Jump to the next squash event (F) · timing ${replay.trace.parser.startsWith("gem5") ? "inferred" : "recorded"}`
             : "This excerpt contains no flush events";
         $("range-label").textContent = `${replay.trace.lastCycle - replay.trace.firstCycle + 1} CYCLES`;
@@ -835,7 +858,7 @@ function start(gl: WebGL2RenderingContext) {
         for (const id of ["issue-meter", "rob-meter"]) {
             $(id).replaceChildren(...Array.from({ length: 24 }, () => document.createElement("i")));
         }
-        const markers = replay.flushEvents.map((t) => {
+        const markers = flushEvents.map((t) => {
             const marker = document.createElement("span");
             marker.className = "event-marker";
             marker.style.left = `${((t - replay.trace.firstCycle) / Math.max(1, replay.trace.lastCycle - replay.trace.firstCycle)) * 100}%`;
@@ -978,6 +1001,9 @@ function start(gl: WebGL2RenderingContext) {
                     lineCount: c.lanes.length,
                     lanes: c.lanes.map((l) => ({ source: [...l.source], target: [...l.target] }))
                 }));
+            },
+            get sceneBuilds() {
+                return scene.worldBuildCount();
             },
             get playbackStep() {
                 return { ...clock.lastPlayback };

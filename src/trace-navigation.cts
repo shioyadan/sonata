@@ -36,6 +36,8 @@ function createNavigation({
     const storageKey = "sonata.trace-bookmarks.v1";
     let source: files.Metadata | null = null;
     let view: View | null = null;
+    let requestedView: View | null = null;
+    let requestedHistory: number | undefined;
     let history: View[] = [];
     let historyIndex = -1;
     let bookmarks: Bookmark[] = [];
@@ -70,14 +72,25 @@ function createNavigation({
         clearTimeout(wheelTimer);
         wheelView = null;
         drag = null;
+        requestedView = null;
+        requestedHistory = undefined;
+        controls();
+    }
+    function requested(next: View, index?: number) {
+        requestedView = { ...next };
+        requestedHistory = index;
+        controls();
     }
     function goStart(start: number) {
-        if (!view || !Number.isFinite(start)) return;
-        go({ ...view, start, cycle: start, selectedID: null });
+        const current = requestedView ?? view;
+        if (!current || !Number.isFinite(start)) return;
+        go({ ...current, start, cycle: start, selectedID: null });
     }
     function controls() {
-        el<HTMLButtonElement>("file-back").disabled = historyIndex <= 0;
-        el<HTMLButtonElement>("file-forward").disabled = historyIndex >= history.length - 1;
+        const view = requestedView ?? snapshot();
+        const index = requestedHistory ?? historyIndex;
+        el<HTMLButtonElement>("file-back").disabled = index <= 0;
+        el<HTMLButtonElement>("file-forward").disabled = index >= history.length - 1;
         el<HTMLButtonElement>("file-zoom-in").disabled = !view || view.span <= 16;
         el<HTMLButtonElement>("file-zoom-out").disabled = !view || view.span >= 512;
         el<HTMLButtonElement>("file-previous").disabled = !view || view.start <= source!.firstCycle;
@@ -114,6 +127,8 @@ function createNavigation({
     }
     function applied(next: View, remember: boolean, index?: number) {
         view = { ...next };
+        requestedView = null;
+        requestedHistory = undefined;
         if (remember) {
             if (index !== undefined) historyIndex = index;
             else {
@@ -185,7 +200,7 @@ function createNavigation({
     }
     function zoom(factor: number, fraction?: number, deferred = false) {
         if (!view || !source) return;
-        const current = wheelView ?? snapshot()!;
+        const current = wheelView ?? requestedView ?? snapshot()!;
         fraction ??= Math.max(0, Math.min(1, (current.cycle - current.start) / Math.max(1, current.span - 1)));
         const width = Math.max(16, Math.min(512, Math.round(current.span * factor)));
         if (width === current.span) return;
@@ -372,29 +387,34 @@ function createNavigation({
         overview.title = `Cycles ${start.toLocaleString()}–${end.toLocaleString()} · fetched ${bin.fetched.toLocaleString()} · committed ${bin.committed.toLocaleString()} · squashed ${bin.flushed.toLocaleString()} · all threads`;
     });
     span.addEventListener("change", () => {
-        if (view) go({ ...snapshot()!, span: Number(span.value) });
+        if (view) go({ ...(requestedView ?? snapshot()!), span: Number(span.value) });
     });
     thread.addEventListener("change", () => {
-        if (view) go({ ...snapshot()!, thread: Number(thread.value), selectedID: null });
+        if (view) go({ ...(requestedView ?? snapshot()!), thread: Number(thread.value), selectedID: null });
     });
     el("file-previous").addEventListener("click", () => {
-        if (view) goStart(view.start - view.span);
+        const current = requestedView ?? view;
+        if (current) goStart(current.start - current.span);
     });
     el("file-next").addEventListener("click", () => {
-        if (view) goStart(view.start + view.span);
+        const current = requestedView ?? view;
+        if (current) goStart(current.start + current.span);
     });
     el("file-first").addEventListener("click", () => {
         if (source) goStart(source.firstCycle);
     });
     el("file-last").addEventListener("click", () => {
         // 末尾そのものではなく最後の区間へ移動し、再生中ならその区間から続ける。
-        if (source && view) goStart(Math.max(source.firstCycle, source.lastCycle - view.span + 1));
+        const current = requestedView ?? view;
+        if (source && current) goStart(Math.max(source.firstCycle, source.lastCycle - current.span + 1));
     });
     el("file-back").addEventListener("click", () => {
-        if (historyIndex > 0) go(history[historyIndex - 1], historyIndex - 1);
+        const index = (requestedHistory ?? historyIndex) - 1;
+        if (index >= 0) go(history[index], index);
     });
     el("file-forward").addEventListener("click", () => {
-        if (historyIndex + 1 < history.length) go(history[historyIndex + 1], historyIndex + 1);
+        const index = (requestedHistory ?? historyIndex) + 1;
+        if (index < history.length) go(history[index], index);
     });
     el("file-zoom-in").addEventListener("click", () => zoom(0.5));
     el("file-zoom-out").addEventListener("click", () => zoom(2));
@@ -445,7 +465,7 @@ function createNavigation({
             if (!view || !source) return;
             event.preventDefault();
             if (event.shiftKey) {
-                const current = wheelView ?? snapshot()!;
+                const current = wheelView ?? requestedView ?? snapshot()!;
                 const shift = Math.sign(event.deltaY || event.deltaX) * Math.max(1, Math.round(current.span / 4));
                 const next = clampView({ ...current, start: current.start + shift, cycle: current.cycle + shift });
                 wheelView = next;
@@ -496,6 +516,7 @@ function createNavigation({
         snapshot,
         rememberCurrent,
         cancelGesture,
+        requested,
         get searching() {
             return searching;
         }

@@ -10,6 +10,7 @@ const {
     createTraceIndex,
     selectOps,
     searchOps,
+    selectPreview,
     maxWindowOps,
     maxOverviewBins,
     maxSearchHits
@@ -56,6 +57,70 @@ async function check() {
         source.filter((op) => op.tid === 0 && op.fetchedCycle <= 32127 && op.retiredCycle >= 32000).map((op) => op.id)
     );
     assert.ok(visits <= 2048, `Window selection rescanned the entire trace (${visits} visits)`);
+    visits = 0;
+    const preview = await selectPreview(trace, indexer.previewSnapshot(32128), 32128, trace.lastCycle, 0, signal);
+    assert.deepEqual(
+        preview.ops.map((op) => op.id),
+        source
+            .filter((op) => op.tid === 0 && op.fetchedCycle > 32128)
+            .slice(0, 24)
+            .map((op) => op.id)
+    );
+    assert.equal(preview.limited, false);
+    assert.ok(visits <= 1024, `Text preview reread old long-lived operations (${visits} visits)`);
+    assert.ok(
+        preview.ops.every((op) => !("end" in op) && !("flush" in op)),
+        "Text preview exposed future outcomes"
+    );
+    const unordered = Array.from({ length: 80 }, (_, id) => ({
+        ...source[id],
+        id: id * 1024,
+        fetchedCycle: 200 - id,
+        labelName: "a".repeat(1000)
+    }));
+    const unorderedIndex = createTraceIndex();
+    unordered.forEach((op) => unorderedIndex.observe(op));
+    const snapshot = unorderedIndex.previewSnapshot(0);
+    const added = { ...unordered[0], id: 1, fetchedCycle: 1 };
+    const values = new Map([...unordered, added].map((op) => [op.id, op]));
+    unorderedIndex.observe(added);
+    const reversed = await selectPreview({ getOpForScan: (id) => values.get(id) }, snapshot, 0, 180, 0, signal);
+    assert.deepEqual(
+        reversed.ops.map((op) => op.id),
+        unordered
+            .filter((op) => op.tid === 0 && op.fetchedCycle <= 180)
+            .sort((a, b) => a.fetchedCycle - b.fetchedCycle)
+            .slice(0, 24)
+            .map((op) => op.id)
+    );
+    assert.ok(reversed.ops.every((op) => op.label.length <= 42));
+    assert.ok(
+        !reversed.ops.some((op) => op.id === added.id),
+        "Text preview included instructions saved after its snapshot"
+    );
+    let previewReads = 0;
+    const crowdedBlocks = Array.from({ length: 66 }, (_, i) => ({
+        firstID: i * 1024,
+        lastID: (i + 1) * 1024 - 1,
+        firstCycle: 0,
+        ids: new Uint32Array(32).fill(0xffffffff)
+    }));
+    const limited = await selectPreview(
+        {
+            getOpForScan(id) {
+                previewReads++;
+                return { id, tid: id % 2, fetchedCycle: id + 1, labelName: "add" };
+            }
+        },
+        crowdedBlocks,
+        0,
+        100000,
+        0,
+        signal
+    );
+    assert.equal(limited.limited, true);
+    assert.deepEqual(limited.ops, [], "Unconfirmed preview order was presented as an exact prefix");
+    assert.equal(previewReads, 65536);
     assert.deepEqual(
         (await selectOps(trace, index.blocks, 69900, 70000, 1, signal)).map((op) => op.id),
         [32767],
@@ -119,10 +184,16 @@ async function check() {
         assert.equal(loaded.source.lastCycle, 14, "Unretired gem5 stages after the last commit were lost");
         await session.window({ type: "window", request: 1, cycle: 10, span: 128, thread: 0 });
         const result = messages.find((m) => m.type === "window").trace;
-        assert.equal(result.ops.length, 1);
-        assert.equal(result.ops[0][0], 1);
-        assert.equal(result.ops[0][12], true);
-        assert.equal(result.ops[0][6].at(-1)[3], 14, "Open gem5 stage was given a recorded end");
+        assert.deepEqual(
+            result.ops.map((op) => op[0]),
+            [0, 1],
+            "The preceding commit context was lost"
+        );
+        assert.equal(result.firstCycle, 10, "Context expansion changed the selected window");
+        assert.equal(result.lastCycle, 14);
+        const unfinished = result.ops.find((op) => op[0] === 1);
+        assert.equal(unfinished[12], true);
+        assert.equal(unfinished[6].at(-1)[3], 14, "Open gem5 stage was given a recorded end");
     } finally {
         session.close();
     }
@@ -144,6 +215,7 @@ async function check() {
     await checkSearch();
     await checkSearchSession();
     await checkStreaming();
+    await checkFileStructure();
     await checkConcurrentIndex();
     await checkFlushGroups();
     await checkWorkerRequests();
@@ -567,6 +639,106 @@ async function checkStreaming() {
         assert.equal(gemBox.messages.filter((m) => m.type === "loaded").at(-1).source.opCount, 18500);
     } finally {
         gemSession.close();
+    }
+}
+
+async function checkFileStructure() {
+    let cycle = 0;
+    const recorded = new Map();
+    function instruction(id, label, latency = 1, tid = 0, flush = false) {
+        const first = cycle;
+        let text = `I\t${id}\t${id}\t${tid}\nL\t${id}\t0\t${label}\n`;
+        for (const [name, duration] of [
+            ["Np", 1],
+            ["F", 1],
+            ["Pd", 1],
+            ["Dc", 1],
+            ["Rn", 1],
+            ["Ds", 1],
+            ["Sc", 1],
+            ["Is", 1],
+            ["Rr", 1],
+            ["X", latency],
+            ["Rw", 1],
+            ["Cm", 1]
+        ]) {
+            text += `S\t${id}\t0\t${name}\nC\t${duration}\nE\t${id}\t0\t${name}\n`;
+            cycle += duration;
+        }
+        text += `R\t${id}\t${id}\t${flush ? 1 : 0}\nC\t8\n`;
+        recorded.set(id, { first, end: cycle });
+        cycle += 8;
+        return text;
+    }
+    const prefix =
+        "Kanata\t0004\n" + Array.from({ length: 600 }, (_, id) => instruction(id, "add x0, x1, x2")).join("");
+    const tail =
+        instruction(600, "lw x0, 0(x1)", 30) +
+        instruction(601, "lw x0, 0(x1)", 3) +
+        instruction(602, "sw x0, 0(x1)", 5) +
+        instruction(603, "bne x0, x1") +
+        instruction(604, "sw x0, 0(x1)", 2, 1) +
+        instruction(605, "bne x0, x1", 1, 0, true);
+    const box = mailbox(),
+        session = createFileSession(box.send),
+        input = controlledInput(prefix, "structure.kanata");
+    const opening = session.open(input);
+    async function window(id, first = 0, thread = 0) {
+        await session.window({ type: "window", request: id, cycle: first, span: 16, thread });
+        return box.messages.find((message) => message.type === "window" && message.request === id).trace;
+    }
+    try {
+        await box.wait((message) => message.type === "loaded");
+        const initial = await window(100);
+        assert.deepEqual(initial.displayProfile.memoryKinds, []);
+        input.append(tail);
+        await box.wait((message) => message.type === "loaded" && message.source.opCount === 606);
+        const partial = await window(101);
+        assert.equal(input.finished, false, "Global structure inference waited for EOF");
+        assert.deepEqual(partial.displayProfile, {
+            memoryMinimum: { load: 3, store: 5 },
+            memoryKinds: ["load", "store"]
+        });
+        assert.deepEqual(
+            partial.structure.executionNodes.map((node) => node.kind),
+            ["integer", "memory", "branch"]
+        );
+        input.finish();
+        await opening;
+        const earliest = await window(102);
+        assert.deepEqual(earliest.structure, partial.structure, "EOF changed an already observed file structure");
+        for (const id of [600, 601, 602, 603]) {
+            const later = await window(103 + id, recorded.get(id).first);
+            assert.deepEqual(
+                later.structure,
+                earliest.structure,
+                "File stage structure followed the selected instruction kind"
+            );
+            assert.deepEqual(later.displayProfile, earliest.displayProfile);
+        }
+        const revisit = await window(200);
+        assert.deepEqual(
+            revisit.structure,
+            earliest.structure,
+            "Returning to the file start lost the global structure"
+        );
+        assert.deepEqual((await window(201, recorded.get(604).first, 1)).displayProfile, {
+            memoryMinimum: { load: null, store: 2 },
+            memoryKinds: ["store"]
+        });
+        // 演出用の直前文脈は取得するが、ユーザーが選んだ時刻を変更しない。
+        for (const id of [602, 605]) {
+            const first = recorded.get(id).end + 2;
+            const context = await window(202 + id, first);
+            const op = context.ops.find((item) => item[0] === id);
+            assert.ok(op, "The prior commit/squash disappeared at a cycle-window boundary");
+            assert.equal(op[3], recorded.get(id).end, "Context expansion changed the recorded end time");
+            assert.equal(context.firstCycle, first);
+            assert.ok(context.lastCycle <= box.messages.filter((m) => m.type === "loaded").at(-1).source.lastCycle);
+        }
+    } finally {
+        input.finish();
+        session.close();
     }
 }
 

@@ -109,6 +109,7 @@ function createTraceImport({
     function requestWindow(view: View, mode: Pending["mode"], historyIndex?: number) {
         if (!worker) return;
         pending = { id: ++serial, view, mode, historyIndex };
+        if (mode === "navigate") navigation.requested(view, historyIndex);
         error = "";
         updateStatus();
         worker.postMessage({
@@ -135,6 +136,7 @@ function createTraceImport({
         pending = null;
         waiting = false;
         error = text;
+        navigation.cancelGesture();
         pause();
         updateStatus();
     }

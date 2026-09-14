@@ -3,6 +3,7 @@
 const assert = require("node:assert/strict");
 const { toTraceWindow, limits } = require("../src/trace-window.cts");
 const { createReplay } = require("../src/replay-model.cts");
+const { createProfiles, limits: profileLimits } = require("../src/trace-structure.cts");
 const { createScene, styles } = require("../src/scene.cts");
 const { createPaths } = require("../src/geometry.cts");
 function operation(id, stages, options = {}) {
@@ -510,6 +511,190 @@ const fullRob = Array.from({ length: limits.rob + 1 }, (_, id) => {
     ]);
 });
 assert.throws(() => convert(fullRob), /ROB requires 232 entries/);
+// 保存順を逆転・重複させても、Coreの2passへはID順で同じ標本を渡す。
+const profiles = createProfiles(),
+    profileOps = new Map();
+for (const op of [...instructions].reverse()) {
+    profileOps.set(op.id, op);
+    profiles.observe(op, "onikiri", true);
+    profiles.observe(op, "onikiri", false);
+}
+let scans = 0;
+const profileSource = { name: "profile.kanata", parser: "onikiri", opCount: 4, lastCycle: 100 };
+const readProfileOp = (id) => {
+    scans++;
+    return profileOps.get(id);
+};
+const sharedProfile = profiles.get(0, readProfileOp, profileSource);
+assert.ok(sharedProfile.detected, "Retire-order writes invalidated the ID-order detector");
+assert.equal(sharedProfile.observed, 4, "Repeated writes inflated the structure sample");
+assert.equal(scans, 4);
+assert.equal(profiles.get(0, readProfileOp, profileSource), sharedProfile);
+assert.equal(scans, 4, "An unchanged structure sample was rescanned for another window");
+const profileTrace = convert(instructions, { profile: sharedProfile });
+for (const op of instructions) {
+    const narrow = convert([op], { profile: sharedProfile });
+    assert.deepEqual(narrow.structure, profileTrace.structure, "A narrow window changed the file's structure");
+    assert.deepEqual(
+        narrow.ops[0],
+        profileTrace.ops.find((item) => item[0] === op.id),
+        "Profile changed recorded stage times"
+    );
+}
+
+// Is名を持たない汎用Kanataでも、Coreの役割推定後は観測済みの最短値を共有する。
+const genericMemoryOps = instructions.map((op, index) => ({
+    ...op,
+    labelName: index < 2 ? "lw x0, 0(x1)" : "sw x0, 0(x1)"
+}));
+const genericProfiles = createProfiles();
+for (const op of [...genericMemoryOps].reverse()) genericProfiles.observe(op, "onikiri", true);
+const genericProfile = genericProfiles.get(0, (id) => genericMemoryOps.find((op) => op.id === id), profileSource);
+assert.equal(genericProfile.protocol, null);
+assert.ok(genericProfile.detected);
+assert.deepEqual(genericProfile.memoryMinimum, { load: 1, store: 1 });
+for (const op of genericMemoryOps) {
+    const selected = convert([op], { profile: genericProfile });
+    assert.deepEqual(prepare(selected).replay.memory.minimum, { load: 1, store: 1 });
+}
+
+function profileRsd(id, label, latency, tid = 0) {
+    const base = id * 100;
+    return operation(
+        id,
+        [
+            ["Np", base, base + 1],
+            ["F", base + 1, base + 2],
+            ["Pd", base + 2, base + 3],
+            ["Dc", base + 3, base + 4],
+            ["Rn", base + 4, base + 5],
+            ["Ds", base + 5, base + 6],
+            ["Sc", base + 6, base + 7],
+            ["Is", base + 7, base + 8],
+            ["Rr", base + 8, base + 9],
+            ["X", base + 9, base + 9 + latency],
+            ["Rw", base + 9 + latency, base + 10 + latency],
+            ["Cm", base + 10 + latency, base + 11 + latency]
+        ],
+        { labelName: label, tid }
+    );
+}
+const globalProfiles = createProfiles(),
+    globalOps = new Map();
+function observeGlobal(op, firstWrite = true) {
+    globalOps.set(op.id, op);
+    globalProfiles.observe(op, "onikiri", firstWrite);
+}
+for (let id = 0; id < 2000; id++) observeGlobal(profileRsd(id, "add x0, x1, x2", 1));
+observeGlobal(profileRsd(2000, "lw x0, 0(x1)", 35));
+observeGlobal(profileRsd(2001, "lw x0, 0(x1)", 3));
+observeGlobal(profileRsd(2002, "sw x0, 0(x1)", 5));
+observeGlobal(profileRsd(2003, "bne x0, x1", 1));
+observeGlobal(profileRsd(2004, "sw x0, 0(x1)", 2, 1));
+const unfinishedLoad = profileRsd(2005, "lw x0, 0(x1)", 1);
+unfinishedLoad.eof = true;
+unfinishedLoad.retired = false;
+observeGlobal(unfinishedLoad);
+const canceledLoad = profileRsd(2006, "lw x0, 0(x1)", 1);
+canceledLoad.flush = true;
+canceledLoad.retired = false;
+observeGlobal(canceledLoad);
+const globalSource = { name: "long.kanata", parser: "onikiri", opCount: globalOps.size, lastCycle: 300000 };
+scans = 0;
+const readGlobal = (id) => {
+    scans++;
+    return globalOps.get(id);
+};
+const completeProfile = globalProfiles.get(0, readGlobal, globalSource);
+assert.ok(scans <= profileLimits.perThreadSamples, "Whole-file structure retained every operation");
+assert.deepEqual(completeProfile.memoryMinimum, { load: 3, store: 5 });
+assert.deepEqual(completeProfile.memoryKinds, ["load", "store"]);
+assert.deepEqual(completeProfile.kinds, ["integer", "memory", "branch"]);
+const referenceShape = convert([globalOps.get(0)], { source: globalSource, profile: completeProfile });
+const referenceMemory = prepare(referenceShape).replay.memory;
+for (const id of [2000, 2001, 2002, 2003, 0]) {
+    const selected = convert([globalOps.get(id)], {
+        firstCycle: id * 100,
+        lastCycle: id * 100 + 1,
+        source: globalSource,
+        profile: globalProfiles.get(0, readGlobal, globalSource)
+    });
+    assert.deepEqual(
+        selected.structure,
+        referenceShape.structure,
+        "Execution kinds or capacities changed with a different interval"
+    );
+    const state = prepare(selected);
+    assert.deepEqual(state.replay.memory.minimum, { load: 3, store: 5 });
+    assert.deepEqual(
+        state.replay.memory.executionNodes,
+        referenceMemory.executionNodes,
+        "Load/store pipe layout depends on local instruction proportions"
+    );
+    assert.deepEqual(selected.ops[0].slice(2, 5), [globalOps.get(id).fetchedCycle, globalOps.get(id).retiredCycle, 0]);
+}
+const otherThread = globalProfiles.get(1, readGlobal, globalSource);
+assert.deepEqual(otherThread.memoryMinimum, { load: null, store: 2 });
+assert.deepEqual(otherThread.memoryKinds, ["store"], "One thread inherited another thread's execution kinds");
+assert.equal(completeProfile.observed, 2006);
+assert.match(referenceShape.demo.provenance.note, /sample.*256|256.*sample/i);
+globalProfiles.clear();
+assert.equal(globalProfiles.sampleCount, 0);
+assert.throws(() => globalProfiles.get(0, readGlobal, globalSource), /No structure observations/);
+observeGlobal(profileRsd(0, "add x0, x1, x2", 1));
+const nextFile = globalProfiles.get(0, readGlobal, { ...globalSource, opCount: 1 });
+assert.deepEqual(nextFile.memoryKinds, [], "A replacement file inherited load/store observations");
+assert.deepEqual(nextFile.memoryMinimum, { load: null, store: null });
+
+// 再試行の短い途中アクセスは、成功した最終アクセスの基準を縮めない。
+const retryProfiles = createProfiles();
+for (const op of rsdOps) retryProfiles.observe(op, "onikiri", true);
+const retryProfile = retryProfiles.get(0, (id) => rsdOps.find((op) => op.id === id), profileSource);
+assert.deepEqual(retryProfile.memoryMinimum, { load: 3, store: 3 });
+const retryWithProfile = convert(rsdOps, { profile: retryProfile });
+assert.deepEqual(retryWithProfile.ops, rsd.ops, "Whole-file memory minima changed retry or completion records");
+const fallbackTrace = {
+    ...retryWithProfile,
+    displayProfile: { ...retryWithProfile.displayProfile, memoryMinimum: { load: null, store: null } }
+};
+assert.deepEqual(
+    prepare(fallbackTrace).replay.memory.minimum,
+    { load: 3, store: 3 },
+    "Unobserved global minima blocked safe local evidence"
+);
+const boundedProfiles = createProfiles();
+for (let thread = 0; thread < profileLimits.threads; thread++) {
+    for (let local = 0; local < profileLimits.perThreadSamples; local++) {
+        const op = profileRsd(thread * 1000 + local, "add x0, x1, x2", 1, thread);
+        boundedProfiles.observe(op, "onikiri", true);
+    }
+}
+assert.equal(boundedProfiles.sampleCount, profileLimits.totalSamples, "Samples grew with every hardware thread");
+assert.throws(
+    () => boundedProfiles.observe(profileRsd(0, "add", 1, profileLimits.threads), "onikiri", true),
+    /hardware threads/
+);
+const manyStages = operation(
+    0,
+    Array.from({ length: profileLimits.stages + 1 }, (_, index) => [`stage-${index}`, index, index + 1])
+);
+assert.throws(() => createProfiles().observe(manyStages, "onikiri", true), /stage names per thread/);
+assert.throws(
+    () =>
+        createProfiles().observe(operation(0, [["x".repeat(profileLimits.stageNameChars + 1), 0, 1]]), "onikiri", true),
+    /characters/
+);
+const manyEvents = operation(
+    0,
+    Array.from({ length: profileLimits.sampleStages + 1 }, (_, index) => ["A", index, index + 1])
+);
+const limitedStages = createProfiles();
+limitedStages.observe(manyEvents, "onikiri", true);
+assert.equal(
+    limitedStages.get(0, () => manyEvents, { ...profileSource, lastCycle: manyEvents.retiredCycle }).sampled,
+    0,
+    "A single repeated-stage operation exceeded the structure sample's stage budget"
+);
 assert.equal(JSON.stringify(instructions), original);
 console.log(
     "Trace windows: detected/generic stages, exact times, boundary ROB state, recorded dependencies, EOF, flush, idle windows, tick calibration and explicit limits passed"

@@ -4,7 +4,9 @@ import type { Op, ParsedTrace } from "../vendor/konata-core/model";
 import type { MutableOpStore } from "../vendor/konata-core/op_store";
 import core = require("../vendor/konata-core/browser.cjs");
 import windows = require("./trace-window.cts");
-import type replay = require("./replay-model.cts");
+import structures = require("./trace-structure.cts");
+import replay = require("./replay-model.cts");
+import memory = require("./memory.cts");
 
 interface OverviewBin {
     fetched: number;
@@ -52,6 +54,7 @@ interface Block {
     lastID: number;
     firstCycle: number;
     lastCycle: number;
+    maxFetchCycle: number;
     ids: Uint32Array;
     ended: Uint32Array;
     flushGroups?: readonly FlushGroup[];
@@ -163,7 +166,10 @@ function createOverview() {
 
 // Parserの最初のonTraceは命令の格納前に届く。公開storeの書込みを観測し、
 // 疎なIDでも0..lastIDを走査せず、実在するIDだけをビット集合へ記録する。
-function createTraceIndex(onWrite: () => void = () => undefined) {
+function createTraceIndex(
+    onWrite: () => void = () => undefined,
+    onOperation: (op: Readonly<Op>, parser: Source["parser"], firstWrite: boolean) => void = () => undefined
+) {
     const blocks = new Map<number, Block>();
     const overview = createOverview();
     const threads = new Set<number>();
@@ -224,15 +230,18 @@ function createTraceIndex(onWrite: () => void = () => undefined) {
                 lastID: op.id,
                 firstCycle: Infinity,
                 lastCycle: -Infinity,
+                maxFetchCycle: -Infinity,
                 ids: new Uint32Array(blockSize / 32),
                 ended: new Uint32Array(blockSize / 32)
             };
             blocks.set(firstID, block);
         }
+        block.maxFetchCycle = Math.max(block.maxFetchCycle, op.fetchedCycle);
         const offset = op.id - firstID;
         const word = offset >>> 5,
             bit = 1 << (offset & 31);
-        if (!(block.ids[word] & bit)) overview.add(op.fetchedCycle, "fetched");
+        const firstWrite = !(block.ids[word] & bit);
+        if (firstWrite) overview.add(op.fetchedCycle, "fetched");
         block.ids[word] |= bit;
         // Coreのgem5二重writeや、retire後のラベル追加で同じイベントを数え直さない。
         if (!(block.ended[word] & bit)) {
@@ -257,6 +266,7 @@ function createTraceIndex(onWrite: () => void = () => undefined) {
         }
         threads.add(op.tid);
         if (parser === "gem5" && op.flush) observeFlush(op);
+        onOperation(op, parser, firstWrite);
     }
     function attach(trace: ParsedTrace, parser: Source["parser"] = "onikiri") {
         if (trace.opCount !== 0) throw new Error("The parser published its store after instructions were written.");
@@ -303,6 +313,12 @@ function createTraceIndex(onWrite: () => void = () => undefined) {
         }
         return selected;
     }
+    function previewSnapshot(after: number) {
+        return [...blocks.values()]
+            .filter((block) => block.maxFetchCycle > after)
+            .sort((a, b) => a.firstCycle - b.firstCycle || a.firstID - b.firstID)
+            .map(({ firstID, lastID, firstCycle, ids }) => ({ firstID, lastID, firstCycle, ids: ids.slice() }));
+    }
     function searchSnapshot(after = -1) {
         return [...blocks.values()]
             .filter((block) => block.lastID > after)
@@ -317,7 +333,7 @@ function createTraceIndex(onWrite: () => void = () => undefined) {
         threads.clear();
         flushGroups.length = 0;
     }
-    return { attach, observe, metadata, snapshot, searchSnapshot, finish, clear };
+    return { attach, observe, metadata, snapshot, previewSnapshot, searchSnapshot, finish, clear };
 }
 
 // fetch順だけの検索では、左境界より前に始まった長いメモリアクセスを落としてしまう。
@@ -361,6 +377,54 @@ async function selectOps(
         if (++scanned % 8 === 0) await yieldTask();
     }
     return ops;
+}
+
+// 流入文字列だけを先読みする。将来のステージ・終了結果を再生モデルへ追加しない。
+// last+1より先は0.7cycleのfetch補間の対象外なので、同時fetchも表示行数まででよい。
+async function selectPreview(
+    trace: ParsedTrace,
+    blocks: readonly Pick<Block, "firstID" | "lastID" | "firstCycle" | "ids">[],
+    after: number,
+    through: number,
+    thread: number,
+    signal: AbortSignal
+) {
+    let ops: NonNullable<replay.Trace["feedPreview"]> = [];
+    let scanned = 0;
+    for (const [index, block] of blocks.entries()) {
+        checkAbort(signal);
+        if (ops.length === replay.feedRows && block.firstCycle > ops.at(-1)!.fetch) break;
+        if (scanned >= 65536) {
+            // 未確認ブロックより早いと確定した行だけを使う。疎・非単調なログで全Opを走査しない。
+            return { ops: ops.filter((op) => op.fetch < block.firstCycle), limited: true };
+        }
+        for (let id = block.firstID; id <= block.lastID; id++) {
+            const offset = id - block.firstID;
+            if (!(block.ids[offset >>> 5] & (1 << (offset & 31)))) continue;
+            if (scanned === 65536) return { ops: ops.filter((op) => op.fetch < block.firstCycle), limited: true };
+            scanned++;
+            const op = trace.getOpForScan(id);
+            if (!op || op.tid !== thread || op.fetchedCycle <= after || op.fetchedCycle > through) continue;
+            const last = ops.at(-1);
+            if (
+                ops.length === replay.feedRows &&
+                (op.fetchedCycle > last!.fetch || (op.fetchedCycle === last!.fetch && op.id > last!.id))
+            )
+                continue;
+            const label = op.labelName || `(g:${op.gid})`;
+            const kind = memory.instructionType(label);
+            ops.push({
+                id: op.id,
+                fetch: op.fetchedCycle,
+                label: label.trim().replace(/\s+/g, " ").slice(0, 42),
+                kind: kind === "load" || kind === "store" || kind === "atomic" ? "memory" : kind
+            });
+            ops.sort((a, b) => a.fetch - b.fetch || a.id - b.id);
+            if (ops.length > replay.feedRows) ops.pop();
+        }
+        if ((index + 1) % 4 === 0) await yieldTask();
+    }
+    return { ops, limited: false };
 }
 
 // storeを短いCPU区間ずつ走査する。検索中もParserとwindow要求へ制御を返す。
@@ -427,7 +491,8 @@ async function searchOps(
 
 function createFileSession(send: (response: Response) => void) {
     const abort = new AbortController();
-    const indexer = createTraceIndex(scheduleUpdate);
+    const profiles = structures.createProfiles();
+    const indexer = createTraceIndex(scheduleUpdate, profiles.observe);
     let trace: ParsedTrace | null = null;
     let source: Source | null = null;
     let parser: Source["parser"] = "onikiri";
@@ -531,9 +596,21 @@ function createFileSession(send: (response: Response) => void) {
             Math.min(selectedSource.lastCycle - 1, Math.floor(request.cycle))
         );
         const lastCycle = Math.min(selectedSource.lastCycle, firstCycle + request.span - 1);
-        const blocks = indexer.snapshot(firstCycle, lastCycle);
+        // 表示窓の時刻は保ち、直前のcommit/squash演出と次fetchに必要な文脈を取得する。
+        const contextFirst = Math.max(selectedSource.firstCycle, firstCycle - 6);
+        const contextLast = Math.min(selectedSource.lastCycle, lastCycle + 1);
+        const blocks = indexer.snapshot(contextFirst, contextLast);
+        const previewBlocks = indexer.previewSnapshot(contextLast);
         const flushCycles = new Map<number, number>();
-        const ops = await selectOps(trace, blocks, firstCycle, lastCycle, request.thread, abort.signal, flushCycles);
+        const ops = await selectOps(
+            trace,
+            blocks,
+            contextFirst,
+            contextLast,
+            request.thread,
+            abort.signal,
+            flushCycles
+        );
         checkAbort(abort.signal);
         const selection = {
             ops,
@@ -541,9 +618,21 @@ function createFileSession(send: (response: Response) => void) {
             lastCycle,
             source: selectedSource,
             laneNames: selectedSource.laneNames,
-            flushCycles
+            flushCycles,
+            profile: profiles.get(request.thread, (id) => trace!.getOpForScan(id), selectedSource)
         };
         const converted = windows.toTraceWindow(selection);
+        const preview = await selectPreview(
+            trace!,
+            previewBlocks,
+            contextLast,
+            selectedSource.lastCycle,
+            request.thread,
+            abort.signal
+        );
+        converted.feedPreview = preview.ops;
+        if (preview.limited)
+            converted.demo.provenance.note += " Instruction text preview is limited for this interval.";
         checkAbort(abort.signal);
         send({ type: "window", request: request.request, trace: converted });
     }
@@ -579,6 +668,7 @@ function createFileSession(send: (response: Response) => void) {
         trace?.close();
         trace = null;
         indexer.clear();
+        profiles.clear();
         source = null;
     }
     return { open, window, search, cancelSearch, close };
@@ -595,6 +685,7 @@ const traceFile = {
     createTraceIndex,
     selectOps,
     searchOps,
+    selectPreview,
     maxWindowOps,
     maxOverviewBins,
     maxSearchHits

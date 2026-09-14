@@ -19,8 +19,36 @@ type Options = {
     source: Source;
     laneNames?: readonly string[];
     flushCycles?: ReadonlyMap<number, number>;
+    profile?: StructureProfile;
 };
 const limits = { operations: 16384, stages: 131072, cycles: 512, active: 512, queue: 128, rob: 224, width: 32 };
+type ExecutionKind = "integer" | "memory" | "branch";
+interface StructureProfile {
+    detected: DetectedStageStructure | null;
+    lane: number;
+    protocol: "gem5" | "rsd" | null;
+    frontNodes: Trace["structure"]["frontNodes"];
+    executionNames: string[];
+    completionNames: string[];
+    kinds: ExecutionKind[];
+    memoryKinds: ("load" | "store" | "atomic")[];
+    memoryMinimum: { load: number | null; store: number | null };
+    metrics?: Pick<Trace, "structure" | "fetchWidth" | "retireWidth">;
+    observed: number;
+    sampled: number;
+    sampleLimit: number;
+}
+interface StructureObservations {
+    ops: readonly Readonly<Op>[];
+    names: ReadonlyMap<number, ReadonlySet<string>>;
+    edges: ReadonlyMap<number, ReadonlyMap<string, ReadonlySet<string>>>;
+    kinds: ReadonlySet<ExecutionKind>;
+    memoryKinds: ReadonlySet<"load" | "store" | "atomic">;
+    memoryMinimum: { load: number | null; store: number | null };
+    observed: number;
+    sampleLimit: number;
+    source: Source;
+}
 
 function finiteCycle(value: number, label: string) {
     if (!Number.isFinite(value) || Math.abs(value) > Number.MAX_SAFE_INTEGER || value < 0)
@@ -95,8 +123,13 @@ function primaryLane(ops: readonly Readonly<Op>[]) {
 
 // パーサーの既知の記録形式は局所区間に順序逆転がなくても役割を判定できる。
 // RSDは複数の固有stageの組を確認し、任意のKanata名へ意味を押し付けない。
-function stageProtocol(ops: readonly Readonly<Op>[], lane: number, parser: Source["parser"]) {
-    const names = new Set(ops.flatMap((op) => op.lanes[lane]?.stages.map((s) => s.name) ?? []));
+function stageProtocol(
+    ops: readonly Readonly<Op>[],
+    lane: number,
+    parser: Source["parser"],
+    observed?: ReadonlySet<string>
+) {
+    const names = observed ?? new Set(ops.flatMap((op) => op.lanes[lane]?.stages.map((s) => s.name) ?? []));
     if (parser === "gem5" && [...names].every((name) => ["F", "Dc", "Rn", "Ds", "Is", "Cm", "Mc", "Rt"].includes(name)))
         return "gem5";
     if (
@@ -188,14 +221,10 @@ function storeCompletions(ops: readonly Readonly<Op>[], parser: Source["parser"]
     });
 }
 
-function toTraceWindow({
-    ops: input,
-    firstCycle,
-    lastCycle,
-    source,
-    laneNames = [],
-    flushCycles: indexedFlushCycles
-}: Options): Trace {
+function toTraceWindow(
+    { ops: input, firstCycle, lastCycle, source, laneNames = [], flushCycles: indexedFlushCycles, profile }: Options,
+    measureOnly = false
+): Trace {
     finiteCycle(firstCycle, "Window start");
     finiteCycle(lastCycle, "Window end");
     finiteCycle(source.lastCycle, "Trace end");
@@ -230,8 +259,8 @@ function toTraceWindow({
         }
     }
     if (threads.size > 1) throw new Error("Select one hardware thread before building the flow view");
-    const detected = detect(ops),
-        lane = detected?.allocationStage.laneID ?? primaryLane(ops),
+    const detected = profile ? profile.detected : detect(ops),
+        lane = profile?.lane ?? detected?.allocationStage.laneID ?? primaryLane(ops),
         ranges = new Map(
             ops.map((op) => [
                 op.id,
@@ -240,13 +269,14 @@ function toTraceWindow({
         );
     if (ops.some((op) => !ranges.get(op.id)!.length))
         throw new Error(`Some instructions have no recorded stages in lane ${laneNames[lane] ?? lane}`);
-    const protocol = stageProtocol(ops, lane, source.parser),
+    const protocol = profile ? profile.protocol : stageProtocol(ops, lane, source.parser),
         executionNames = new Set(
-            protocol === "rsd"
-                ? ["X", "Mt", "Ma"]
-                : protocol === "gem5"
-                  ? ["Is"]
-                  : (detected?.executionStage.stageNames ?? [])
+            profile?.executionNames ??
+                (protocol === "rsd"
+                    ? ["X", "Mt", "Ma"]
+                    : protocol === "gem5"
+                      ? ["Is"]
+                      : (detected?.executionStage.stageNames ?? []))
         ),
         observations = new Map(ops.map((op) => [op.id, detected?.observe(op)]));
     const frontNames = new Set<string>();
@@ -259,9 +289,11 @@ function toTraceWindow({
             for (const range of ranges.get(op.id)!)
                 if (allocation == null || range.start < allocation) frontNames.add(range.name);
         }
-    const groups = protocol
-            ? [...frontNames].map((name) => [name])
-            : orderedFrontGroups([...ranges.values()], frontNames),
+    const groups = profile
+            ? profile.frontNodes.map((node) => [...node.names])
+            : protocol
+              ? [...frontNames].map((name) => [name])
+              : orderedFrontGroups([...ranges.values()], frontNames),
         frontNodes = Array.from({ length: Math.min(6, Math.max(1, groups.length)) }, (_, index) => ({
             id: `front-${index}`,
             names: [] as string[]
@@ -271,7 +303,7 @@ function toTraceWindow({
     );
     if (!groups.length) frontNodes[0].names.push("STAGES");
     const frontByName = new Map(frontNodes.flatMap((node) => node.names.map((name) => [name, node.id]))),
-        completionNames = new Set<string>();
+        completionNames = new Set<string>(profile?.completionNames);
     for (const op of ops) {
         const completion = observations.get(op.id)?.completionCycle,
             range = ranges.get(op.id)!.find((range) => range.start === completion);
@@ -352,31 +384,48 @@ function toTraceWindow({
             )
         ),
         robPeak = peak(compactOps.flatMap((op) => (op[7] == null ? [] : [[op[7], endOf(op)] as const])));
-    if (activePeak > limits.active)
+    if (!measureOnly && activePeak > limits.active)
         throw new Error(
             `The interval contains ${activePeak} simultaneous instructions; this view supports ${limits.active}`
         );
-    const queueCapacity = capacity(queuePeak, 16, limits.queue, "Scheduler"),
-        robCapacity = capacity(robPeak, 32, limits.rob, "ROB"),
-        fetchWidth = width(compactOps.map((op) => op[2])),
-        retireWidth = width(compactOps.filter((op) => !op[4] && !op[12]).map((op) => op[3]));
+    const baseline = profile?.metrics;
+    const queueCapacity = Math.max(
+            baseline?.structure.queueCapacity ?? 0,
+            capacity(measureOnly ? Math.min(queuePeak, limits.queue) : queuePeak, 16, limits.queue, "Scheduler")
+        ),
+        robCapacity = Math.max(
+            baseline?.structure.robCapacity ?? 0,
+            capacity(measureOnly ? Math.min(robPeak, limits.rob) : robPeak, 32, limits.rob, "ROB")
+        ),
+        fetchWidth = Math.max(baseline?.fetchWidth ?? 1, width(compactOps.map((op) => op[2]))),
+        retireWidth = Math.max(
+            baseline?.retireWidth ?? 1,
+            width(compactOps.filter((op) => !op[4] && !op[12]).map((op) => op[3]))
+        );
     const byID = new Map(compactOps.map((op) => [op[0], op])),
-        executionKinds = new Set(compactOps.map((op) => op[10].slice(5) as "integer" | "memory" | "branch"));
+        executionKinds = new Set(profile?.kinds ?? compactOps.map((op) => op[10].slice(5) as ExecutionKind));
     if (!executionKinds.size) executionKinds.add("integer");
     const executionNodes = [...executionKinds].map((kind) => ({
         id: `exec-${kind}`,
         kind,
         names: [...executionNames],
-        pipeCount: width(compactOps.filter((op) => op[10] === `exec-${kind}` && op[8] != null).map((op) => op[8]!))
+        pipeCount: Math.max(
+            baseline?.structure.executionNodes.find((node) => node.kind === kind)?.pipeCount ?? 1,
+            width(compactOps.filter((op) => op[10] === `exec-${kind}` && op[8] != null).map((op) => op[8]!))
+        )
     }));
-    if (Math.max(fetchWidth, retireWidth, ...executionNodes.map((node) => node.pipeCount)) > limits.width)
+    if (
+        !measureOnly &&
+        Math.max(fetchWidth, retireWidth, ...executionNodes.map((node) => node.pipeCount)) > limits.width
+    )
         throw new Error(`The interval needs more than ${limits.width} simultaneous routes; choose a smaller interval`);
     // FIFO が成立しない入力は時間や命令を改変せず、表示できない理由を呼出し側へ返す。
     try {
-        replayModel.createRobReplay(
-            compactOps.map((op) => ({ id: op[0], allocation: op[7], end: endOf(op), flush: !!op[4] })),
-            robCapacity
-        );
+        if (!measureOnly)
+            replayModel.createRobReplay(
+                compactOps.map((op) => ({ id: op[0], allocation: op[7], end: endOf(op), flush: !!op[4] })),
+                robCapacity
+            );
     } catch (error) {
         throw new Error(
             `This interval cannot be represented by one FIFO: ${error instanceof Error ? error.message : error}`
@@ -394,10 +443,20 @@ function toTraceWindow({
     const inferred = protocol
         ? `Stage roles follow the ${protocol === "rsd" ? "RSD" : "gem5 O3PipeView"} stage records`
         : detected
-          ? "Stage roles inferred from the selected instructions"
+          ? profile
+              ? "Stage roles inferred from an ID-ordered bounded file sample"
+              : "Stage roles inferred from the selected instructions"
           : "Generic serial stage view; allocation, execution and completion roles are unobserved";
     const incompleteCount = compactOps.filter((op) => op[12]).length;
-    return {
+    if (profile) {
+        // 汎用KanataもCoreが裏付けた標本・表示済み区間の最短値を次の窓へ引き継ぐ。
+        const minimum = memoryModel.observedMinimum(compactOps);
+        for (const kind of ["load", "store"] as const) {
+            if (minimum[kind] != null)
+                profile.memoryMinimum[kind] = Math.min(profile.memoryMinimum[kind] ?? Infinity, minimum[kind]);
+        }
+    }
+    const result: Trace = {
         key: "local-file",
         label: source.name,
         fileName: source.name,
@@ -410,6 +469,9 @@ function toTraceWindow({
         retireWidth,
         ops: compactOps,
         storeCompletions: storeCompletions(ops, source.parser),
+        ...(profile
+            ? { displayProfile: { memoryMinimum: { ...profile.memoryMinimum }, memoryKinds: [...profile.memoryKinds] } }
+            : {}),
         structure: {
             ...(protocol === "rsd"
                 ? {
@@ -422,7 +484,10 @@ function toTraceWindow({
                 : {}),
             queueCapacity,
             robCapacity,
-            allocationWidth: width(compactOps.flatMap((op) => (op[7] == null ? [] : [op[7]]))),
+            allocationWidth: Math.max(
+                baseline?.structure.allocationWidth ?? 1,
+                width(compactOps.flatMap((op) => (op[7] == null ? [] : [op[7]])))
+            ),
             frontNodes,
             executionNodes,
             memoryWait: null
@@ -451,10 +516,114 @@ function toTraceWindow({
                 processor: "Not recorded",
                 configuration: "Not recorded",
                 workloadKnown: false,
-                note: `${inferred}. Display capacities and routes are inferred from observed concurrency, not hardware specifications. ${flushCycles.size ? "Squash timing is inferred from the last observations of contiguous flushed instructions. " : ""}${incompleteCount} instruction outcomes are unobserved. Source: ${source.opCount} instructions, through cycle ${source.lastCycle}.`
+                note: `${inferred}. Display capacities and routes are inferred from observed concurrency, not hardware specifications. ${flushCycles.size ? "Squash timing is inferred from the last observations of contiguous flushed instructions. " : ""}${incompleteCount} instruction outcomes are unobserved. ${profile ? `Structure sample: ${profile.sampled} of ${profile.observed} observed instructions, at most ${profile.sampleLimit} per thread; concurrency is a sampled lower bound enlarged by viewed intervals. ` : ""}Source: ${source.opCount} instructions, through cycle ${source.lastCycle}.`
             }
         }
     };
+    if (profile) {
+        // 未表示の過密な標本は表示不能にせず、表現可能な上限までを初期配置に使う。
+        if (measureOnly) {
+            result.fetchWidth = Math.min(limits.width, result.fetchWidth);
+            result.retireWidth = Math.min(limits.width, result.retireWidth);
+            result.structure.allocationWidth = Math.min(limits.width, result.structure.allocationWidth);
+            for (const node of result.structure.executionNodes) node.pipeCount = Math.min(limits.width, node.pipeCount);
+        }
+        profile.metrics = structuredClone({
+            structure: result.structure,
+            fetchWidth: result.fetchWidth,
+            retireWidth: result.retireWidth
+        });
+    }
+    return result;
 }
-const traceWindow = { toTraceWindow, limits, isUnfinished: unfinished };
+
+function buildProfile(observed: StructureObservations, previous?: StructureProfile): StructureProfile {
+    // 一度裏付けが得られた役割を、短い標本や別の区間の不足で取り消さない。
+    const detected = previous?.detected ?? detect(observed.ops);
+    const knownLane = [...observed.names].find(([lane, names]) =>
+        stageProtocol([], lane, observed.source.parser, names)
+    )?.[0];
+    const fallbackLane = observed.ops.length
+        ? primaryLane(observed.ops)
+        : ([...observed.names].sort((a, b) => b[1].size - a[1].size || a[0] - b[0])[0]?.[0] ?? 0);
+    const lane = knownLane ?? detected?.allocationStage.laneID ?? previous?.lane ?? fallbackLane;
+    const names = observed.names.get(lane) ?? new Set<string>();
+    const protocol = previous?.protocol ?? stageProtocol([], lane, observed.source.parser, names);
+    const executionNames =
+        protocol === "rsd"
+            ? ["X", "Mt", "Ma"]
+            : protocol === "gem5"
+              ? ["Is"]
+              : [...(detected?.executionStage.stageNames ?? [])];
+    const edges = observed.edges.get(lane) ?? new Map<string, ReadonlySet<string>>();
+    const completionNames = [...new Set(executionNames.flatMap((name) => [...(edges.get(name) ?? [])]))];
+    const frontNames = new Set<string>(
+        protocol ? (protocol === "rsd" ? ["Np", "F", "Pd", "Dc", "Rn", "Ds"] : ["F", "Dc", "Rn"]) : names
+    );
+    if (!protocol && detected) {
+        const behind = [...detected.allocationStage.stageNames];
+        for (let index = 0; index < behind.length; index++) {
+            frontNames.delete(behind[index]);
+            for (const after of edges.get(behind[index]) ?? []) if (!behind.includes(after)) behind.push(after);
+        }
+    }
+    const paths = [...edges].flatMap(([before, after]) =>
+        [...after].map((name) => [
+            { name: before, start: 0, end: 0 },
+            { name, start: 0, end: 0 }
+        ])
+    );
+    const groups = protocol ? [...frontNames].map((name) => [name]) : orderedFrontGroups(paths, frontNames);
+    const frontNodes = Array.from({ length: Math.min(6, Math.max(1, groups.length)) }, (_, index) => ({
+        id: `front-${index}`,
+        names: [] as string[]
+    }));
+    groups.forEach((group, index) =>
+        frontNodes[Math.floor((index * frontNodes.length) / groups.length)].names.push(...group)
+    );
+    if (!groups.length) frontNodes[0].names.push("STAGES");
+    const profile: StructureProfile = {
+        detected,
+        lane,
+        protocol,
+        frontNodes,
+        executionNames,
+        completionNames,
+        kinds: (["integer", "memory", "branch"] as const).filter((kind) => observed.kinds.has(kind)),
+        memoryKinds: (["load", "store", "atomic"] as const).filter((kind) => observed.memoryKinds.has(kind)),
+        memoryMinimum: {
+            load: previous?.memoryMinimum.load ?? null,
+            store: previous?.memoryMinimum.store ?? null
+        },
+        observed: observed.observed,
+        sampled: observed.ops.length,
+        sampleLimit: observed.sampleLimit,
+        metrics: previous?.metrics
+    };
+    if (protocol) {
+        for (const kind of ["load", "store"] as const) {
+            const minimum = observed.memoryMinimum[kind];
+            if (minimum != null)
+                profile.memoryMinimum[kind] = Math.min(profile.memoryMinimum[kind] ?? Infinity, minimum);
+        }
+    }
+    const firstCycle = Math.max(
+        0,
+        Math.floor(Math.min(...observed.ops.map((op) => op.fetchedCycle), observed.source.lastCycle))
+    );
+    // 選択区間の検査は引き続き厳密に行う。構造標本の不正時刻は窓を開いた時に報告する。
+    try {
+        toTraceWindow({ ops: observed.ops, firstCycle, lastCycle: firstCycle, source: observed.source, profile }, true);
+    } catch {
+        /* 不完全な構造標本から同時数を確定せず、直前の観測値を保持する。 */
+    }
+    return profile;
+}
+namespace traceWindow {
+    export type StructureProfile = StructureProfileValue;
+    export type Source = SourceValue;
+}
+type StructureProfileValue = StructureProfile;
+type SourceValue = Source;
+const traceWindow = { toTraceWindow, buildProfile, limits, isUnfinished: unfinished };
 export = traceWindow;

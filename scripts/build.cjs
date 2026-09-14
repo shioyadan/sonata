@@ -61,21 +61,15 @@ function build() {
         const css = read(`src/${url}`).replace(/<\/style/gi, "<\\/style");
         return `<style>\n${css}\n</style>`;
     });
-    const workerFiles = [
-        "trace-worker.cts",
-        "trace-file.cts",
-        "trace-window.cts",
-        "memory.cts",
-        "replay-model.cts",
-        "geometry.cts"
-    ];
+    const workerOnly = ["trace-worker.cts", "trace-file.cts", "trace-window.cts", "trace-structure.cts"];
+    const workerFiles = [...workerOnly, "memory.cts", "replay-model.cts", "geometry.cts"];
     const worker = bundle(root, "src/trace-worker.cts", [
         ...workerFiles.map((file) => path.join(root, "src", file)),
         path.join(root, "vendor/konata-core/browser.cjs")
     ]);
     const uiFiles = fs
         .readdirSync(path.join(root, "src"))
-        .filter((file) => file.endsWith(".cts") && !workerFiles.slice(0, 3).includes(file))
+        .filter((file) => file.endsWith(".cts") && !workerOnly.includes(file))
         .sort()
         .map((file) => path.join(root, "src", file));
     const scripts = [

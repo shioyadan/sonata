@@ -574,7 +574,7 @@ function createPaths<T extends PathOperation>({
         };
     }
 
-    function instructionColor(op: PathOperation, t: number) {
+    function instructionColor(op: Pick<PathOperation, "kind">, t: number) {
         return session.style.palette[op.kind];
     }
 

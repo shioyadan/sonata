@@ -413,6 +413,7 @@ async function reviewNavigation(window: BrowserWindow, contents: string) {
             "An old continuation response overwrote a manual seek"
         );
         assert.equal(await evaluate(({ sonata }) => sonata.trace.firstCycle), 0);
+        const sceneHeight = await evaluate(() => document.getElementById("scene")!.clientHeight);
         await evaluate(({ sonata }) => {
             const context = globalThis as typeof globalThis & {
                 navigationHeld?: boolean;
@@ -432,6 +433,11 @@ async function reviewNavigation(window: BrowserWindow, contents: string) {
             "Manual navigation response was not held"
         );
         assert.equal(await evaluate(({ sonata }) => sonata.playing), true, "Pending navigation lost playback intent");
+        assert.equal(
+            await evaluate(() => document.getElementById("scene")!.clientHeight),
+            sceneHeight,
+            "Loading status changed the scene height during navigation"
+        );
         await evaluate(() => document.getElementById("play")!.click());
         assert.equal(await evaluate(({ sonata }) => sonata.playing), false, "Pause was ignored during navigation");
         await evaluate(() => {
@@ -467,6 +473,46 @@ async function reviewNavigation(window: BrowserWindow, contents: string) {
         }, original);
     }
     await open();
+    await evaluate(() => {
+        for (let i = 0; i < 3; i++) document.getElementById("file-next")!.click();
+    });
+    await ready();
+    assert.equal(await evaluate(({ sonata }) => sonata.trace.firstCycle), 384, "Rapid window moves were lost");
+    await evaluate(() => {
+        for (let i = 0; i < 3; i++) document.getElementById("file-zoom-in")!.click();
+    });
+    await ready();
+    assert.equal(await evaluate(({ sonata }) => sonata.fileImport.view!.span), 16, "Rapid zoom changes were lost");
+    await evaluate(() => (document.activeElement as HTMLElement).blur());
+    const keyStart = await evaluate(({ sonata }) => sonata.trace.firstCycle);
+    window.webContents.sendInputEvent({ type: "keyDown", keyCode: "PageDown" });
+    window.webContents.sendInputEvent({ type: "keyUp", keyCode: "PageDown" });
+    await waitUntil(
+        () =>
+            evaluate(
+                ({ sonata }, start) => !sonata.fileImport.selecting && sonata.trace.firstCycle === start + 16,
+                keyStart
+            ),
+        "PageDown did not move to the next window"
+    );
+    await evaluate(() => {
+        document.getElementById("file-back")!.click();
+        document.getElementById("file-back")!.click();
+    });
+    await ready();
+    assert.equal(await evaluate(({ sonata }) => sonata.trace.firstCycle), 384, "Rapid history back lost a visit");
+    assert.equal(await evaluate(({ sonata }) => sonata.fileImport.view!.span), 128, "Rapid history back lost the span");
+    await evaluate(() => {
+        document.getElementById("file-forward")!.click();
+        document.getElementById("file-forward")!.click();
+    });
+    await ready();
+    assert.equal(
+        await evaluate(({ sonata }) => sonata.trace.firstCycle),
+        keyStart + 16,
+        "Rapid history forward lost a visit"
+    );
+    await open();
     return {
         overview: true,
         search: true,
@@ -474,6 +520,7 @@ async function reviewNavigation(window: BrowserWindow, contents: string) {
         bookmarks: true,
         continuous: true,
         playbackIntent: true,
+        rapidNavigation: true,
         staleResponse: true
     };
 }

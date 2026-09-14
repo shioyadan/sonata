@@ -555,3 +555,5 @@ for (const trace of globalThis.embeddedFlowTraces) {
         `${trace.key}: ${replay.snapshots.length} FIFO snapshots; ${returns.length} memory broadcasts; ${feed.events.length} code rewinds`
     );
 }
+
+require("./check-continuity.cjs");

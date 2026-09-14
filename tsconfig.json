@@ -16,6 +16,7 @@
     "scripts/check-smoke.cts",
     "scripts/check-import.cts",
     "scripts/check-navigation.cts",
+    "scripts/check-file-playback.cts",
     "scripts/browser-test.cts"
   ]
 }

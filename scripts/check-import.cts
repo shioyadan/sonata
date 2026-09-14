@@ -8,6 +8,9 @@ import type { BrowserWindow } from "electron";
 import type browserTest = require("./browser-test.cts");
 const { createBrowserTest, waitFor: waitUntil } = require("./load-test.cjs")("browser-test.cts") as typeof browserTest;
 const reviewNavigation = require("./load-test.cjs")("check-navigation.cts") as typeof import("./check-navigation.cts");
+const reviewFilePlayback = require("./load-test.cjs")(
+    "check-file-playback.cts"
+) as typeof import("./check-file-playback.cts");
 
 // 外部の実トレースをCIへ持ち込まず、形式・圧縮・区間移動を実際のFile入力で検査する。
 function fixture(count = 320) {
@@ -621,6 +624,7 @@ async function reviewImport(window: BrowserWindow, screenshots: string) {
         await importFile("one-cycle.kanata", "Kanata\t0004\nI\t0\t0\t0\nS\t0\t0\tF\n");
         assert.equal(await evaluate(() => document.getElementById("playhead")!.style.left), "0%");
         await evaluate(({ sonata }) => sonata.loadTrace("rename-rush"));
+        const continuity = await reviewFilePlayback(window);
         return {
             formats: ["Kanata", "gem5", "gzip", "zstd"],
             sourceOps: 321,
@@ -632,7 +636,8 @@ async function reviewImport(window: BrowserWindow, screenshots: string) {
             playbackBeforeEOF: true,
             seekBeforeEOF: true,
             preservePositionAtEOF: true,
-            navigation
+            navigation,
+            continuity
         };
     } finally {
         debuggerAPI.detach();

@@ -449,7 +449,8 @@ function createScene({ gpu, replay, session }: SceneOptions) {
         ) as Vector;
     }
 
-    function buildLayout() {
+    function buildLayout(preserveCapacity = false) {
+        const previous = scene.nodes;
         scene.nodes = new Map();
         scene.connections = [];
         const front = replay.trace.structure.frontNodes;
@@ -489,6 +490,9 @@ function createScene({ gpu, replay, session }: SceneOptions) {
         if (rn)
             rn.instructionSlots = Math.max(
                 1,
+                preserveCapacity && previous.get(rn.id)?.names?.join() === rn.names?.join()
+                    ? (previous.get(rn.id)?.instructionSlots ?? 1)
+                    : 1,
                 ...replay.ops.flatMap((op) =>
                     op.stages.filter((s) => s.names.includes("Rn")).map((s) => (s.displaySlot ?? 0) + 1)
                 )
@@ -552,11 +556,14 @@ function createScene({ gpu, replay, session }: SceneOptions) {
             node.latency = latency;
         }
         const load = scene.nodes.get("exec-load"),
-            slots = replay.memory.waitSlots.load;
+            slots = Math.max(
+                replay.memory.waitSlots.load,
+                preserveCapacity ? (previous.get("memory-wait")?.instructionSlots ?? 0) : 0
+            );
         if (load && slots) {
             const width = 1.15,
                 depth = Math.max(1.25, Math.ceil(slots / 3) * 0.3 + 0.4);
-            makeNode(
+            const wait = makeNode(
                 "memory-wait",
                 "LOAD WAIT",
                 load.x + load.w / 2 + width / 2 + 0.24,
@@ -567,6 +574,7 @@ function createScene({ gpu, replay, session }: SceneOptions) {
                 session.style.palette.memory,
                 "INFERRED RESPONSE WAIT"
             );
+            wait.instructionSlots = slots;
         }
         // 左端を保って右へ広げ、メモリ待ちからの接続線が逆向きになるのを避ける。
         const robWidth = replay.trace.structure.robCapacity > 96 ? 3.0 : 2.45;
@@ -1213,8 +1221,27 @@ function createScene({ gpu, replay, session }: SceneOptions) {
     }
 
     // 配置だけの検査は GPU を渡さず、描画データを作るときにのみ GPU が必要になる。
-    function buildWorld() {
-        buildLayout();
+    let worldSignature = "";
+    let worldGround: ReturnType<typeof createGround> | null = null;
+    let worldBuilds = 0;
+    function buildWorld(reuse = false) {
+        const previous = scene.nodes;
+        buildLayout(reuse);
+        // 観測ピークは窓ごとに更新するが、同じ形状の固定GPU資源とDOMは使い続ける。
+        const signature = JSON.stringify([
+            session.style,
+            [...scene.nodes.values()],
+            scene.connections.map(({ peak, ...shape }) => shape),
+            replay.registerTags,
+            replay.trace.evidence?.registers
+        ]);
+        if (reuse && signature === worldSignature) {
+            for (const node of scene.nodes.values()) {
+                node.element = previous.get(node.id)?.element;
+                node.grid = previous.get(node.id)?.grid;
+            }
+            return worldGround;
+        }
         const lines: number[] = [],
             stars: number[] = [],
             shadows: number[] = [],
@@ -1445,6 +1472,9 @@ function createScene({ gpu, replay, session }: SceneOptions) {
             $("labels").append(el);
             n.element = el;
         }
+        worldSignature = signature;
+        worldGround = ground;
+        worldBuilds++;
         return ground;
     }
     return Object.assign(scene, {
@@ -1469,6 +1499,7 @@ function createScene({ gpu, replay, session }: SceneOptions) {
         wakePath,
         buildLayout,
         buildWorld,
+        worldBuildCount: () => worldBuilds,
         vertex,
         line,
         point,

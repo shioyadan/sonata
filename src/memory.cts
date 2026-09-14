@@ -25,8 +25,12 @@ function instructionType(label: string): "integer" | "branch" | AccessKind | "at
     return "integer";
 }
 
-function prepareMemory(ops: Operation[], trace: replayModel.Trace) {
-    const accesses = new Map<Operation, { start: number; end: number; stages: Stage[] }[]>();
+type MemoryOperation = Pick<
+    Operation,
+    "memoryKind" | "stages" | "flush" | "unfinished" | "completion" | "issue" | "end"
+>;
+function observeAccesses<T extends MemoryOperation>(ops: T[]) {
+    const accesses = new Map<T, { start: number; end: number; stages: Stage[] }[]>();
     const minimum: Record<AccessKind, number | null> = { load: null, store: null };
     for (const op of ops) {
         if (!op.memoryKind || op.memoryKind === "atomic") continue;
@@ -45,7 +49,14 @@ function prepareMemory(ops: Operation[], trace: replayModel.Trace) {
         accesses.set(op, groups);
         // 後半だけの区間・squash・最終readyへ至らない再試行は最短値の根拠にしない。
         for (const group of groups) {
-            if (op.flush || op.completion == null || group.end !== op.completion || op.completion > op.end) continue;
+            if (
+                op.flush ||
+                op.unfinished ||
+                op.completion == null ||
+                group.end !== op.completion ||
+                op.completion > op.end
+            )
+                continue;
             if (
                 op.issue == null ||
                 group.start < op.issue ||
@@ -55,6 +66,44 @@ function prepareMemory(ops: Operation[], trace: replayModel.Trace) {
             const duration = group.end - group.start;
             minimum[kind] = Math.min(minimum[kind] ?? Infinity, duration);
         }
+    }
+    return { accesses, minimum };
+}
+
+// Coreで役割を確認した有界標本にも、表示時と同じアクセスの成立条件を適用する。
+function observedMinimum(ops: replayModel.Trace["ops"]) {
+    return observeAccesses(
+        ops.map((op) => {
+            const kind = instructionType(op[5]);
+            const stages: Stage[] = [];
+            for (const [name, sourceNode, start, end] of op[6]) {
+                const node = sourceNode === "exec-memory" ? `exec-${kind}` : sourceNode;
+                const previous = stages.at(-1);
+                if (previous?.node === node) {
+                    previous.end = Math.max(previous.end, end);
+                    previous.names.push(name);
+                } else stages.push({ names: [name], node, start, end });
+            }
+            return {
+                memoryKind: kind === "load" || kind === "store" || kind === "atomic" ? kind : undefined,
+                flush: !!op[4],
+                unfinished: op[12],
+                issue: op[8],
+                completion: op[9],
+                end: op[3],
+                stages
+            };
+        })
+    ).minimum;
+}
+
+function prepareMemory(ops: Operation[], trace: replayModel.Trace) {
+    const { accesses, minimum } = observeAccesses(ops);
+    const profile = trace.displayProfile;
+    // 任意Fileは全体で観測した基準を使い、未観測の種別だけ局所の根拠で補う。
+    for (const kind of ["load", "store"] as const) {
+        const globalMinimum = profile?.memoryMinimum[kind];
+        if (globalMinimum != null) minimum[kind] = globalMinimum;
     }
     for (const [op, groups] of accesses) {
         const base = minimum[op.memoryKind as AccessKind];
@@ -100,8 +149,12 @@ function prepareMemory(ops: Operation[], trace: replayModel.Trace) {
         ends[slot] = Math.min(op.end, stage.end + 0.82);
     }
     const sharedPipes = trace.structure.executionNodes.find((n) => n.kind === "memory")?.pipeCount ?? 0;
-    const loadCount = ops.filter((op) => op.memoryKind === "load").length;
-    const storeCount = ops.filter((op) => op.memoryKind === "store").length;
+    const loadCount = profile
+        ? Number(profile.memoryKinds.includes("load"))
+        : ops.filter((op) => op.memoryKind === "load").length;
+    const storeCount = profile
+        ? Number(profile.memoryKinds.includes("store"))
+        : ops.filter((op) => op.memoryKind === "store").length;
     const budget = Math.max(loadCount && storeCount ? 2 : 1, sharedPipes);
     const storePipes = storeCount
         ? loadCount
@@ -124,7 +177,7 @@ function prepareMemory(ops: Operation[], trace: replayModel.Trace) {
                 sharedPipes
             });
     }
-    if (ops.some((op) => op.memoryKind === "atomic"))
+    if (profile?.memoryKinds.includes("atomic") || ops.some((op) => op.memoryKind === "atomic"))
         executionNodes.push({ id: "exec-memory", kind: "memory", names: [], pipeCount: 1, latency: 1, sharedPipes });
     // 同時に発行されたアクセスは別の表示管路へ分ける。物理ポートIDの推定ではない。
     for (const node of executionNodes.filter((n) => n.kind === "memory")) {
@@ -158,5 +211,5 @@ function prepareMemory(ops: Operation[], trace: replayModel.Trace) {
         }
     };
 }
-const memory = { instructionType, prepareMemory };
+const memory = { instructionType, observedMinimum, prepareMemory };
 export = memory;
