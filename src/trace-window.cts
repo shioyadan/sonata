@@ -28,7 +28,7 @@ type ExecutionKind = "integer" | "memory" | "branch";
 interface StructureProfile {
     detected: DetectedStageStructure | null;
     lane: number;
-    protocol: "gem5" | "rsd" | null;
+    protocol: "gem5" | "rsd" | "onikiri" | null;
     frontNodes: Trace["structure"]["frontNodes"];
     executionNames: string[];
     completionNames: string[];
@@ -124,7 +124,7 @@ function primaryLane(ops: readonly Readonly<Op>[]) {
 }
 
 // パーサーの既知の記録形式は局所区間に順序逆転がなくても役割を判定できる。
-// RSDは複数の固有stageの組を確認し、任意のKanata名へ意味を押し付けない。
+// RSD / Onikiriは固有stageの組を確認し、任意のKanata名へ意味を押し付けない。
 function stageProtocol(
     ops: readonly Readonly<Op>[],
     lane: number,
@@ -141,8 +141,62 @@ function stageProtocol(
         )
     )
         return "rsd";
+    // OnikiriのDumpStateの組合せ。rsはready信号、rscは再スケジュールで、実行ではない。
+    if (
+        ["F", "Rn", "D", "Slc", "I", "X", "Wb", "Cm"].every((name) => names.has(name)) &&
+        (names.has("Sr") || names.has("Sw")) &&
+        [...names].every((name) =>
+            [
+                "F",
+                "Rn",
+                "D",
+                "Sr",
+                "Sw",
+                "Wat",
+                "rs",
+                "Wku",
+                "Slc",
+                "Ip",
+                "I",
+                "X",
+                "Wb",
+                "f",
+                "Cm",
+                "Rt",
+                "stl",
+                "fls",
+                "rsc",
+                "rse",
+                "rsf",
+                "rsl",
+                "Xbm",
+                "Xlm",
+                "Xam",
+                "Xlu"
+            ].includes(name)
+        )
+    )
+        return "onikiri";
     return null;
 }
+
+const protocolStages = {
+    rsd: {
+        front: ["Np", "F", "Pd", "Dc", "Rn", "Ds"],
+        allocation: ["Sc"],
+        issue: "Is",
+        execution: ["X", "Mt", "Ma"],
+        completion: "Rw"
+    },
+    gem5: { front: ["F", "Dc", "Rn"], allocation: ["Ds"], issue: "Is", execution: ["Is"], completion: "Cm" },
+    onikiri: {
+        front: ["F", "Rn", "D"],
+        allocation: ["Rn"],
+        issue: "I",
+        execution: ["X", "Xbm", "Xlm", "Xam", "Xlu"],
+        completion: "Wb"
+    }
+};
 
 // 最初の命令が途中でsquashされても、後の命令に観測した前後関係で並べる。
 // 循環する未知stageは同じ表示区画へまとめ、架空の一方向順序を作らない。
@@ -332,19 +386,14 @@ function toTraceWindow(
     if (ops.some((op) => !ranges.get(op.id)!.length))
         throw new Error(`Some instructions have no recorded stages in lane ${laneNames[lane] ?? lane}`);
     const protocol = profile ? profile.protocol : stageProtocol(ops, lane, source.parser),
+        rules = protocol ? protocolStages[protocol] : null,
         executionNames = new Set(
-            profile?.executionNames ??
-                (protocol === "rsd"
-                    ? ["X", "Mt", "Ma"]
-                    : protocol === "gem5"
-                      ? ["Is"]
-                      : (detected?.executionStage.stageNames ?? []))
+            profile?.executionNames ?? rules?.execution ?? detected?.executionStage.stageNames ?? []
         ),
         observations = new Map(ops.map((op) => [op.id, detected?.observe(op)]));
     const frontNames = new Set<string>();
-    if (protocol) {
-        for (const name of protocol === "rsd" ? ["Np", "F", "Pd", "Dc", "Rn", "Ds"] : ["F", "Dc", "Rn"])
-            frontNames.add(name);
+    if (rules) {
+        for (const name of rules.front) frontNames.add(name);
     } else
         for (const op of ops) {
             const allocation = observations.get(op.id)?.allocationCycle;
@@ -382,11 +431,19 @@ function toTraceWindow(
     const compactOps: CompactOperation[] = ops.map((op) => {
         const observed = observations.get(op.id),
             path = ranges.get(op.id)!,
-            allocation = protocol
-                ? (path.find((range) => range.name === (protocol === "rsd" ? "Sc" : "Ds"))?.start ?? null)
+            // Onikiriのrename処理はNOPだけRnを経ずF→fへ進む。同じ観測境界でROBへ入れる。
+            bypass =
+                protocol === "onikiri" &&
+                path[0]?.name === "F" &&
+                path[1]?.name === "f" &&
+                path.slice(1).every((range) => ["f", "Cm", "Rt"].includes(range.name))
+                    ? path[1]
+                    : null,
+            allocation = rules
+                ? (path.find((range) => rules.allocation.includes(range.name))?.start ?? bypass?.start ?? null)
                 : (observed?.allocationCycle ?? null),
-            issue = protocol
-                ? (path.find((range) => range.name === "Is")?.start ?? null)
+            issue = rules
+                ? (path.find((range) => range.name === rules.issue)?.start ?? null)
                 : (observed?.issueCycle ?? null),
             kind = memoryModel.instructionType(op.labelName),
             execution = `exec-${kind === "load" || kind === "store" || kind === "atomic" ? "memory" : kind}`;
@@ -397,13 +454,13 @@ function toTraceWindow(
                 path.findLast(
                     (range) =>
                         range.start >= lastExecution.end &&
-                        (protocol ? range.name === (protocol === "rsd" ? "Rw" : "Cm") : completionNames.has(range.name))
+                        (rules ? range.name === rules.completion : completionNames.has(range.name))
                 );
         const response =
             source.parser === "gem5" && ["load", "store", "atomic"].includes(kind)
                 ? path.findLast((range) => range.name === "Mc")
                 : undefined;
-        const completion = issue == null ? null : (response?.start ?? completed?.start ?? null);
+        const completion = bypass?.start ?? (issue == null ? null : (response?.start ?? completed?.start ?? null));
         const stages: CompactOperation[6] = path.map((range, index) => {
             let node = frontByName.get(range.name) ?? frontNodes.at(-1)!.id;
             if (allocation != null && range.start >= allocation) {
@@ -418,6 +475,18 @@ function toTraceWindow(
                     node = kind === "load" && (completion == null || range.start < completion) ? "memory-wait" : "rob";
                 else if (range.name === "Cm" && op.retired && !op.flush && !unfinished(op)) node = "commit";
             }
+            if (protocol === "onikiri" && allocation != null) {
+                if (frontByName.has(range.name)) node = frontByName.get(range.name)!;
+                else if (
+                    ["Sr", "Sw", "Wat", "rs", "Wku", "Slc", "Ip", "I", "rsc", "rse", "rsf", "rsl"].includes(range.name)
+                )
+                    node = "issue";
+                else if (executionNames.has(range.name))
+                    node = kind === "load" && ["Xlm", "Xlu"].includes(range.name) ? "memory-wait" : execution;
+                else if (["Wb", "f"].includes(range.name)) node = "rob";
+            }
+            if (protocol === "onikiri" && range.name === "Cm" && op.retired && !op.flush && !unfinished(op))
+                node = "commit";
             if (protocol === "gem5" && range.name === "Rt" && op.retired && !op.flush && !unfinished(op))
                 node = "commit";
             return [range.name, node, range.start, range.end];
@@ -442,7 +511,7 @@ function toTraceWindow(
         activePeak = peak(compactOps.map((op) => [op[2], endOf(op)])),
         queuePeak = peak(
             compactOps.flatMap((op) =>
-                op[7] == null ? [] : [[op[7], Math.min(op[8] ?? endOf(op), endOf(op))] as const]
+                op[7] == null ? [] : [[op[7], Math.min(op[8] ?? op[9] ?? endOf(op), endOf(op))] as const]
             )
         ),
         robPeak = peak(compactOps.flatMap((op) => (op[7] == null ? [] : [[op[7], endOf(op)] as const])));
@@ -503,7 +572,7 @@ function toTraceWindow(
             }))
         }));
     const inferred = protocol
-        ? `Stage roles follow the ${protocol === "rsd" ? "RSD" : "gem5 O3PipeView"} stage records`
+        ? `Stage roles follow the ${protocol === "rsd" ? "RSD" : protocol === "onikiri" ? "Onikiri" : "gem5 O3PipeView"} stage records${protocol === "onikiri" ? "; ROB display admission follows observed rename processing, not hardware allocation" : ""}`
         : detected
           ? profile
               ? "Stage roles inferred from an ID-ordered bounded file sample"
@@ -611,18 +680,13 @@ function buildProfile(observed: StructureObservations, previous?: StructureProfi
         : ([...observed.names].sort((a, b) => b[1].size - a[1].size || a[0] - b[0])[0]?.[0] ?? 0);
     const lane = knownLane ?? detected?.allocationStage.laneID ?? previous?.lane ?? fallbackLane;
     const names = observed.names.get(lane) ?? new Set<string>();
-    const protocol = previous?.protocol ?? stageProtocol([], lane, observed.source.parser, names);
-    const executionNames =
-        protocol === "rsd"
-            ? ["X", "Mt", "Ma"]
-            : protocol === "gem5"
-              ? ["Is"]
-              : [...(detected?.executionStage.stageNames ?? [])];
+    // namesは全体の累積値。未知名が増えた場合は既知形式だと決めつけない。
+    const protocol = stageProtocol([], lane, observed.source.parser, names);
+    const rules = protocol ? protocolStages[protocol] : null;
+    const executionNames = rules?.execution ?? [...(detected?.executionStage.stageNames ?? [])];
     const edges = observed.edges.get(lane) ?? new Map<string, ReadonlySet<string>>();
     const completionNames = [...new Set(executionNames.flatMap((name) => [...(edges.get(name) ?? [])]))];
-    const frontNames = new Set<string>(
-        protocol ? (protocol === "rsd" ? ["Np", "F", "Pd", "Dc", "Rn", "Ds"] : ["F", "Dc", "Rn"]) : names
-    );
+    const frontNames = new Set<string>(rules?.front ?? names);
     if (!protocol && detected) {
         const behind = [...detected.allocationStage.stageNames];
         for (let index = 0; index < behind.length; index++) {
@@ -695,6 +759,7 @@ type StoreWaitValue = StoreWait;
 const traceWindow = {
     toTraceWindow,
     buildProfile,
+    stageProtocol,
     limits,
     isUnfinished: unfinished,
     createStoreClock,

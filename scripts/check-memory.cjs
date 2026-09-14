@@ -88,6 +88,17 @@ assert.equal(JSON.stringify(trace), original, "Preparing memory changed recorded
 assert.deepEqual(replay.memory.minimum, { load: 3, store: 1 });
 assert.equal(instructionType("sbfm x0, x1, #0, #7"), "integer");
 assert.equal(instructionType("sb x1, 0(x2)"), "store");
+for (const [label, kind] of [
+    ["20000300 r2 = LD.64(r1)", "load"],
+    ["20000304 ST.32(r2, r3)", "store"],
+    ["20000308 (r2, r3) = LD.64(r1)", "load"],
+    ["2000030c BNE(r2, r3)", "branch"],
+    ["20000310 r2 = MUL.64(r1, r0)", "integer"],
+    ["20000314 r2 = SPST.64(r1)", "integer"],
+    ["trace r2 = LD.64(r1)", "integer"],
+    ["20000300 note = LD.64(r1)", "integer"]
+])
+    assert.equal(instructionType(label), kind, `Incorrect classification of ${label}`);
 assert.equal(instructionType("bic x0, x1, x2"), "integer");
 assert.equal(instructionType("stxr w0, x1, [x2]"), "atomic");
 const op = (id) => replay.ops.find((o) => o.id === id);

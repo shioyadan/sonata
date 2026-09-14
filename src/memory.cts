@@ -6,12 +6,18 @@ type Stage = replayModel.Stage;
 type AccessKind = "load" | "store";
 
 function instructionType(label: string): "integer" | "branch" | AccessKind | "atomic" {
-    const mnemonic = label
-        .replace(/^(?:0x)?[0-9a-f]+:\s*/i, "")
+    // OnikiriのPC・出力レジスタ付き表記だけを剥がし、任意の説明文を命令へ読み替えない。
+    const onikiri = label
         .trim()
-        .replace(/^[A-Z0-9_]+\s*:\s*/, "")
-        .split(/\s+/)[0]
-        .toLowerCase();
+        .match(/^(?:0x)?[0-9a-f]+\s+(?:(?:r\d+|\(r\d+(?:,\s*r\d+)*\))\s*=\s*)?([a-z][a-z0-9_.]*)\([^()]*\)$/i);
+    const mnemonic = (
+        onikiri?.[1] ??
+        label
+            .replace(/^(?:0x)?[0-9a-f]+:\s*/i, "")
+            .trim()
+            .replace(/^[A-Z0-9_]+\s*:\s*/, "")
+            .split(/\s+/)[0]
+    ).toLowerCase();
     if (/^(?:amo|cas|swp|ldadd|ldclr|ldeor|ldset|ldsmax|ldsmin|ldumax|ldumin)/.test(mnemonic)) return "atomic";
     if (/^(?:stxr|stlxr|sc\.)/.test(mnemonic)) return "atomic";
     if (/^(?:ld|load)/.test(mnemonic) || /^(?:lb|lbu|lh|lhu|lw|lwu|flw|fld)$/.test(mnemonic)) return "load";
@@ -63,8 +69,9 @@ function observeAccesses<T extends MemoryOperation>(ops: T[]) {
                 !group.stages[0].names.some((n) => n === "Is" || n === "X")
             )
                 continue;
-            const duration = group.end - group.start;
-            minimum[kind] = Math.min(minimum[kind] ?? Infinity, duration);
+            const duration =
+                (group.stages.find((stage) => stage.node === "memory-wait")?.start ?? group.end) - group.start;
+            if (duration > 0) minimum[kind] = Math.min(minimum[kind] ?? Infinity, duration);
         }
     }
     return { accesses, minimum };
@@ -114,7 +121,9 @@ function prepareMemory(ops: Operation[], trace: replayModel.Trace) {
         }
         if (base == null) continue;
         for (const group of groups) {
-            const duration = Math.min(base, group.end - group.start);
+            // 記録の段から明示した待機を、別区間の最短値で管路へ戻さない。
+            const untilWait = group.stages.find((stage) => stage.node === "memory-wait")?.start ?? group.end;
+            const duration = Math.min(base, untilWait - group.start);
             const first = group.stages[0];
             const replacement: Stage[] = [
                 {

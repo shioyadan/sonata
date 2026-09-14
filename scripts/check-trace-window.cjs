@@ -2,7 +2,7 @@
 // ブラウザと同じ有界変換を、記録した時刻・未観測値・区間境界と照合する。
 const assert = require("node:assert/strict");
 const { toTraceWindow, limits } = require("../src/trace-window.cts");
-const { createReplay } = require("../src/replay-model.cts");
+const { createReplay, createWaitPlayback } = require("../src/replay-model.cts");
 const { createProfiles, limits: profileLimits } = require("../src/trace-structure.cts");
 const { createScene, styles } = require("../src/scene.cts");
 const { createPaths } = require("../src/geometry.cts");
@@ -273,6 +273,142 @@ partialRsd.lanes[0].stages = partialRsd.lanes[0].stages.filter((stage) => !["Sc"
 const missingAdmission = convert([rsdOps[0], partialRsd]);
 assert.deepEqual(missingAdmission.ops[1].slice(7, 10), [null, null, null]);
 assert.ok(missingAdmission.ops[1][6].every((stage) => stage[1].startsWith("front-")));
+
+// Onikiriのready信号や再スケジュールは実行ではない。長いrsc/XlmとNOPのfを区別する。
+const onikiriRetry = operation(
+    0,
+    [
+        ["F", 0, 3],
+        ["Rn", 3, 4],
+        ["D", 4, 5],
+        ["Sw", 5, 6],
+        ["rs", 6, 6],
+        ["Wku", 6, 6],
+        ["Slc", 6, 7],
+        ["I", 7, 8],
+        ["rsc", 8, 80],
+        ["rs", 80, 80],
+        ["Wku", 80, 80],
+        ["Slc", 80, 81],
+        ["I", 81, 82],
+        ["X", 82, 84],
+        ["Wb", 84, 85],
+        ["f", 85, 89],
+        ["Cm", 89, 91]
+    ],
+    { labelName: "20000300 r2 = MUL.64(r1, r0)" }
+);
+const onikiriNop = operation(
+    1,
+    [
+        ["F", 0.25, 3],
+        ["f", 3, 90],
+        ["Cm", 90, 92]
+    ],
+    { labelName: "20000304 RPINC()" }
+);
+const onikiriLoad = operation(
+    2,
+    [
+        ["F", 0.5, 3.25],
+        ["Rn", 3.25, 4.25],
+        ["D", 4.25, 5.25],
+        ["Sr", 5.25, 6.25],
+        ["Slc", 6.25, 7.25],
+        ["I", 7.25, 8.25],
+        ["X", 8.25, 10.25],
+        ["Xlm", 10.25, 81.25],
+        ["Wb", 81.25, 85.25],
+        ["f", 85.25, 92],
+        ["Cm", 92, 94]
+    ],
+    { labelName: "20000308 r3 = LD.64(r1)" }
+);
+const onikiriOps = [onikiriRetry, onikiriNop, onikiriLoad],
+    onikiriRaw = JSON.stringify(onikiriOps),
+    onikiri = convert(onikiriOps, { firstCycle: 20, lastCycle: 60 }),
+    onikiriState = prepare(onikiri);
+assert.equal(JSON.stringify(onikiriOps), onikiriRaw);
+assert.match(onikiri.demo.provenance.note, /Onikiri stage records/);
+assert.deepEqual(onikiri.ops[0].slice(7, 10), [3, 7, 84]);
+assert.deepEqual(onikiri.ops[1].slice(7, 10), [3, null, 3], "NOP invented issue or lost its observed completion");
+assert.deepEqual(onikiri.ops[2].slice(7, 10), [3.25, 7.25, 81.25]);
+for (const op of onikiriOps)
+    assert.deepEqual(
+        onikiri.ops.find((item) => item[0] === op.id)[6].map(([name, , start, end]) => [name, start, end]),
+        op.lanes[0].stages.map((stage) => [stage.name, stage.startCycle, stage.endCycle])
+    );
+for (const [id, cycle, node] of [
+    [0, 20, "issue"],
+    [0, 82.5, "exec-integer"],
+    [0, 86, "rob"],
+    [1, 20, "rob"],
+    [2, 20, "memory-wait"]
+])
+    assert.equal(
+        onikiriState.paths.stageAt(
+            onikiriState.replay.ops.find((op) => op.id === id),
+            cycle
+        ).node,
+        node
+    );
+assert.equal(createWaitPlayback(onikiri, onikiriState.replay.ops)(20), 60);
+assert.equal(createWaitPlayback(onikiri, onikiriState.replay.ops)(82.5), null, "Actual execution was accelerated");
+const slowerReference = prepare({
+    ...onikiri,
+    displayProfile: { memoryMinimum: { load: 100, store: null }, memoryKinds: ["load"] }
+});
+assert.equal(
+    slowerReference.paths.stageAt(
+        slowerReference.replay.ops.find((op) => op.id === 2),
+        20
+    ).node,
+    "memory-wait",
+    "A global access reference turned an explicit miss wait into motion"
+);
+assert.equal(onikiriState.replay.robReplay.stateAt(2).entries.length, 0, "A future NOP completion allocated ROB early");
+const onikiriProfiles = createProfiles();
+for (const op of onikiriOps) onikiriProfiles.observe(op, "onikiri", true);
+const onikiriSource = { name: "unrelated-name.txt", parser: "onikiri", opCount: 3, lastCycle: 100 };
+const onikiriProfile = onikiriProfiles.get(0, (id) => onikiriOps.find((op) => op.id === id), onikiriSource);
+assert.equal(onikiriProfile.protocol, "onikiri");
+assert.equal(onikiriProfile.memoryMinimum.load, 2, "Known miss wait inflated the access baseline");
+for (const firstCycle of [0, 20, 80]) {
+    const selected = convert([onikiriRetry], { profile: onikiriProfile, firstCycle, lastCycle: firstCycle + 1 });
+    assert.deepEqual(selected.ops[0], onikiri.ops[0], "Window selection changed Onikiri retry observations");
+}
+const unknownOnikiri = structuredClone(onikiriRetry);
+unknownOnikiri.lanes[0].stages[4].name = "opaque";
+assert.doesNotMatch(
+    convert([unknownOnikiri]).demo.provenance.note,
+    /Onikiri stage records/,
+    "Unknown stages were assigned Onikiri roles"
+);
+unknownOnikiri.id = 3;
+onikiriProfiles.observe(unknownOnikiri, "onikiri", true);
+assert.equal(
+    onikiriProfiles.get(0, (id) => [...onikiriOps, unknownOnikiri].find((op) => op.id === id), onikiriSource).protocol,
+    null,
+    "A previous known profile assigned roles to newly observed unknown stages"
+);
+const flushedOnikiri = structuredClone(onikiriRetry);
+flushedOnikiri.flush = true;
+flushedOnikiri.retired = false;
+flushedOnikiri.lanes[0].stages = flushedOnikiri.lanes[0].stages.slice(0, -3);
+flushedOnikiri.retiredCycle = 84;
+const flushedOnikiriTrace = convert([flushedOnikiri], { profile: onikiriProfile });
+assert.equal(flushedOnikiriTrace.ops[0][4], 1);
+assert.equal(flushedOnikiriTrace.ops[0][9], null, "Squash acquired a future writeback");
+assert.ok(flushedOnikiriTrace.ops[0][6].every((stage) => stage[1] !== "commit"));
+const unfinishedOnikiri = structuredClone(onikiriLoad);
+unfinishedOnikiri.eof = true;
+unfinishedOnikiri.retired = false;
+unfinishedOnikiri.lanes[0].stages = unfinishedOnikiri.lanes[0].stages.slice(0, 8);
+unfinishedOnikiri.retiredCycle = 70;
+unfinishedOnikiri.lanes[0].stages.at(-1).endCycle = 70;
+const unfinishedOnikiriTrace = convert([unfinishedOnikiri], { profile: onikiriProfile, firstCycle: 20, lastCycle: 60 });
+assert.equal(unfinishedOnikiriTrace.ops[0][9], null, "Unobserved final writeback became a completion");
+assert.equal(createWaitPlayback(unfinishedOnikiriTrace, prepare(unfinishedOnikiriTrace).replay.ops)(20), null);
 
 // gem5先頭の無発行命令もRtへ進み、Ds/Is/Cmの通常経路を前段へ並べ替えない。
 function gem5Operation(id, stages, options = {}) {

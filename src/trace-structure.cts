@@ -106,7 +106,7 @@ function createProfiles() {
                 state.dirty = true;
             }
             if ((kind === "load" || kind === "store") && op.retired && !op.flush && !windows.isUnfinished(op)) {
-                for (const lane of op.lanes) {
+                for (const [laneID, lane] of op.lanes.entries()) {
                     const stages = lane?.stages ?? [];
                     if (
                         stages.some(
@@ -118,8 +118,10 @@ function createProfiles() {
                         )
                     )
                         continue;
-                    const issue = stages.find((stage) => stage.name === "Is");
-                    const executionNames = parser === "gem5" ? ["Is"] : ["X", "Mt", "Ma"];
+                    const onikiri = windows.stageProtocol([op], laneID, parser) === "onikiri";
+                    const issue = stages.find((stage) => stage.name === (onikiri ? "I" : "Is"));
+                    const executionNames =
+                        parser === "gem5" ? ["Is"] : onikiri ? ["X", "Xbm", "Xlm", "Xam", "Xlu"] : ["X", "Mt", "Ma"];
                     const last = stages.findLastIndex((stage) => executionNames.includes(stage.name));
                     if (!issue || last < 0) continue;
                     const executionEnd = stages[last].endCycle;
@@ -127,12 +129,18 @@ function createProfiles() {
                         parser === "gem5"
                             ? (stages.findLast((stage) => stage.name === "Mc") ??
                               stages.findLast((stage) => stage.name === "Cm" && stage.startCycle >= executionEnd))
-                            : stages.findLast((stage) => stage.name === "Rw" && stage.startCycle >= executionEnd);
+                            : stages.findLast(
+                                  (stage) => stage.name === (onikiri ? "Wb" : "Rw") && stage.startCycle >= executionEnd
+                              );
                     if (!completion) continue;
                     let first = last;
                     while (first > 0 && executionNames.includes(stages[first - 1].name)) first--;
                     const start = stages[first].startCycle,
-                        end = completion.startCycle,
+                        end =
+                            onikiri && kind === "load"
+                                ? (stages.slice(first, last + 1).find((stage) => ["Xlm", "Xlu"].includes(stage.name))
+                                      ?.startCycle ?? completion.startCycle)
+                                : completion.startCycle,
                         duration = end - start;
                     if (
                         !Number.isFinite(duration) ||
