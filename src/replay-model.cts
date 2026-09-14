@@ -121,6 +121,8 @@ interface TraceData {
     ops: CompactOperation[];
     storeCompletions?: [number, number][];
     feedPreview?: Pick<FeedInstruction, "id" | "fetch" | "label" | "kind">[];
+    // 現在窓の後に追加 fetch がないと確認できた末端。省略時は窓外を推測しない。
+    emptyTailUntil?: number;
     displayProfile?: {
         memoryMinimum: { load: number | null; store: number | null };
         memoryKinds: ("load" | "store" | "atomic")[];
@@ -345,6 +347,57 @@ function advancePlayback(
         time += dt * speed * flushPlaybackRate(midpoint, events, options);
     }
     return time;
+}
+
+function createEmptyPlayback(trace: TraceData): (cycle: number) => number | null {
+    const minimumGap = 16,
+        before = 2,
+        after = 6,
+        busy: [number, number][] = [],
+        gaps: [number, number][] = [],
+        storeTimes = new Map(trace.storeCompletions ?? []),
+        nextFetch = trace.feedPreview?.reduce((first, op) => Math.min(first, op.fetch), Infinity) ?? Infinity,
+        until = Math.max(
+            trace.lastCycle,
+            trace.emptyTailUntil ?? trace.lastCycle,
+            Number.isFinite(nextFetch) ? nextFetch : trace.lastCycle
+        );
+    const protect = (start: number, end = start) => busy.push([start - before, end + after]);
+    // ステージ間の停止も生存中として扱い、未完了命令の終端を窓の末尾で切らない。
+    for (const op of trace.ops) {
+        const end = op[12] ? Infinity : op[4] ? (op[11] ?? op[3]) : op[3];
+        protect(op[2], Math.max(end, storeTimes.get(op[0]) ?? end));
+    }
+    for (const [, time] of trace.storeCompletions ?? []) protect(time);
+    for (const event of trace.demo.events ?? []) protect(event.cycle, event.endCycle ?? event.cycle);
+    const registers = trace.evidence?.registers;
+    for (const event of registers?.events ?? []) protect(event.cycle);
+    for (const event of registers?.allocation?.events ?? []) protect(event.cycle);
+    for (const read of registers?.reads ?? []) protect(read.cycle);
+    // preview は確定した先頭までしか証明しない。未知の生存期間には進まない。
+    if (Number.isFinite(nextFetch)) busy.push([nextFetch - before, Infinity]);
+    busy.sort((a, b) => a[0] - b[0]);
+    let cursor = trace.firstCycle;
+    for (const [start, end] of busy) {
+        const next = Math.min(start, until);
+        if (next - cursor >= minimumGap) gaps.push([cursor, next]);
+        cursor = Math.max(cursor, end);
+        if (cursor >= until) break;
+    }
+    if (until - cursor >= minimumGap) gaps.push([cursor, until]);
+    // 統合済みの空白だけを二分探索し、毎フレーム命令配列を走査しない。
+    return (cycle) => {
+        if (!Number.isFinite(cycle)) return null;
+        let low = 0,
+            high = gaps.length;
+        while (low < high) {
+            const middle = (low + high) >>> 1;
+            if (gaps[middle][1] <= cycle) low = middle + 1;
+            else high = middle;
+        }
+        const gap = gaps[low];
+        return gap && cycle >= gap[0] && gap[1] - cycle >= minimumGap ? gap[1] : null;
+    };
 }
 
 function measureTransfers(
@@ -1165,6 +1218,7 @@ const replayModel = {
     sampleTopDown,
     flushPlaybackRate,
     advancePlayback,
+    createEmptyPlayback,
     measureTransfers,
     createDependencyReplay,
     createRegisterReplay,

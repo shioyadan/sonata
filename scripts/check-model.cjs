@@ -8,6 +8,7 @@ const {
     sampleTopDown,
     flushPlaybackRate,
     advancePlayback,
+    createEmptyPlayback,
     measureTransfers,
     createDependencyReplay,
     createRegisterReplay,
@@ -140,6 +141,127 @@ for (const speed of [1, 4, 16]) {
     const t = advancePlayback(-0.001, 0.075, speed, [0]);
     assert.ok(t > 0 && t < 0.9, "Playback skipped the visible beginning of a flush");
 }
+
+// 空白の短縮は命令の移動量によらず、全生存期間と記録イベントを保護する。
+const emptyOp = (id, fetch, end, { flush = false, flushCycle = null, unfinished = false } = {}) => [
+    id,
+    id,
+    fetch,
+    end,
+    +flush,
+    `op ${id}`,
+    [],
+    null,
+    null,
+    null,
+    "exec-integer",
+    flushCycle,
+    unfinished
+];
+const emptyTrace = (ops, extra = {}) => ({
+    key: "local-file",
+    firstCycle: 0,
+    lastCycle: 200,
+    ops,
+    demo: {},
+    ...extra
+});
+const spacedOps = emptyTrace([emptyOp(1, 10, 20), emptyOp(2, 100, 110)]),
+    originalSpacedOps = structuredClone(spacedOps),
+    emptyPlayback = createEmptyPlayback(spacedOps);
+assert.equal(emptyPlayback(8), null, "The fetch lead-in must play normally");
+assert.equal(emptyPlayback(25.999), null, "Commit animation must finish before skipping");
+assert.equal(emptyPlayback(26), 98, "An empty gap must stop two cycles before fetch");
+assert.equal(emptyPlayback(82), 98, "Exactly sixteen remaining cycles can be skipped");
+assert.equal(emptyPlayback(82.001), null, "A short remaining gap must play normally after seeking");
+assert.equal(emptyPlayback(98), null, "The skip destination must not skip again");
+assert.equal(emptyPlayback(116), 200);
+assert.equal(emptyPlayback(200), null);
+assert.equal(emptyPlayback(-1), null);
+assert.equal(emptyPlayback(NaN), null);
+assert.deepEqual(spacedOps, originalSpacedOps, "Empty playback must preserve recorded instructions and times");
+assert.equal(emptyPlayback(26), 98, "Seeking backwards must not alter the empty intervals");
+
+const overlapping = createEmptyPlayback(
+    emptyTrace([emptyOp(3, 20, 25), emptyOp(2, 30, 60), emptyOp(1, 10, 40), emptyOp(4, 100, 110)])
+);
+assert.equal(overlapping(46), null, "One completed instruction does not make overlapping lifetimes empty");
+assert.equal(overlapping(66), 98);
+const waitingPlayback = createEmptyPlayback(emptyTrace([emptyOp(1, 0, 1000)], { lastCycle: 1200 }));
+assert.equal(waitingPlayback(100), null, "A long wait is still an active instruction");
+assert.equal(waitingPlayback(1005.999), null);
+assert.equal(waitingPlayback(1006), 1200);
+const carryIn = createEmptyPlayback(emptyTrace([emptyOp(1, 0, 400)], { firstCycle: 200, lastCycle: 250 }));
+assert.equal(carryIn(200), null, "Carry-in lifetimes must not be clipped to the displayed window");
+
+const preview = [{ id: 2, fetch: 1_000_000_000, label: "future", kind: "integer" }];
+assert.equal(
+    createEmptyPlayback(emptyTrace([emptyOp(1, 0, 20, { unfinished: true })], { feedPreview: preview }))(100),
+    null,
+    "An unfinished instruction must block skipping even beyond the current window"
+);
+const deferredFlush = createEmptyPlayback(
+    emptyTrace([emptyOp(1, 0, 10, { flush: true, flushCycle: 40 }), emptyOp(2, 100, 110)])
+);
+assert.equal(deferredFlush(16), null, "The effective squash cycle overrides the retired tuple field");
+assert.equal(deferredFlush(45.999), null, "Squash recovery must retain its full six-cycle margin");
+assert.equal(deferredFlush(46), 98);
+assert.equal(
+    createEmptyPlayback(emptyTrace([emptyOp(1, 0, 40, { flush: true, flushCycle: 0 })]))(6),
+    200,
+    "A recorded squash at cycle zero is not a missing timestamp"
+);
+assert.equal(
+    createEmptyPlayback(emptyTrace([emptyOp(1, 0, 10), emptyOp(2, 30, 40)]))(16),
+    null,
+    "A short empty interval must retain normal playback"
+);
+
+const boundaryWindow = { firstCycle: 16, lastCycle: 32, feedPreview: preview };
+assert.equal(createEmptyPlayback(emptyTrace([emptyOp(1, 0, 10)], boundaryWindow))(16), 999_999_998);
+assert.equal(
+    createEmptyPlayback(emptyTrace([], boundaryWindow))(16),
+    999_999_998,
+    "A completed instruction leaving the six-cycle context must not change the safe gap boundary"
+);
+assert.equal(createEmptyPlayback(emptyTrace([], { firstCycle: 16, lastCycle: 32 }))(16), 32);
+assert.equal(
+    createEmptyPlayback(emptyTrace([], { firstCycle: 16, lastCycle: 32, feedPreview: [] }))(32),
+    null,
+    "An absent preview does not prove that the next window is empty"
+);
+assert.equal(createEmptyPlayback(emptyTrace([], { emptyTailUntil: 1_000_000_000 }))(16), 1_000_000_000);
+assert.equal(
+    createEmptyPlayback(emptyTrace([], { feedPreview: preview, emptyTailUntil: 1_000_000_000 }))(16),
+    999_999_998,
+    "The next fetch margin also applies to a confirmed empty tail"
+);
+
+const pendingStore = createEmptyPlayback(
+    emptyTrace([emptyOp(1, 0, 10)], { storeCompletions: [[1, 100]], feedPreview: preview })
+);
+assert.equal(pendingStore(16), null, "A recorded store completion extends the instruction's pending lifetime");
+assert.equal(pendingStore(100), null);
+assert.equal(pendingStore(106), 999_999_998);
+const orphanStore = createEmptyPlayback(emptyTrace([], { storeCompletions: [[1, 100]], feedPreview: preview }));
+assert.equal(orphanStore(0), 98, "A recorded completion without a visible instruction is still an event");
+assert.equal(orphanStore(100), null);
+assert.equal(orphanStore(106), 999_999_998);
+const recordedEvent = createEmptyPlayback(
+    emptyTrace([], { demo: { events: [{ kind: "icache-miss", cycle: 50, endCycle: 70, id: 1 }] } })
+);
+assert.equal(recordedEvent(0), 48);
+assert.equal(recordedEvent(60), null);
+assert.equal(recordedEvent(76), 200);
+const registerEvent = createEmptyPlayback(
+    emptyTrace([], { evidence: { registers: { events: [{ cycle: 40 }], reads: [{ cycle: 80 }] } } })
+);
+assert.equal(registerEvent(0), 38);
+assert.equal(registerEvent(40), null);
+assert.equal(registerEvent(46), 78);
+assert.equal(registerEvent(80), null);
+console.log("empty playback: lifetimes, observed events, animation margins and confirmed gap boundaries");
+
 // 滞在時間や同一実行モジュール内の重複区間ではなく、境界の通過を数える。
 const transfers = measureTransfers(
     [
