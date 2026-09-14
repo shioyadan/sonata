@@ -75,6 +75,32 @@ function snapshot(scene) {
         positions
     });
 }
+function checkRobMarkerPath({ placement, replay }) {
+    const capacity = replay.trace.structure.robCapacity;
+    const distance = (a, b) => Math.hypot(...a.map((value, i) => value - b[i]));
+    for (let slot = 0; slot < capacity; slot++) {
+        const cell = placement.robCell(slot, 0.1);
+        assert.deepEqual(placement.robMarker(slot, 0.1), cell, "A settled ROB marker missed its cell");
+        assert.ok(
+            distance(placement.robMarker(slot - 0.000001, 0.1), placement.robMarker(slot + 0.000001, 0.1)) < 0.001,
+            `ROB marker jumped at a row or wrap boundary: ${slot}`
+        );
+        if (slot + 1 < capacity) {
+            const next = placement.robCell(slot + 1, 0.1),
+                middle = placement.robMarker(slot + 0.5, 0.1);
+            assert.ok(
+                Math.abs(distance(cell, middle) + distance(middle, next) - distance(cell, next)) < 1e-9,
+                "ROB marker cut across the serpentine cell path"
+            );
+        }
+    }
+    const first = placement.robCell(0, 0.1),
+        last = placement.robCell(capacity - 1, 0.1),
+        wrap = placement.robMarker(capacity - 0.5, 0.1);
+    assert.ok(wrap[2] < Math.min(first[2], last[2]), "The ROB wrap marker crossed occupied cells");
+    assert.deepEqual(placement.robMarker(capacity, 0.1), first);
+    assert.deepEqual(placement.robMarker(-0.5, 0.1), wrap, "Reverse wrap took a different path");
+}
 const matteStyles = ["aluminum", "paper"];
 assert.deepEqual(Object.keys(styles), ["neon", ...matteStyles], "Available styles or their order changed");
 for (const style of matteStyles) assert.equal(styles[style].matte, true, `${style} did not use grounded instructions`);
@@ -99,6 +125,7 @@ for (const [index, sample] of samples.entries()) {
     second.load(sample.key);
     assert.equal(first.replay.ops.length, sample.ops.length);
     assert.ok(first.placement.nodes.size > 0);
+    checkRobMarkerPath(first);
     const registers = first.placement.nodes.get("register-read");
     if (registers)
         for (const connection of first.placement.connections.filter((c) => c.from === "register-read"))

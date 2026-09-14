@@ -139,6 +139,8 @@ gem5 の独立した `Store Tick` が記録されている通常ストアは、�
 
 ROB の小さな光は allocation から終了までのエントリの占有を示し、同じ命令の移動する光点と同時に表示されます。完了時に ready になっても slot は解放せず、先頭の commit 時に head が進みます。commit の粒子は該当する先頭 slot から出ます。途中へのシークでも同じ head / tail / slot になるように allocation・retire・squash を時刻順に再生した snapshot を使用します。gem5 は確認できた物理容量 192 entries、RSD はサンプルから算出した表示用の容量を使います。
 
+HEAD / TAIL のマーカーは、記録された更新の後0.4サイクルで補間して移動します。セル間の折り返し・循環と、squash時の末尾の巻き戻しはROBの配線に沿わせます。マーカーの座標だけを滑らかにし、占有・ready・head / tailの整数値・命令の割当と解放は元の記録時刻を使います。表示位置もトレース時刻から求めるため、逆シーク・区間交換で履歴に依存せず、補間途中で停止するとマーカーもその位置で止まります。Motion effectsがOFFの場合は、マーカーも実際のセルへ即時に移します。診断APIの`sonata.rob`は記録上の状態、`sonata.robMarkers`は表示座標です。
+
 ロードからスケジューラへの通知は、非 squash 命令のロード完了時刻に発生する **completion broadcast の演出**です。通知の着地点は行列の外周の wake-up bus です。producer が行列に残っていればその列へ、発行済みなら行列外のバスから依存する consumer 行へ通知します。待つ consumer がなければバス上で終わります。セルの解決は記録された ready 時刻に従い、通知の飛行が終わるまで issue を遅らせることはありません。通知の飛行に 1.2 サイクル分の表示時間を使いますが、元の issue 時刻やメモリ latency は変更しません。Miss & recover の Highlight には、最初の D-cache miss を起こしたロードの `Memory ready → scheduler` を含めています。
 
 **COMMIT** は1 サイクルの commit 幅に対応したスロットを持ちます。gem5 は8枠、RSD は2枠です。そのサイクルに実際に commit した命令を終了時刻・順序に従って並べ、該当する枠を命令色で点灯します。未使用の枠は暗く、モジュールの下に `使用数 / 幅 THIS CYCLE` を表示します。squash 命令は含めません。ROB から出る粒子も同じ枠を通り、飛行時間は演出で元の終了時刻を変更しません。状態は `sonata.commitSlots` で確認できます。Top-down の分類名 `Retiring` は解析で使う名称を維持しています。

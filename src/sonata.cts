@@ -1124,6 +1124,9 @@ function start(gl: WebGL2RenderingContext) {
                     }))
                 };
             },
+            get robMarkers() {
+                return { head: [...activity.robMarkers.head], tail: [...activity.robMarkers.tail] };
+            },
             get memoryReturns() {
                 return replay.memoryEvents.map((e) => ({ id: e.id, time: e.time }));
             },

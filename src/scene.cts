@@ -388,6 +388,31 @@ function createScene({ gpu, replay, session }: SceneOptions) {
         ];
     }
 
+    function robWrap(lift = 0): Vector[] {
+        const first = robCell(0, lift),
+            last = robCell(replay.trace.structure.robCapacity - 1, lift);
+        return [last, [last[0] + 0.32, last[1], last[2] - 0.26], [first[0] - 0.32, first[1], first[2] - 0.26], first];
+    }
+
+    // 表示マーカーだけをセル間で補間し、折り返し・循環も固定配線と同じ経路を通す。
+    function robMarker(slot: number, lift = 0): Vector {
+        const capacity = replay.trace.structure.robCapacity,
+            wrapped = ((slot % capacity) + capacity) % capacity,
+            index = Math.floor(wrapped),
+            fraction = wrapped - index;
+        const path = index === capacity - 1 ? robWrap(lift) : [robCell(index, lift), robCell(index + 1, lift)];
+        const lengths = path.slice(1).map((point, i) => Math.hypot(...point.map((value, k) => value - path[i][k])));
+        let remaining = fraction * lengths.reduce((sum, length) => sum + length, 0);
+        for (let i = 0; i < lengths.length; i++) {
+            if (remaining <= lengths[i]) {
+                const t = lengths[i] > 0 ? remaining / lengths[i] : 0;
+                return path[i].map((value, k) => mix(value, path[i + 1][k], t)) as Vector;
+            }
+            remaining -= lengths[i];
+        }
+        return path.at(-1)!;
+    }
+
     function commitSlot(index: number): { inlet: Vector; outlet: Vector; depth: number } {
         const n = scene.nodes.get("commit")!,
             pitch = (n.d * 0.8) / replay.trace.retireWidth,
@@ -1349,14 +1374,7 @@ function createScene({ gpu, replay, session }: SceneOptions) {
         // 連続した物理スロットを蛇行させ、1 本の循環 FIFO を構成する。
         for (let slot = 0; slot < replay.trace.structure.robCapacity - 1; slot++)
             line(lines, robCell(slot, -0.09), robCell(slot + 1, -0.09), session.style.palette.blue, 0.28);
-        const first = robCell(0, -0.09),
-            last = robCell(replay.trace.structure.robCapacity - 1, -0.09);
-        const wrap = [
-            last,
-            [last[0] + 0.32, last[1], last[2] - 0.26],
-            [first[0] - 0.32, first[1], first[2] - 0.26],
-            first
-        ];
+        const wrap = robWrap(-0.09);
         for (let i = 0; i < wrap.length - 1; i++) line(lines, wrap[i], wrap[i + 1], session.style.palette.blue, 0.22);
         for (const id of ["memory-wait"]) {
             if (!scene.nodes.has(id)) continue;
@@ -1491,6 +1509,7 @@ function createScene({ gpu, replay, session }: SceneOptions) {
         registerReadPort,
         memoryWaitPosition,
         robCell,
+        robMarker,
         commitSlot,
         wakeBusEntry,
         wakeColumnHead,

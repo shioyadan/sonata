@@ -92,6 +92,7 @@ async function reviewBrowser(window: BrowserWindow, entry: string, screenshots?:
     await ready();
     window.focus();
     const playhead = await reviewPlayhead(window);
+    const robMarkers = await reviewRobMarkers(window);
     const first = await evaluate(({ sonata, $ }) => {
         sonata.setPlaying(false);
         sonata.setCycle(sonata.trace.firstCycle);
@@ -462,6 +463,7 @@ async function reviewBrowser(window: BrowserWindow, entry: string, screenshots?:
     await ready();
     return {
         playhead,
+        robMarkers,
         keyboard: {
             stepping: true,
             bounds: true,
@@ -483,6 +485,67 @@ async function reviewBrowser(window: BrowserWindow, entry: string, screenshots?:
         contextRecovery: { clockPaused: true, playbackResumed: true, styles: contextRecoveries },
         withoutMSAA
     };
+}
+
+// 記録上のHEAD/TAILは即時に更新し、表示だけが更新後に移動することを実描画で確認する。
+async function reviewRobMarkers(window: BrowserWindow) {
+    const { evaluate, sampleFrame } = createBrowserTest(window);
+    const original = await evaluate(({ sonata }) => ({
+        key: sonata.trace.key,
+        cycle: sonata.cycle,
+        style: sonata.visualStyle,
+        playing: sonata.playing,
+        motion: document.getElementById("motion-effects")!.getAttribute("aria-pressed") === "true"
+    }));
+    const sample = (cycle: number) =>
+        sampleFrame(() =>
+            evaluate(({ sonata }, cycle) => {
+                sonata.captureAt(cycle);
+                const { head, tail, entries } = sonata.rob;
+                return { markers: sonata.robMarkers, state: { head, tail, count: entries.length } };
+            }, cycle)
+        );
+    try {
+        await evaluate(({ sonata }) => {
+            sonata.loadTrace("rename-rush");
+            if (document.getElementById("motion-effects")!.getAttribute("aria-pressed") !== "true")
+                document.getElementById("motion-effects")!.click();
+        });
+        for (const style of ["neon", "aluminum", "paper"]) {
+            await evaluate((_page, style) => document.getElementById("style-" + style)!.click(), style);
+            // 423cyでは4命令をcommitし、8命令をallocationする。次の更新は424cy。
+            const before = await sample(422.999),
+                changed = await sample(423),
+                middle = await sample(423.2),
+                settled = await sample(423.5),
+                reversed = await sample(423.2);
+            assert.deepEqual(before.state, { head: 25, tail: 73, count: 48 });
+            assert.deepEqual(changed.state, { head: 29, tail: 81, count: 52 });
+            assert.deepEqual(middle.state, changed.state, "Smoothing delayed the observed ROB update");
+            assert.deepEqual(changed.markers, before.markers, "ROB markers moved before their recorded update");
+            assert.deepEqual(reversed, middle, "Reverse seeking changed ROB marker positions");
+            for (const pointer of ["head", "tail"] as const) {
+                assert.notDeepEqual(middle.markers[pointer], before.markers[pointer], `${pointer} did not move`);
+                assert.notDeepEqual(middle.markers[pointer], settled.markers[pointer], `${pointer} jumped to its cell`);
+            }
+            const paused = await sampleFrame(() => evaluate(({ sonata }) => sonata.robMarkers));
+            assert.deepEqual(paused, middle.markers, "Paused ROB markers continued moving");
+            await evaluate(() => document.getElementById("motion-effects")!.click());
+            assert.deepEqual((await sample(423.2)).markers, settled.markers, "Motion effects OFF kept interpolation");
+            await evaluate(() => document.getElementById("motion-effects")!.click());
+            assert.deepEqual((await sample(423.2)).markers, middle.markers, "Motion effects ON changed the path");
+        }
+        return { styles: 3, afterEvent: true, continuous: true, reverseSeek: true, pause: true, motionToggle: true };
+    } finally {
+        await evaluate(({ sonata }, original) => {
+            sonata.loadTrace(original.key);
+            document.getElementById("style-" + original.style)!.click();
+            const motion = document.getElementById("motion-effects")!;
+            if ((motion.getAttribute("aria-pressed") === "true") !== original.motion) motion.click();
+            sonata.setCycle(original.cycle);
+            sonata.setPlaying(original.playing);
+        }, original);
+    }
 }
 
 // 重い詳細DOMの更新を待たず、実際の各描画フレームで再生マーカーが時計に追従する。

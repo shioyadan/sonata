@@ -58,6 +58,7 @@ interface ActivityState {
     activeNotifications: sonataReplay.Replay["memoryEvents"];
     registerReads: RegisterRead[];
     renameWords: RenameWord[];
+    robMarkers: { head: Vector; tail: Vector };
     physicalElements: Map<number, HTMLSpanElement>;
 }
 interface StreamState {
@@ -123,6 +124,7 @@ function createActivity({ camera, clock, scene, gpu, paths, replay, session }: A
         activeNotifications: [],
         registerReads: [],
         renameWords: [],
+        robMarkers: { head: [0, 0, 0], tail: [0, 0, 0] },
         physicalElements: new Map()
     };
     function drawDynamic(dt: number) {
@@ -253,9 +255,11 @@ function createActivity({ camera, clock, scene, gpu, paths, replay, session }: A
                     0.3 + completion * 0.5
                 );
         }
-        const head = scene.robCell(fifo.head, 0.1),
-            tail = scene.robCell(fifo.tail, 0.1),
+        const markerSlots = session.reducedMotion ? fifo : replay.robReplay.markersAt(session.cycle),
+            head = scene.robMarker(markerSlots.head, 0.1),
+            tail = scene.robMarker(markerSlots.tail, 0.1),
             oldest = fifo.entries[0]?.op;
+        activity.robMarkers = { head, tail };
         const headColor =
             oldest?.completion != null && session.cycle >= oldest.completion
                 ? session.style.palette.integer
