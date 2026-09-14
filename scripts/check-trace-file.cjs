@@ -219,6 +219,7 @@ async function check() {
     await checkScanCancellation();
     await checkWindowCancellation();
     await checkStreaming();
+    await checkSettledPrefix();
     await checkFileStructure();
     await checkConcurrentIndex();
     await checkFlushGroups();
@@ -860,6 +861,7 @@ async function checkStreaming() {
         assert.equal(partial.source.opCount, 1);
         assert.equal(partial.source.parser, "onikiri");
         assert.equal(partial.source.storedBytes, null);
+        assert.equal(partial.source.settledCycle, 2);
         await session.window(request(1));
         assert.equal(settled, false, "A cycle window waited for the input's EOF");
         assert.equal(input.finished, false);
@@ -870,6 +872,7 @@ async function checkStreaming() {
         input.append(tail);
         const updated = await box.wait((m) => m.type === "loaded" && m.source.opCount === 2);
         assert.equal(updated.source.complete, false);
+        assert.equal(updated.source.settledCycle, 4, "An unpublished instruction was counted as settled");
         await session.window(request(2, 2));
         assert.ok(box.messages.some((m) => m.type === "window" && m.request === 2));
         input.finish();
@@ -923,6 +926,7 @@ async function checkStreaming() {
     try {
         const partial = await gemBox.wait((m) => m.type === "loaded");
         assert.equal(partial.source.parser, "gem5");
+        assert.equal(partial.source.settledCycle, null, "An unordered gem5 prefix was declared settled");
         assert.equal(partial.source.complete, false);
         assert.equal(gemInput.streams, 2, "The fixed Core's format fallback contract changed");
         await gemSession.window(request(1));
@@ -932,6 +936,44 @@ async function checkStreaming() {
         assert.equal(gemBox.messages.filter((m) => m.type === "loaded").at(-1).source.opCount, 18500);
     } finally {
         gemSession.close();
+    }
+}
+
+async function checkSettledPrefix() {
+    const input = controlledInput(
+        "Kanata\t0004\nI\t0\t0\t0\nS\t0\t0\tF\nC\t50\nI\t1\t1\t0\nS\t1\t0\tF\nC\t150\nR\t0\t0\t0\n"
+    );
+    const box = mailbox(),
+        session = createFileSession(box.send);
+    const opening = session.open(input);
+    try {
+        const first = await box.wait((m) => m.type === "loaded");
+        assert.equal(first.source.lastCycle, 200);
+        assert.equal(first.source.settledCycle, 50, "The oldest unpublished fetch must bound acceleration");
+        await session.window(request(1));
+        const oldWindow = box.messages.find((m) => m.type === "window").trace;
+        assert.equal(oldWindow.playbackSafeUntil, 50);
+        assert.deepEqual(
+            oldWindow.ops.map((op) => op[0]),
+            [0]
+        );
+        input.append("R\t1\t1\t0\nI\t2\t2\t0\nS\t2\t0\tF\n");
+        const sameCycle = await box.wait((m) => m.type === "loaded" && m.source.opCount === 2);
+        assert.equal(sameCycle.source.settledCycle, 200, "An unfinished cycle must remain outside the prefix");
+        input.append("C\t50\nR\t2\t2\t0\n");
+        const nextCycle = await box.wait((m) => m.type === "loaded" && m.source.opCount === 3);
+        assert.equal(nextCycle.source.settledCycle, 250);
+        assert.equal(oldWindow.playbackSafeUntil, 50, "New parser progress changed an old window's certificate");
+        await session.window(request(2));
+        assert.equal(box.messages.find((m) => m.type === "window" && m.request === 2).trace.playbackSafeUntil, 250);
+        input.append("C\t-1\nI\t3\t3\t0\nR\t3\t3\t0\n");
+        await box.wait((m) => m.type === "loaded" && m.source.settledCycle === null);
+        await session.window(request(3));
+        assert.equal(box.messages.find((m) => m.type === "window" && m.request === 3).trace.playbackSafeUntil, null);
+        input.finish();
+        await opening;
+    } finally {
+        session.close();
     }
 }
 

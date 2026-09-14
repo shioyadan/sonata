@@ -125,6 +125,8 @@ interface TraceData {
     feedPreview?: Pick<FeedInstruction, "id" | "fetch" | "label" | "kind">[];
     // 現在窓の後に追加 fetch がないと確認できた末端。省略時は窓外を推測しない。
     emptyTailUntil?: number;
+    // この表示窓を取得した時点で、後から命令が追加されないと確認できた境界。
+    playbackSafeUntil?: number | null;
     displayProfile?: {
         memoryMinimum: { load: number | null; store: number | null };
         memoryKinds: ("load" | "store" | "atomic")[];

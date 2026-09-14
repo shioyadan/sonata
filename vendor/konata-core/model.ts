@@ -176,6 +176,7 @@ export class ParsedTrace {
         readonly opStore: OpStore,
         readonly stageLevelMap: StageLevelMap,
         private lastCycle_: number,
+        private readonly settledCycle_: () => number | null = () => null,
     ) {}
 
     get laneNames(): readonly string[] {
@@ -189,6 +190,12 @@ export class ParsedTrace {
     // 読み込み途中も同じtraceをRendererへ渡すため、Parserが確定済みcycleを更新する。
     updateLastCycle(lastCycle: number): void {
         this.lastCycle_ = lastCycle;
+    }
+
+    // この境界より前は全命令がstoreに入り、後続行でイベントが追加されない。
+    // 読み込み中にその保証を持たない形式や不整合のある入力はnullを返す。
+    get settledCycle(): number | null {
+        return this.settledCycle_();
     }
 
     get warningCount(): number {

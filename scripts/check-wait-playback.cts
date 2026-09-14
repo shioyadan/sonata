@@ -89,6 +89,117 @@ async function reviewWaitPlayback(window: BrowserWindow) {
         }, cycle);
         await until((s) => s.start === cycle && !s.busy, "The waiting window did not load");
     }
+    async function partialWait() {
+        const prefix = "Kanata\t0004\nI\t0\t0\t0\nS\t0\t0\tF\nC\t50\nI\t1\t1\t0\nS\t1\t0\tF\nC\t150\nR\t0\t0\t0\n";
+        const original = await evaluate(() => globalThis.sonataTraceWorkerSource);
+        try {
+            await evaluate((_page, prefix) => {
+                // 実際のParserへ渡す後半だけを止め、読み込み時間に依存せず安全境界を検査する。
+                globalThis.sonataTraceWorkerSource = `
+                    let release;
+                    const gate = new Promise(resolve => release = resolve);
+                    File.prototype.stream = function () {
+                        const file = this;
+                        let offset = 0;
+                        return new ReadableStream({async pull(controller) {
+                            if (offset) await gate;
+                            if (offset >= file.size) { controller.close(); return; }
+                            const end = offset ? file.size : ${prefix.length};
+                            controller.enqueue(new Uint8Array(await file.slice(offset, end).arrayBuffer()));
+                            offset = end;
+                        }});
+                    };
+                    ${globalThis.sonataTraceWorkerSource}
+                    const receive = onmessage;
+                    const send = postMessage.bind(globalThis);
+                    let source, invalid = false, windows = 0;
+                    globalThis.postMessage = data => {
+                        if (data.type === "loaded") source = data.source;
+                        if (invalid && data.type === "window") {
+                            data.trace.playbackSafeUntil = null;
+                            if (++windows > 2) {
+                                send({type: "error", message: "Invalid prefix triggered repeated refresh"});
+                                return;
+                            }
+                        }
+                        send(data);
+                    };
+                    onmessage = event => {
+                        if (event.data.type === "release-wait-input") { invalid = false; release(); }
+                        else if (event.data.type === "invalidate-wait-prefix") {
+                            invalid = true;
+                            send({type: "loaded", source: {...source, settledCycle: 1000}});
+                        } else receive(event);
+                    };
+                `;
+                const NativeWorker = Worker;
+                globalThis.Worker = new Proxy(NativeWorker, {
+                    construct(Target, args) {
+                        const worker = new Target(...(args as [string | URL, WorkerOptions?]));
+                        (globalThis as typeof globalThis & { waitTestWorker?: Worker }).waitTestWorker = worker;
+                        globalThis.Worker = NativeWorker;
+                        return worker;
+                    }
+                });
+                const transfer = new DataTransfer();
+                transfer.items.add(new File([prefix, "C\t30\nR\t1\t1\t0\n"], "partial-wait.kanata"));
+                document.dispatchEvent(new DragEvent("drop", { dataTransfer: transfer, cancelable: true }));
+            }, prefix);
+            await waitFor(
+                async () =>
+                    evaluate(
+                        ({ sonata }) =>
+                            sonata.trace.key === "local-file" &&
+                            !sonata.fileImport.selecting &&
+                            sonata.fileImport.loading
+                    ),
+                "The partial wait did not become available"
+            );
+            assert.equal(await evaluate(({ sonata }) => sonata.trace.playbackSafeUntil), 50);
+            await playAt(8);
+            await until(
+                (s) => s.status!.includes("Fast-forwarding wait"),
+                "The settled prefix did not accelerate before EOF"
+            );
+            await until(
+                (s) => s.cycle >= 48 && !s.status!.includes("Fast-forwarding wait"),
+                "Acceleration crossed an unpublished fetch"
+            );
+            await evaluate(({ sonata }) => sonata.setPlaying(false));
+            const partial = await state();
+            assert.equal(partial.complete, false);
+            assert.ok(partial.cycle < 50, "The pending instruction's arrival was skipped");
+            // 正の古いloadedと、警告後のnull境界を持つ窓応答が交差しても再取得を繰り返さない。
+            await evaluate(() =>
+                (globalThis as typeof globalThis & { waitTestWorker: Worker }).waitTestWorker.postMessage({
+                    type: "invalidate-wait-prefix"
+                })
+            );
+            await waitFor(
+                async () =>
+                    evaluate(({ sonata }) => sonata.trace.playbackSafeUntil === null && !sonata.fileImport.selecting),
+                "The invalidated prefix did not settle"
+            );
+            await evaluate(async () => new Promise((resolve) => setTimeout(resolve, 150)));
+            assert.ok(!(await state()).status!.includes("Invalid prefix"));
+            await evaluate(() =>
+                (globalThis as typeof globalThis & { waitTestWorker: Worker }).waitTestWorker.postMessage({
+                    type: "release-wait-input"
+                })
+            );
+            await until((s) => Boolean(s.complete) && !s.busy, "The final wait window did not refresh");
+            assert.deepEqual(await evaluate(({ sonata }) => sonata.trace.ops.map((op) => op[0])), [0, 1]);
+            assert.equal((await state()).cycle, partial.cycle, "Completing the input moved paused playback");
+        } finally {
+            await evaluate((_page, original) => {
+                const context = globalThis as typeof globalThis & { waitTestWorker?: Worker };
+                context.waitTestWorker?.postMessage({ type: "release-wait-input" });
+                delete context.waitTestWorker;
+                globalThis.sonataTraceWorkerSource = original;
+                document.getElementById("file-close")!.click();
+            }, original);
+        }
+    }
     try {
         assert.equal(
             await evaluate(() => (document.getElementById("file-speed-waits") as HTMLInputElement).checked),
@@ -243,7 +354,9 @@ async function reviewWaitPlayback(window: BrowserWindow) {
             "Reverse seeking changed the observed store wait"
         );
         await evaluate(({ sonata }) => sonata.setPlaying(false));
+        await partialWait();
         return {
+            incrementalWait: true,
             fetchWait: true,
             nextEvent: true,
             offAndPause: true,

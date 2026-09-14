@@ -42,7 +42,7 @@ function createTraceImport({
     let serial = 0;
     let searchID = 0;
     let pending: Pending | null = null;
-    let displayed: { view: View; end: number } | null = null;
+    let displayed: { view: View; end: number; safeUntil: number | null } | null = null;
     let prefetch: { id: number; view: View; trace?: replay.Trace } | null = null;
     let prefetchError: string | null = null;
     let loading = false;
@@ -185,6 +185,9 @@ function createTraceImport({
         if (!displayed || !source || pending || error || navigation.dragging) return;
         if (
             refreshAfterSelection ||
+            (displayed.safeUntil !== null &&
+                displayed.safeUntil <= displayed.end &&
+                (source.settledCycle ?? -Infinity) > displayed.end) ||
             displayed.end < Math.min(source.lastCycle, displayed.view.start + displayed.view.span - 1)
         ) {
             refreshAfterSelection = false;
@@ -218,7 +221,7 @@ function createTraceImport({
         position.cycle = Math.max(trace.firstCycle, Math.min(trace.lastCycle, position.cycle));
         const view = { ...selection.view, start: trace.firstCycle, ...position };
         const operations = apply(trace, { ...position, thread: view.thread });
-        displayed = { view, end: trace.lastCycle };
+        displayed = { view, end: trace.lastCycle, safeUntil: trace.playbackSafeUntil ?? null };
         emptyTarget = replay.createEmptyPlayback(trace);
         waitTarget = replay.createWaitPlayback(trace, operations);
         waitUntil = null;
@@ -256,13 +259,19 @@ function createTraceImport({
             resetAcceleration();
             return next > displayed.end ? displayed.view.start : next;
         }
-        // 未解析の命令が後から現れ得る間は、空白と断定して飛ばさない。
+        // 全体の解析が進んでも、表示窓の取得時に未公開だった命令は飛ばさない。
         const cycle = read().cycle;
-        const canAccelerate = source.complete && !error && !prefetchError;
-        const target =
+        const safeUntil =
+            Math.min(
+                displayed.safeUntil ?? -Infinity,
+                source.complete ? source.lastCycle : (source.settledCycle ?? -Infinity)
+            ) - 2;
+        const canAccelerate = cycle < safeUntil && !error && !prefetchError;
+        const empty =
             canAccelerate && element<HTMLInputElement>("file-skip-empty").checked
                 ? (emptyTarget?.(cycle) ?? null)
                 : null;
+        const target = empty === null || Math.min(empty, safeUntil) - cycle < 16 ? null : Math.min(empty, safeUntil);
         emptySeconds = target === null ? 0 : emptySeconds + seconds;
         if (target !== null && emptySeconds >= 0.35) {
             const destination = Math.min(target, source.lastCycle);
@@ -290,7 +299,8 @@ function createTraceImport({
         } else {
             // 開始後は短くなった残りも進めるが、窓交換時には記録から判定し直す。
             if (waitUntil !== null && cycle >= waitUntil) waitUntil = null;
-            waitUntil ??= waitTarget?.(cycle) ?? null;
+            const target = waitUntil ?? waitTarget?.(cycle) ?? null;
+            waitUntil = target === null ? null : Math.min(target, safeUntil);
             waitSeconds = waitUntil === null ? 0 : waitSeconds + seconds;
         }
         const accelerating = waitUntil !== null && waitSeconds >= 0.35;

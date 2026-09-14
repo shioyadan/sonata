@@ -3,13 +3,15 @@
   "repository": "https://github.com/shioyadan/Konata",
   "revision": "e714a3c967b3499d948016afa1158575142da5ce",
   "sourceDirectory": "src/core",
-  "localChanges": false,
+  "localChanges": [
+    "model.ts / onikiri_parser.ts: expose a conservative settled-cycle boundary for incremental Kanata playback; disable it after warnings or decreasing cycles."
+  ],
   "files": {
     "cycle_activity_analysis.ts": "07334e17c978720fd08e1e784970a2ffee003735feea58e941e827784604246a",
     "file_line_reader.ts": "47f875f03217a9c58cf0be593fd8ce62beb325cf1932e8921155e3e1b3cb003c",
     "gem5_o3_pipe_view_parser.ts": "54f0d53431f51c84c6ba61bcf6674ee1fa23bfbddad475b36a712088774d474a",
-    "model.ts": "b93bb755069a3363a0a8c502a1af3ee5b56bfd08efa1c10c65ab3f0b4aae3b51",
-    "onikiri_parser.ts": "bf880e7862a36336ce9811ed24cf407c695a0381375b60b6c85e9a37285fd87c",
+    "model.ts": "da9fcb8158c31ed3df73d69fff9d29f08662b82049af8c515685cf456d0e1be6",
+    "onikiri_parser.ts": "b6278c21339e1f8d3d5f8f90b0ccd0187a8515c84e3da4feb9b55b14c6e2e580",
     "op_store.ts": "49989006b5cc7a5162e52f1b2d78a6bbc960d150da198e60d883d1ca244bb283",
     "paged_op_store.ts": "02f4690a229c76913613c9a28561d4b157257cbf4450e36f7af93b8648455f98",
     "stage_structure_detector.ts": "78e33fcc8e81fffab6b7a1d9218d144e31613fee4108bc086c6760a21d1b8f27",
@@ -27,8 +29,8 @@
       "vendor/konata-core/browser.d.cts": "96c91caf414ab7e7e8773c94d78d0544630778daf51f7887b98642a3625c5db2",
       "vendor/konata-core/file_line_reader.ts": "47f875f03217a9c58cf0be593fd8ce62beb325cf1932e8921155e3e1b3cb003c",
       "vendor/konata-core/gem5_o3_pipe_view_parser.ts": "54f0d53431f51c84c6ba61bcf6674ee1fa23bfbddad475b36a712088774d474a",
-      "vendor/konata-core/model.ts": "b93bb755069a3363a0a8c502a1af3ee5b56bfd08efa1c10c65ab3f0b4aae3b51",
-      "vendor/konata-core/onikiri_parser.ts": "bf880e7862a36336ce9811ed24cf407c695a0381375b60b6c85e9a37285fd87c",
+      "vendor/konata-core/model.ts": "da9fcb8158c31ed3df73d69fff9d29f08662b82049af8c515685cf456d0e1be6",
+      "vendor/konata-core/onikiri_parser.ts": "b6278c21339e1f8d3d5f8f90b0ccd0187a8515c84e3da4feb9b55b14c6e2e580",
       "vendor/konata-core/op_store.ts": "49989006b5cc7a5162e52f1b2d78a6bbc960d150da198e60d883d1ca244bb283",
       "vendor/konata-core/paged_op_store.ts": "02f4690a229c76913613c9a28561d4b157257cbf4450e36f7af93b8648455f98",
       "vendor/konata-core/stage_structure_detector.ts": "78e33fcc8e81fffab6b7a1d9218d144e31613fee4108bc086c6760a21d1b8f27",
@@ -38,7 +40,7 @@
       "vendor/wasm-zstd/index.js": "3992956e0c164a0568b358e5de65bfd781b64a5a22f89b7fa1ea522f4fbe19ac"
     },
     "files": {
-      "browser.cjs": "cb3b351d258806a5c00e8bd81d21628f18b95b53c53a58c791fa440d798efc17"
+      "browser.cjs": "041d7aff0ea6117703f3b0899a8d85d5d289366fd3b67c637932edbcfd449f8d"
     }
   }
 }

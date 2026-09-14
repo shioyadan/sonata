@@ -1580,13 +1580,15 @@ class ParsedTrace {
     opStore;
     stageLevelMap;
     lastCycle_;
+    settledCycle_;
     warningCount_ = 0;
     referenceCount_ = 1;
-    constructor(fileName, opStore, stageLevelMap, lastCycle_) {
+    constructor(fileName, opStore, stageLevelMap, lastCycle_, settledCycle_ = () => null) {
         this.fileName = fileName;
         this.opStore = opStore;
         this.stageLevelMap = stageLevelMap;
         this.lastCycle_ = lastCycle_;
+        this.settledCycle_ = settledCycle_;
     }
     get laneNames() {
         return this.stageLevelMap.laneNames;
@@ -1596,6 +1598,9 @@ class ParsedTrace {
     }
     updateLastCycle(lastCycle) {
         this.lastCycle_ = lastCycle;
+    }
+    get settledCycle() {
+        return this.settledCycle_();
     }
     get warningCount() {
         return this.warningCount_;
@@ -1658,12 +1663,18 @@ class OnikiriParser {
     stageLevelMap_ = new model_1.StageLevelMap();
     currentLine_ = 1;
     currentCycle_ = 0;
+    chronological_ = true;
     warningCount_ = 0;
     constructor(opStore_ = new op_store_1.ArrayOpStore()) {
         this.opStore_ = opStore_;
     }
     async parse(reader, onProgress, onUpdate, signal) {
-        const trace = new model_1.ParsedTrace(reader.name, this.opStore_, this.stageLevelMap_, this.currentCycle_);
+        const trace = new model_1.ParsedTrace(reader.name, this.opStore_, this.stageLevelMap_, this.currentCycle_, () => {
+            const oldest = this.activeOps_.values().next().value;
+            return this.chronological_ && this.warningCount_ === 0
+                ? Math.min(this.currentCycle_, oldest?.fetchedCycle ?? this.currentCycle_)
+                : null;
+        });
         let formatConfirmed = false;
         const updateTrace = () => {
             trace.updateLastCycle(this.currentCycle_);
@@ -1718,7 +1729,10 @@ class OnikiriParser {
         }
         if (command === "C") {
             this.requireArguments_(args, 2, command);
-            this.currentCycle_ += this.parseInteger_(args[1], command);
+            const delta = this.parseInteger_(args[1], command);
+            if (delta < 0)
+                this.chronological_ = false;
+            this.currentCycle_ += delta;
             return;
         }
         if (command.length !== 1 || !"ILSERW".includes(command)) {

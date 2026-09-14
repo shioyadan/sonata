@@ -47,6 +47,7 @@ interface Source {
     storedBytes: number | null;
     indexBlocks: number;
     complete: boolean;
+    settledCycle: number | null;
     overview: Overview;
 }
 interface Block {
@@ -615,6 +616,7 @@ function createFileSession(send: (response: Response) => void) {
             storedBytes: complete ? (trace.opStore as core.PageStore).storedSize : null,
             indexBlocks: index.indexBlocks,
             complete,
+            settledCycle: trace.settledCycle,
             overview: index.overview
         };
     }
@@ -736,6 +738,9 @@ function createFileSession(send: (response: Response) => void) {
                 profile: profiles.get(request.thread, (id) => trace!.getOpForScan(id), selectedSource)
             };
             const converted = windows.toTraceWindow(selection);
+            converted.playbackSafeUntil = selectedSource.complete
+                ? selectedSource.lastCycle
+                : selectedSource.settledCycle;
             const preview = await selectPreview(
                 trace!,
                 previewBlocks,

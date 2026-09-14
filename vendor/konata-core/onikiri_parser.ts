@@ -30,6 +30,7 @@ export class OnikiriParser {
     // 現在の行番号と、現在読み出し中のcycle。
     private currentLine_ = 1;
     private currentCycle_ = 0;
+    private chronological_ = true;
     // 壊れた入力でconsoleを埋めないよう、警告表示は先頭だけに制限する。
     private warningCount_ = 0;
 
@@ -47,6 +48,15 @@ export class OnikiriParser {
             this.opStore_,
             this.stageLevelMap_,
             this.currentCycle_,
+            () => {
+                // Kanataの時刻は単調増加。Mapの先頭は未retire命令の最古fetchであり、
+                // その時刻以降には未公開命令がある。同じcycleの続きも確定扱いしない。
+                // progress通知間隔に依存せず、窓取得時に現在の境界を読む。
+                const oldest = this.activeOps_.values().next().value;
+                return this.chronological_ && this.warningCount_ === 0
+                    ? Math.min(this.currentCycle_, oldest?.fetchedCycle ?? this.currentCycle_)
+                    : null;
+            },
         );
         let formatConfirmed = false;
         const updateTrace = () => {
@@ -116,7 +126,9 @@ export class OnikiriParser {
         }
         if (command === "C") {
             this.requireArguments_(args, 2, command);
-            this.currentCycle_ += this.parseInteger_(args[1], command);
+            const delta = this.parseInteger_(args[1], command);
+            if (delta < 0) this.chronological_ = false;
+            this.currentCycle_ += delta;
             return;
         }
         if (command.length !== 1 || !"ILSERW".includes(command)) {
