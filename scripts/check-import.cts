@@ -17,6 +17,9 @@ const reviewImportDrag = require("./load-test.cjs")(
 const reviewEmptyPlayback = require("./load-test.cjs")(
     "check-empty-playback.cts"
 ) as typeof import("./check-empty-playback.cts");
+const reviewWaitPlayback = require("./load-test.cjs")(
+    "check-wait-playback.cts"
+) as typeof import("./check-wait-playback.cts");
 
 // 外部の実トレースをCIへ持ち込まず、形式・圧縮・区間移動を実際のFile入力で検査する。
 function fixture(count = 320) {
@@ -657,6 +660,7 @@ async function reviewImport(window: BrowserWindow, screenshots: string) {
         await evaluate(({ sonata }) => sonata.loadTrace("rename-rush"));
         const continuity = await reviewFilePlayback(window);
         const emptyPlayback = await reviewEmptyPlayback(window);
+        const waitPlayback = await reviewWaitPlayback(window);
         return {
             formats: ["Kanata", "gem5", "gzip", "zstd"],
             sourceOps: 321,
@@ -670,7 +674,8 @@ async function reviewImport(window: BrowserWindow, screenshots: string) {
             preservePositionAtEOF: true,
             navigation,
             continuity,
-            emptyPlayback
+            emptyPlayback,
+            waitPlayback
         };
     } finally {
         debuggerAPI.detach();

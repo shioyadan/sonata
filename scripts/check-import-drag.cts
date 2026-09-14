@@ -134,7 +134,8 @@ async function reviewImportDrag(window: BrowserWindow) {
     mouse("mouseDown", 0.3);
     mouse("mouseMove", 0.5);
     await ready(
-        (s) => s.value > completed.sourceEnd * 0.4 && s.value < completed.sourceEnd * 0.6,
+        // 直前のtouchMove（約40%）ではなく、新しいmouseMoveの到着を待つ。
+        (s) => s.value > completed.sourceEnd * 0.48 && s.value < completed.sourceEnd * 0.52,
         "A subsequent drag did not start"
     );
     const second = await state();

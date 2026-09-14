@@ -49,13 +49,25 @@ function createTraceImport({
     let refreshAfterSelection = false;
     let emptyTarget: ((cycle: number) => number | null) | null = null;
     let emptySeconds = 0;
+    let waitTarget: ((cycle: number) => number | null) | null = null;
+    let waitUntil: number | null = null;
+    let waitSeconds = 0;
+    let fastWait = false;
     let skipNotice = "";
     let noticeUntil = 0;
-    const storeBusyUntil = new Map<number, number>();
+    const storeWait = new Map<number, { firstFetch: number; until: number }>();
 
-    function resetEmptyPlayback() {
+    function resetAcceleration() {
         emptySeconds = 0;
+        waitUntil = null;
+        waitSeconds = 0;
+        fastWait = false;
         skipNotice = "";
+    }
+    function showFastWait(active: boolean) {
+        if (fastWait === active) return;
+        fastWait = active;
+        updateStatus();
     }
     function describeSkip(from: number, to: number) {
         skipNotice = `Skipped ${Math.floor(to - from).toLocaleString()} empty cycles`;
@@ -79,9 +91,11 @@ function createTraceImport({
                   ? "Preparing cycle window…"
                   : waiting
                     ? "Waiting for parsed cycles…"
-                    : loading
-                      ? reading
-                      : skipNotice);
+                    : fastWait
+                      ? "Fast-forwarding wait · 16×"
+                      : loading
+                        ? reading
+                        : skipNotice);
         message(text);
         element("file-window-status").textContent = text;
         element("file-window-status").hidden = !text;
@@ -96,8 +110,9 @@ function createTraceImport({
         pending = null;
         displayed = null;
         emptyTarget = null;
-        storeBusyUntil.clear();
-        resetEmptyPlayback();
+        waitTarget = null;
+        storeWait.clear();
+        resetAcceleration();
         prefetch = null;
         prefetchError = null;
         refreshAfterSelection = false;
@@ -123,7 +138,7 @@ function createTraceImport({
         if (!source || !worker) return;
         navigation.cancelGesture();
         navigation.rememberCurrent();
-        resetEmptyPlayback();
+        resetAcceleration();
         // 全体位置の変更は現在の再生意図を保ち、応答待ちの間だけ時計を止める。
         waiting = false;
         prefetch = null;
@@ -141,7 +156,7 @@ function createTraceImport({
         });
     }
     function beginInteraction() {
-        resetEmptyPlayback();
+        resetAcceleration();
         // 指を離すまで新しい区間は作らず、解析と検索は継続する。
         if (pending?.mode === "refresh") refreshAfterSelection = true;
         pending = null;
@@ -203,12 +218,23 @@ function createTraceImport({
         const view = { ...selection.view, start: trace.firstCycle, ...position };
         apply(trace, { ...position, thread: view.thread });
         displayed = { view, end: trace.lastCycle };
-        // 窓移動で元のstoreが外れても、既知の書込み待ちを空白にしない。
-        for (const [, time] of trace.storeCompletions ?? []) {
-            storeBusyUntil.set(view.thread, Math.max(storeBusyUntil.get(view.thread) ?? -Infinity, time + 6));
+        // 窓移動で元のstoreが外れても待機を守るが、未fetchのstoreで冒頭を止めない。
+        const fetches = new Map(trace.ops.map((op) => [op[0], op[2]]));
+        for (const [id, time] of trace.storeCompletions ?? []) {
+            const previous = storeWait.get(view.thread);
+            storeWait.set(view.thread, {
+                firstFetch: Math.min(previous?.firstFetch ?? Infinity, fetches.get(id) ?? trace.firstCycle),
+                until: Math.max(previous?.until ?? -Infinity, time + 6)
+            });
         }
         emptyTarget = replay.createEmptyPlayback(trace);
-        if (selection.mode !== "continue") emptySeconds = 0;
+        waitTarget = replay.createWaitPlayback(trace);
+        waitUntil = null;
+        fastWait = false;
+        if (selection.mode !== "continue") {
+            emptySeconds = 0;
+            waitSeconds = 0;
+        }
         if (selection.mode === "skip") describeSkip(previousCycle, position.cycle);
         pending = null;
         waiting = false;
@@ -235,17 +261,20 @@ function createTraceImport({
         if (!displayed || !source) return null;
         if (pending || navigation.dragging) return read().cycle;
         if (element<HTMLInputElement>("file-loop").checked) {
-            emptySeconds = 0;
+            resetAcceleration();
             return next > displayed.end ? displayed.view.start : next;
         }
         // 未解析の命令が後から現れ得る間は、空白と断定して飛ばさない。
+        const cycle = read().cycle;
+        const stores = storeWait.get(displayed.view.thread);
+        const storeStart = stores ? stores.firstFetch - 2 : Infinity;
+        const limitTarget = (target: number | null) =>
+            target === null ? null : Math.min(target, cycle < storeStart ? storeStart : Infinity);
+        const canAccelerate =
+            source.complete && (!stores || cycle < storeStart || cycle >= stores.until) && !error && !prefetchError;
         const target =
-            source.complete &&
-            read().cycle >= (storeBusyUntil.get(displayed.view.thread) ?? -Infinity) &&
-            !error &&
-            !prefetchError &&
-            element<HTMLInputElement>("file-skip-empty").checked
-                ? (emptyTarget?.(read().cycle) ?? null)
+            canAccelerate && element<HTMLInputElement>("file-skip-empty").checked
+                ? limitTarget(emptyTarget?.(cycle) ?? null)
                 : null;
         emptySeconds = target === null ? 0 : emptySeconds + seconds;
         if (target !== null && emptySeconds >= 0.35) {
@@ -267,6 +296,24 @@ function createTraceImport({
                 "skip"
             );
             return read().cycle;
+        }
+        if (!canAccelerate || !element<HTMLInputElement>("file-speed-waits").checked) {
+            waitUntil = null;
+            waitSeconds = 0;
+        } else {
+            // 開始後は短くなった残りも進めるが、窓交換時には記録から判定し直す。
+            if (waitUntil !== null && cycle >= waitUntil) waitUntil = null;
+            waitUntil ??= limitTarget(waitTarget?.(cycle) ?? null);
+            waitSeconds = waitUntil === null ? 0 : waitSeconds + seconds;
+        }
+        const accelerating = waitUntil !== null && waitSeconds >= 0.35;
+        showFastWait(accelerating);
+        if (accelerating) {
+            // 加速分で次の窓の未確認イベントを通り過ぎない。
+            next =
+                cycle < displayed.end
+                    ? Math.min(waitUntil!, displayed.end, cycle + (next - cycle) * 16)
+                    : Math.min(next, displayed.end + 0.001);
         }
         if (next <= displayed.end) {
             if (displayed.end - next < displayed.view.span * 0.35) prepareNext();
@@ -313,7 +360,7 @@ function createTraceImport({
         return true;
     }
     function interact() {
-        resetEmptyPlayback();
+        resetAcceleration();
         navigation.cancelGesture();
         // 完了時の再取得は最新の再生位置を読んで反映するため、同区間シークでも保持する。
         if (displayed && pending?.mode !== "refresh") pending = null;
@@ -324,7 +371,7 @@ function createTraceImport({
         if (refreshAfterSelection) refreshWindow();
     }
     function cancelContinuation() {
-        resetEmptyPlayback();
+        resetAcceleration();
         if (pending?.mode === "skip") worker?.postMessage({ type: "cancel-window" } satisfies files.WorkerRequest);
         if (pending?.mode === "continue" || pending?.mode === "skip") interact();
         updateStatus();
@@ -427,6 +474,7 @@ function createTraceImport({
     });
     element("file-close").addEventListener("click", reset);
     element("file-skip-empty").addEventListener("change", cancelContinuation);
+    element("file-speed-waits").addEventListener("change", cancelContinuation);
     element("file-loop").addEventListener("change", cancelContinuation);
     document.addEventListener("dragover", (event) => {
         if (event.dataTransfer?.types.includes("Files")) event.preventDefault();

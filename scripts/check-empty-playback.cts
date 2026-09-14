@@ -70,6 +70,8 @@ async function reviewEmptyPlayback(window: BrowserWindow) {
             speed.value = "4";
             speed.dispatchEvent(new Event("change"));
             (document.getElementById("file-skip-empty") as HTMLInputElement).checked = true;
+            // この検査は空白スキップ単独の仕様。静止待機の加速は専用検査で確認する。
+            (document.getElementById("file-speed-waits") as HTMLInputElement).checked = false;
         });
         await open(fixture([0, 110]));
         await playAt(10);
@@ -266,6 +268,7 @@ async function reviewEmptyPlayback(window: BrowserWindow) {
             delete context.emptyTestWorker;
             delete context.emptyHeld;
             delete context.emptyReleased;
+            (document.getElementById("file-speed-waits") as HTMLInputElement).checked = true;
         }, originalSource);
     }
 }

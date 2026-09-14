@@ -418,8 +418,14 @@
                             <label
                                 class="file-loop-label"
                                 for="file-skip-empty"
-                                title="After loading, skip long intervals with no live instructions. Waiting instructions keep their normal speed."
+                                title="After loading, skip long intervals with no live instructions."
                                 ><input id="file-skip-empty" type="checkbox" checked />Skip empty gaps</label
+                            >
+                            <label
+                                class="file-loop-label"
+                                for="file-speed-waits"
+                                title="After loading, speed up long stationary waits by 16×. Return to normal speed before the next recorded change."
+                                ><input id="file-speed-waits" type="checkbox" checked />Speed up waits</label
                             >
                             <p id="file-summary"></p>
                             <p id="file-partial" hidden>
