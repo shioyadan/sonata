@@ -140,6 +140,7 @@ function start(gl: WebGL2RenderingContext) {
                     fileImport.advance(next, dt) ?? (next > replay.trace.lastCycle ? replay.trace.firstCycle : next);
             }
             render(dt);
+            updatePlaybackPosition();
             if (now >= clock.nextUI) {
                 updateUI();
                 clock.nextUI = now + 80;
@@ -662,7 +663,15 @@ function start(gl: WebGL2RenderingContext) {
         ctx.fillRect(0, h - 1, w, 1);
     }
 
+    // 再生位置は描画時計へ毎フレーム揃え、詳細パネルの更新間隔から独立させる。
+    function updatePlaybackPosition() {
+        $("timeline").value = String(session.cycle);
+        $("playhead").style.left =
+            `${clamp((session.cycle - replay.trace.firstCycle) / Math.max(1, replay.trace.lastCycle - replay.trace.firstCycle)) * 100}%`;
+    }
+
     function updateUI() {
+        updatePlaybackPosition();
         fileImport.tick(session.cycle);
         const integer = Math.floor(session.cycle),
             fraction = Math.floor((session.cycle - integer) * 100 + 1e-6);
@@ -671,9 +680,6 @@ function start(gl: WebGL2RenderingContext) {
             Object.assign(document.createElement("span"), { textContent: `.${String(fraction).padStart(2, "0")}` })
         );
         $("mobile-cycle-value").textContent = `${integer.toLocaleString("en-US")}.${String(fraction).padStart(2, "0")}`;
-        $("timeline").value = String(session.cycle);
-        $("playhead").style.left =
-            `${clamp((session.cycle - replay.trace.firstCycle) / Math.max(1, replay.trace.lastCycle - replay.trace.firstCycle)) * 100}%`;
         $("active-count").textContent = String(activity.frame.stats.active.length);
         $("ipc-value").textContent = activity.frame.stats.ipc.toFixed(2);
         const traceEvents = (replay.trace.demo.events ?? []).filter(
@@ -817,6 +823,7 @@ function start(gl: WebGL2RenderingContext) {
     function showTrace() {
         $("timeline").min = String(replay.trace.firstCycle);
         $("timeline").max = String(replay.trace.lastCycle);
+        updatePlaybackPosition();
         const provenance = replay.trace.demo.provenance;
         $("run-simulator").textContent = provenance.simulator;
         $("mobile-demo").textContent = replay.trace.label;

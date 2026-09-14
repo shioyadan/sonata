@@ -91,6 +91,7 @@ async function reviewBrowser(window: BrowserWindow, entry: string, screenshots?:
     await window.loadFile(entry);
     await ready();
     window.focus();
+    const playhead = await reviewPlayhead(window);
     const first = await evaluate(({ sonata, $ }) => {
         sonata.setPlaying(false);
         sonata.setCycle(sonata.trace.firstCycle);
@@ -460,6 +461,7 @@ async function reviewBrowser(window: BrowserWindow, entry: string, screenshots?:
     await window.loadFile(entry);
     await ready();
     return {
+        playhead,
         keyboard: {
             stepping: true,
             bounds: true,
@@ -482,6 +484,95 @@ async function reviewBrowser(window: BrowserWindow, entry: string, screenshots?:
         withoutMSAA
     };
 }
+
+// 重い詳細DOMの更新を待たず、実際の各描画フレームで再生マーカーが時計に追従する。
+async function reviewPlayhead(window: BrowserWindow) {
+    const { evaluate } = createBrowserTest(window);
+    const result = await evaluate(async ({ sonata, $ }) => {
+        const speed = $("speed") as HTMLSelectElement;
+        const original = { key: sonata.trace.key, cycle: sonata.cycle, speed: speed.value, playing: sonata.playing };
+        const sample = () => ({
+            cycle: sonata.cycle,
+            first: sonata.trace.firstCycle,
+            last: sonata.trace.lastCycle,
+            left: Number.parseFloat($("playhead").style.left),
+            range: Number($("timeline").value)
+        });
+        const frames = (count: number) =>
+            new Promise<ReturnType<typeof sample>[]>((resolve) => {
+                const values: ReturnType<typeof sample>[] = [];
+                let frame = 0;
+                const timeout = setTimeout(() => {
+                    cancelAnimationFrame(frame);
+                    resolve(values);
+                }, 10000);
+                const next = () => {
+                    values.push(sample());
+                    if (values.length === count) {
+                        clearTimeout(timeout);
+                        resolve(values);
+                    } else frame = requestAnimationFrame(next);
+                };
+                frame = requestAnimationFrame(next);
+            });
+        try {
+            sonata.captureAt(sonata.trace.firstCycle + 8.25);
+            speed.value = "32";
+            speed.dispatchEvent(new Event("change"));
+            sonata.setPlaying(true);
+            const playing = await frames(8);
+            sonata.setPlaying(false);
+            const stopped = sample();
+            const paused = await frames(3);
+            sonata.setCycle(sonata.trace.firstCycle + 0.125);
+            const reverseSeek = sample();
+            $("timeline").value = String(sonata.trace.firstCycle + 2.5);
+            $("timeline").dispatchEvent(new Event("input"));
+            const inputSeek = sample();
+            sonata.setCycle(sonata.trace.lastCycle);
+            const end = sample();
+            sonata.loadTrace("wide-open");
+            const switched = sample();
+            return { playing, stopped, paused, reverseSeek, inputSeek, end, switched };
+        } finally {
+            speed.value = original.speed;
+            speed.dispatchEvent(new Event("change"));
+            sonata.loadTrace(original.key);
+            sonata.setCycle(original.cycle);
+            sonata.setPlaying(original.playing);
+        }
+    });
+    assert.equal(result.playing.length, 8, "Playback frames did not arrive before the deadline");
+    assert.equal(result.paused.length, 3, "Paused frames did not arrive before the deadline");
+    for (const sample of [
+        ...result.playing,
+        result.stopped,
+        ...result.paused,
+        result.reverseSeek,
+        result.inputSeek,
+        result.end,
+        result.switched
+    ]) {
+        const expected = ((sample.cycle - sample.first) / Math.max(1, sample.last - sample.first)) * 100;
+        assert.ok(
+            Math.abs(sample.left - expected) < 0.0001,
+            `Playback marker lagged its frame: ${JSON.stringify(sample)}`
+        );
+        assert.ok(Math.abs(sample.range - sample.cycle) <= 0.0051, "The range value lagged the playback clock");
+    }
+    assert.ok(result.playing.at(-1)!.cycle > result.playing[0].cycle, "Playback did not advance between frames");
+    for (const sample of result.paused) assert.deepEqual(sample, result.stopped, "The paused playhead kept moving");
+    assert.equal(result.reverseSeek.cycle, result.reverseSeek.first + 0.125);
+    assert.equal(
+        result.inputSeek.cycle,
+        result.inputSeek.first + 2.5,
+        "Synchronizing the marker overwrote range input"
+    );
+    assert.equal(result.end.left, 100);
+    assert.notEqual(result.switched.first, result.end.first, "The replacement trace must have a different time range");
+    return { frameSync: true, pause: true, immediateSeek: true, traceChange: true };
+}
+
 // 命令の描画直前に色だけを黒/白へ置き換え、不透明な中心画素が背景に依存しないことを確認する。
 // 命令を省いた対照フレームでは同じ座標に背景差が出るため、描画の差し替え自体も検証できる。
 async function reviewPieceOpacity(window: BrowserWindow) {
