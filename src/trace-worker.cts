@@ -35,6 +35,9 @@ async function drainWindows() {
     runningWindow = true;
     try {
         while (pendingWindow && !closed) {
+            // Parserの同期処理中に届いた移動も、重いsnapshotの前に最新一つへまとめる。
+            await new Promise<void>((resolve) => setTimeout(resolve, 0));
+            if (!pendingWindow || closed) break;
             const request = pendingWindow;
             pendingWindow = null;
             await run(request);
@@ -53,6 +56,11 @@ globalThis.onmessage = (event: MessageEvent<files.WorkerRequest>) => {
         return;
     }
     if (closed) return;
+    if (request.type === "cancel-window") {
+        pendingWindow = null;
+        session.cancelWindow();
+        return;
+    }
     if (request.type === "cancel-search") {
         session.cancelSearch();
         return;
@@ -62,6 +70,7 @@ globalThis.onmessage = (event: MessageEvent<files.WorkerRequest>) => {
     if (request.type === "open" || request.type === "search") void run(request);
     else {
         pendingWindow = request;
+        session.cancelWindow();
         void drainWindows();
     }
 };

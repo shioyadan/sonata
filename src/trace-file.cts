@@ -74,6 +74,7 @@ type Request =
     | { type: "window"; request: number; cycle: number; span: number; thread: number }
     | SearchRequest
     | { type: "cancel-search" }
+    | { type: "cancel-window" }
     | { type: "close" };
 type Response =
     | { type: "progress"; progress: Progress }
@@ -87,9 +88,33 @@ const blockSize = 1024;
 const maxWindowOps = 16384;
 const maxOverviewBins = 512;
 const maxSearchHits = 40;
-const yieldTask = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
+// 頻繁なscanの譲り渡しに、入れ子setTimeoutの最小待ち時間を積み重ねない。
+const yieldTask = () =>
+    new Promise<void>((resolve) => {
+        const channel = new MessageChannel();
+        channel.port1.onmessage = () => {
+            channel.port1.close();
+            channel.port2.close();
+            resolve();
+        };
+        channel.port2.postMessage(undefined);
+    });
 function checkAbort(signal: AbortSignal) {
     if (signal.aborted) throw new DOMException("Trace loading canceled", "AbortError");
+}
+
+// ページ復元の速さに依存せず、操作要求とParserへ短い間隔で制御を返す。
+// 通常の命令ごとにはPromiseを作らず、実際にyieldする時だけ待つ。
+function createScanYield(signal: AbortSignal) {
+    let visited = 0,
+        started = performance.now();
+    return () => {
+        if (++visited % 128 !== 0 && performance.now() - started < 8) return;
+        return yieldTask().then(() => {
+            checkAbort(signal);
+            started = performance.now();
+        });
+    };
 }
 
 // 描画用の延長やflush群の推定を活動集計・検索の時刻へ持ち込まない。
@@ -348,7 +373,7 @@ async function selectOps(
     flushCycles = new Map<number, number>()
 ) {
     const ops: Readonly<Op>[] = [];
-    let scanned = 0;
+    const pause = createScanYield(signal);
     let stages = 0;
     for (const block of blocks) {
         checkAbort(signal);
@@ -358,6 +383,8 @@ async function selectOps(
         for (let id = block.firstID; id <= block.lastID; id++) {
             const offset = id - block.firstID;
             if (!(block.ids[offset >>> 5] & (1 << (offset & 31)))) continue;
+            const yielding = pause();
+            if (yielding) await yielding;
             const op = trace.getOpForScan(id);
             while (groupIndex < groups.length && groups[groupIndex].lastID < id) groupIndex++;
             const candidate = groups[groupIndex];
@@ -374,7 +401,6 @@ async function selectOps(
                 if (group) flushCycles.set(id, group.end);
             }
         }
-        if (++scanned % 8 === 0) await yieldTask();
     }
     return ops;
 }
@@ -391,7 +417,8 @@ async function selectPreview(
 ) {
     let ops: NonNullable<replay.Trace["feedPreview"]> = [];
     let scanned = 0;
-    for (const [index, block] of blocks.entries()) {
+    const pause = createScanYield(signal);
+    for (const block of blocks) {
         checkAbort(signal);
         if (ops.length === replay.feedRows && block.firstCycle > ops.at(-1)!.fetch) break;
         if (scanned >= 65536) {
@@ -403,6 +430,8 @@ async function selectPreview(
             if (!(block.ids[offset >>> 5] & (1 << (offset & 31)))) continue;
             if (scanned === 65536) return { ops: ops.filter((op) => op.fetch < block.firstCycle), limited: true };
             scanned++;
+            const yielding = pause();
+            if (yielding) await yielding;
             const op = trace.getOpForScan(id);
             if (!op || op.tid !== thread || op.fetchedCycle <= after || op.fetchedCycle > through) continue;
             const last = ops.at(-1);
@@ -422,7 +451,6 @@ async function selectPreview(
             ops.sort((a, b) => a.fetch - b.fetch || a.id - b.id);
             if (ops.length > replay.feedRows) ops.pop();
         }
-        if ((index + 1) % 4 === 0) await yieldTask();
     }
     return { ops, limited: false };
 }
@@ -448,8 +476,7 @@ async function searchOps(
         throw new Error("Invalid trace search.");
     const needle = query.toLowerCase(),
         hits: SearchHit[] = [];
-    let visited = 0,
-        started = performance.now();
+    const pause = createScanYield(signal);
     for (const block of blocks) {
         checkAbort(signal);
         if (request.kind === "id" && (threshold < block.firstID || threshold > block.lastID)) continue;
@@ -457,11 +484,8 @@ async function searchOps(
         for (let id = firstID; id <= block.lastID; id++) {
             const offset = id - block.firstID;
             if (!(block.ids[offset >>> 5] & (1 << (offset & 31)))) continue;
-            if (++visited % 128 === 0 || performance.now() - started >= 8) {
-                await yieldTask();
-                checkAbort(signal);
-                started = performance.now();
-            }
+            const yielding = pause();
+            if (yielding) await yielding;
             if (request.kind === "id" && id !== threshold) continue;
             const op = trace.getOpForScan(id);
             if (!op || op.tid !== request.thread) continue;
@@ -501,6 +525,7 @@ function createFileSession(send: (response: Response) => void) {
     let publishedAt = -Infinity;
     let updateTimer: ReturnType<typeof setTimeout> | undefined;
     let searching: AbortController | null = null;
+    let selecting: AbortController | null = null;
     function metadata(): Source {
         if (!trace) throw new Error("No trace file is open.");
         const index = indexer.metadata(trace.lastCycle);
@@ -581,60 +606,71 @@ function createFileSession(send: (response: Response) => void) {
     }
     async function window(request: Extract<Request, { type: "window" }>) {
         checkAbort(abort.signal);
-        if (!trace || !source) throw new Error("No trace file is open.");
-        const selectedSource = complete ? source : metadata();
-        if (
-            !Number.isFinite(request.cycle) ||
-            !Number.isInteger(request.span) ||
-            request.span < 16 ||
-            request.span > windows.limits.cycles ||
-            !selectedSource.threads.includes(request.thread)
-        )
-            throw new Error("Invalid trace window.");
-        const firstCycle = Math.max(
-            selectedSource.firstCycle,
-            Math.min(selectedSource.lastCycle - 1, Math.floor(request.cycle))
-        );
-        const lastCycle = Math.min(selectedSource.lastCycle, firstCycle + request.span - 1);
-        // 表示窓の時刻は保ち、直前のcommit/squash演出と次fetchに必要な文脈を取得する。
-        const contextFirst = Math.max(selectedSource.firstCycle, firstCycle - 6);
-        const contextLast = Math.min(selectedSource.lastCycle, lastCycle + 1);
-        const blocks = indexer.snapshot(contextFirst, contextLast);
-        const previewBlocks = indexer.previewSnapshot(contextLast);
-        const flushCycles = new Map<number, number>();
-        const ops = await selectOps(
-            trace,
-            blocks,
-            contextFirst,
-            contextLast,
-            request.thread,
-            abort.signal,
-            flushCycles
-        );
-        checkAbort(abort.signal);
-        const selection = {
-            ops,
-            firstCycle,
-            lastCycle,
-            source: selectedSource,
-            laneNames: selectedSource.laneNames,
-            flushCycles,
-            profile: profiles.get(request.thread, (id) => trace!.getOpForScan(id), selectedSource)
-        };
-        const converted = windows.toTraceWindow(selection);
-        const preview = await selectPreview(
-            trace!,
-            previewBlocks,
-            contextLast,
-            selectedSource.lastCycle,
-            request.thread,
-            abort.signal
-        );
-        converted.feedPreview = preview.ops;
-        if (preview.limited)
-            converted.demo.provenance.note += " Instruction text preview is limited for this interval.";
-        checkAbort(abort.signal);
-        send({ type: "window", request: request.request, trace: converted });
+        cancelWindow();
+        const controller = new AbortController();
+        selecting = controller;
+        try {
+            if (!trace || !source) throw new Error("No trace file is open.");
+            const selectedSource = complete ? source : metadata();
+            if (
+                !Number.isFinite(request.cycle) ||
+                !Number.isInteger(request.span) ||
+                request.span < 16 ||
+                request.span > windows.limits.cycles ||
+                !selectedSource.threads.includes(request.thread)
+            )
+                throw new Error("Invalid trace window.");
+            const firstCycle = Math.max(
+                selectedSource.firstCycle,
+                Math.min(selectedSource.lastCycle - 1, Math.floor(request.cycle))
+            );
+            const lastCycle = Math.min(selectedSource.lastCycle, firstCycle + request.span - 1);
+            // 表示窓の時刻は保ち、直前のcommit/squash演出と次fetchに必要な文脈を取得する。
+            const contextFirst = Math.max(selectedSource.firstCycle, firstCycle - 6);
+            const contextLast = Math.min(selectedSource.lastCycle, lastCycle + 1);
+            const blocks = indexer.snapshot(contextFirst, contextLast);
+            const previewBlocks = indexer.previewSnapshot(contextLast);
+            const flushCycles = new Map<number, number>();
+            const ops = await selectOps(
+                trace,
+                blocks,
+                contextFirst,
+                contextLast,
+                request.thread,
+                controller.signal,
+                flushCycles
+            );
+            checkAbort(controller.signal);
+            const selection = {
+                ops,
+                firstCycle,
+                lastCycle,
+                source: selectedSource,
+                laneNames: selectedSource.laneNames,
+                flushCycles,
+                profile: profiles.get(request.thread, (id) => trace!.getOpForScan(id), selectedSource)
+            };
+            const converted = windows.toTraceWindow(selection);
+            const preview = await selectPreview(
+                trace!,
+                previewBlocks,
+                contextLast,
+                selectedSource.lastCycle,
+                request.thread,
+                controller.signal
+            );
+            converted.feedPreview = preview.ops;
+            if (preview.limited)
+                converted.demo.provenance.note += " Instruction text preview is limited for this interval.";
+            checkAbort(controller.signal);
+            send({ type: "window", request: request.request, trace: converted });
+        } finally {
+            if (selecting === controller) selecting = null;
+        }
+    }
+    function cancelWindow() {
+        selecting?.abort();
+        selecting = null;
     }
     function cancelSearch() {
         searching?.abort();
@@ -662,6 +698,7 @@ function createFileSession(send: (response: Response) => void) {
     }
     function close() {
         abort.abort();
+        cancelWindow();
         cancelSearch();
         clearTimeout(updateTimer);
         updateTimer = undefined;
@@ -671,7 +708,7 @@ function createFileSession(send: (response: Response) => void) {
         profiles.clear();
         source = null;
     }
-    return { open, window, search, cancelSearch, close };
+    return { open, window, cancelWindow, search, cancelSearch, close };
 }
 namespace traceFile {
     export type Metadata = Source;

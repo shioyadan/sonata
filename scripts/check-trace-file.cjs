@@ -214,6 +214,8 @@ async function check() {
     checkOverview();
     await checkSearch();
     await checkSearchSession();
+    await checkScanCancellation();
+    await checkWindowCancellation();
     await checkStreaming();
     await checkFileStructure();
     await checkConcurrentIndex();
@@ -545,6 +547,107 @@ function kanataOp(id, end = true) {
 }
 const request = (id, cycle = 0) => ({ type: "window", request: id, cycle, span: 16, thread: 0 });
 
+// 件数・経過時間のどちらでも同じblockの途中で制御を返す。実時間の速度には依存しない。
+async function checkScanCancellation() {
+    const blocks = [
+        { firstID: 0, lastID: 1023, firstCycle: 0, lastCycle: 2048, ids: new Uint32Array(32).fill(0xffffffff) }
+    ];
+    for (const byTime of [false, true]) {
+        const originalNow = performance.now;
+        let elapsed = 0;
+        if (byTime) performance.now = () => elapsed;
+        try {
+            for (const preview of [false, true]) {
+                const controller = new AbortController();
+                let reads = 0;
+                const trace = {
+                    getOpForScan(id) {
+                        reads++;
+                        if (byTime) elapsed += 9;
+                        return {
+                            id,
+                            tid: 0,
+                            fetchedCycle: id + 1,
+                            retiredCycle: id + 2,
+                            labelName: "add",
+                            retired: true,
+                            flush: false,
+                            lanes: []
+                        };
+                    }
+                };
+                const selecting = preview
+                    ? selectPreview(trace, blocks, 0, 2048, 0, controller.signal)
+                    : selectOps(trace, blocks, 0, 2048, 0, controller.signal);
+                const rejection = assert.rejects(selecting, { name: "AbortError" });
+                controller.abort();
+                await rejection;
+                assert.ok(
+                    reads <= (byTime ? 1 : 128),
+                    `${preview ? "Preview" : "Window"} did not yield within its scan budget (${reads} reads)`
+                );
+                assert.ok(reads > 0, "The cancellation fixture did not start a scan");
+            }
+        } finally {
+            performance.now = originalNow;
+        }
+    }
+}
+
+async function checkWindowCancellation() {
+    const prefix = "Kanata\t0004\n" + Array.from({ length: 512 }, (_, id) => kanataOp(id)).join("");
+    const input = controlledInput(prefix, "window-cancel.kanata"),
+        box = mailbox(),
+        session = createFileSession(box.send);
+    const opening = session.open(input);
+    try {
+        await box.wait((message) => message.type === "loaded" && message.source.opCount === 512);
+        const first = session.window(request(100));
+        const canceledFirst = assert.rejects(first, { name: "AbortError" });
+        session.cancelWindow();
+        await canceledFirst;
+        assert.ok(!box.messages.some((message) => message.type === "window" && message.request === 100));
+
+        const old = session.window(request(101));
+        const oldRejected = assert.rejects(old, { name: "AbortError" });
+        const latest = session.window(request(102, 200));
+        const latestRejected = assert.rejects(latest, { name: "AbortError" });
+        await oldRejected;
+        session.cancelWindow();
+        await latestRejected;
+        assert.ok(
+            !box.messages.some((message) => message.type === "window"),
+            "A canceled window emitted an old result"
+        );
+
+        // 旧要求の終了後も新しいcontrollerを保持し、Parserと別の操作は使い続けられる。
+        await session.window(request(103, 400));
+        assert.ok(box.messages.some((message) => message.type === "window" && message.request === 103));
+        assert.equal(input.canceled, 0, "Window cancellation closed the parser's source stream");
+        input.append(kanataOp(512));
+        await box.wait((message) => message.type === "loaded" && message.source.opCount === 513);
+        input.finish();
+        await opening;
+        assert.equal(box.messages.filter((message) => message.type === "loaded").at(-1).source.complete, true);
+        await session.search({ type: "search", request: 104, kind: "id", query: "512", thread: 0 });
+        assert.equal(
+            box.messages.find((message) => message.type === "search" && message.request === 104).hits[0].id,
+            512
+        );
+
+        const closing = session.window(request(105));
+        const closeRejected = assert.rejects(closing, { name: "AbortError" });
+        session.close();
+        const before = box.messages.length;
+        await closeRejected;
+        assert.equal(box.messages.length, before, "Closing a running window emitted a late response");
+    } finally {
+        if (!input.finished) input.finish();
+        session.close();
+        await opening.catch(() => undefined);
+    }
+}
+
 async function checkStreaming() {
     const first = "Kanata\t0004\n" + kanataOp(0);
     const tail = kanataOp(1) + kanataOp(2, false);
@@ -759,17 +862,17 @@ async function checkConcurrentIndex() {
         ops.set(id, op);
         index.observe(op);
     };
-    // 9ブロックに分散させ、scanのyieldを確実に跨ぐ。
-    for (let block = 0; block < 9; block++) add(block * 1024);
+    // 疎な129命令で命令数によるyieldを跨ぎ、後続blockのIDも固定されることを確認する。
+    for (let block = 0; block < 129; block++) add(block * 1024);
     const snapshot = index.snapshot(0, 5);
     const selecting = selectOps({ getOpForScan: (id) => ops.get(id) }, snapshot, 0, 5, 0, new AbortController().signal);
     ops.get(0).labelName = "updated by parser";
-    add(8 * 1024 + 1);
-    add(9 * 1024);
+    add(128 * 1024 + 1);
+    add(129 * 1024);
     const selected = await selecting;
-    assert.equal(selected.length, 9, "Parser writes expanded an in-flight window's ID snapshot");
+    assert.equal(selected.length, 129, "Parser writes expanded an in-flight window's ID snapshot");
     assert.equal(selected[0].labelName, "original 0", "Parser mutation changed an already selected operation");
-    assert.equal(index.snapshot(0, 5).length, 10);
+    assert.equal(index.snapshot(0, 5).length, 130);
     const abort = new AbortController();
     const pending = selectOps({ getOpForScan: (id) => ops.get(id) }, index.snapshot(0, 5), 0, 5, 0, abort.signal);
     abort.abort();
@@ -912,6 +1015,7 @@ async function checkWorkerRequests() {
     const context = vm.createContext({
         postMessage: box.send,
         Error,
+        setTimeout,
         require(name) {
             assert.equal(name, "./trace-file.cts");
             return require("../src/trace-file.cts");
@@ -928,14 +1032,14 @@ async function checkWorkerRequests() {
     assert.equal(input.finished, false, "Worker queued windows behind the complete parse");
     assert.deepEqual(
         box.messages.filter((m) => m.type === "window").map((m) => m.request),
-        [1, 2]
+        [2]
     );
     const search = (id, kind = "text", query = "add") => ({ type: "search", request: id, kind, query, thread: 0 });
     context.onmessage({ data: search(1) });
     context.onmessage({ data: request(3) });
     await box.wait((m) => m.type === "window" && m.request === 3);
-    assert.ok(!box.messages.some((m) => m.type === "search"), "A search blocked the next window request");
     await box.wait((m) => m.type === "search" && m.request === 1);
+    assert.equal(input.finished, false, "Concurrent search/window requests waited for EOF");
     context.onmessage({ data: search(2) });
     context.onmessage({ data: search(3, "id", "0") });
     await box.wait((m) => m.type === "search" && m.request === 3);
@@ -965,25 +1069,31 @@ async function checkWorkerCoalescing() {
     const context = vm.createContext({
         postMessage: box.send,
         Error,
+        setTimeout,
         require(name) {
             assert.equal(name, "./trace-file.cts");
             return {
                 createFileSession(send) {
+                    function cancelWindow() {
+                        for (const gate of gates.values()) gate.reject(new DOMException("Superseded", "AbortError"));
+                        gates.clear();
+                    }
                     return {
                         async window(request) {
                             scans.push(request.request);
                             activity.send({ type: "scan", request: request.request });
-                            await new Promise((resolve, reject) => gates.set(request.request, { resolve, reject }));
-                            gates.delete(request.request);
-                            send({ type: "window", request: request.request, trace: {} });
+                            try {
+                                await new Promise((resolve, reject) => gates.set(request.request, { resolve, reject }));
+                                send({ type: "window", request: request.request, trace: {} });
+                            } finally {
+                                gates.delete(request.request);
+                            }
                         },
+                        cancelWindow,
                         async search() {
                             throw new Error("Search fixture failure");
                         },
-                        close() {
-                            for (const gate of gates.values()) gate.reject(new DOMException("Closed", "AbortError"));
-                            gates.clear();
-                        }
+                        close: cancelWindow
                     };
                 }
             };
@@ -995,25 +1105,41 @@ async function checkWorkerCoalescing() {
     await activity.wait((m) => m.request === 1);
     for (let id = 2; id <= 1000; id++) context.onmessage({ data: request(id) });
     assert.deepEqual(scans, [1], "A second window scanned while the first was running");
-    gates.get(1).resolve();
+    assert.equal(gates.has(1), false, "New window requests did not cancel the running scan");
     await activity.wait((m) => m.request === 1000);
     assert.deepEqual(scans, [1, 1000], "Superseded window requests were still scanned");
-    context.onmessage({ data: request(1001) });
-    context.onmessage({ data: request(1002) });
+    assert.ok(!box.messages.some((m) => m.request === 1), "A superseded window emitted a result or error");
+
     // 検索は区間の待ち列へ入れず、同一IDのwindowエラーと区別する。
     context.onmessage({ data: { type: "search", request: 1000, kind: "text", query: "x", thread: 0 } });
     await box.wait((m) => m.type === "error" && m.operation === "search" && m.request === 1000);
     gates.get(1000).reject(new Error("Window fixture failure"));
     await box.wait((m) => m.type === "error" && m.operation === "window" && m.request === 1000);
+    context.onmessage({ data: request(1001) });
+    context.onmessage({ data: request(1002) });
     await activity.wait((m) => m.request === 1002);
     assert.deepEqual(scans, [1, 1000, 1002], "A failed window prevented the latest request from running");
+
+    // ドラッグ開始は現在のscanと待ち列だけを取り消す。その後の区間取得は再開できる。
+    context.onmessage({ data: { type: "cancel-window" } });
+    assert.equal(gates.has(1002), false, "Explicit cancellation did not abort the active scan");
     context.onmessage({ data: request(1003) });
+    context.onmessage({ data: { type: "cancel-window" } });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    assert.deepEqual(scans, [1, 1000, 1002], "Explicit cancellation left a pending window runnable");
+    assert.ok(!box.messages.some((m) => m.request === 1002 || m.request === 1003));
     context.onmessage({ data: request(1004) });
+    await activity.wait((m) => m.request === 1004);
+    gates.get(1004).resolve();
+    await box.wait((m) => m.type === "window" && m.request === 1004);
+    context.onmessage({ data: request(1005) });
+    await activity.wait((m) => m.request === 1005);
+    context.onmessage({ data: request(1006) });
     context.onmessage({ data: { type: "close" } });
     const before = box.messages.length;
-    context.onmessage({ data: request(1005) });
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    assert.deepEqual(scans, [1, 1000, 1002], "Close left queued windows runnable");
+    context.onmessage({ data: request(1007) });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    assert.deepEqual(scans, [1, 1000, 1002, 1004, 1005], "Close left queued windows runnable");
     assert.equal(box.messages.length, before, "Closed Worker emitted a late scan response");
 }
 check().catch((error) => {
