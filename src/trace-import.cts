@@ -26,7 +26,14 @@ function createTraceImport({
     const progress = element<HTMLProgressElement>("import-progress");
     const cancel = element<HTMLButtonElement>("import-cancel");
     const panel = element<HTMLElement>("file-window");
-    const navigation = createNavigation({ read, navigate, search, pause });
+    const navigation = createNavigation({
+        read,
+        navigate,
+        search,
+        pause,
+        beginInteraction,
+        endInteraction: refreshWindow
+    });
     let worker: Worker | null = null;
     let source: files.Metadata | null = null;
     let serial = 0;
@@ -106,6 +113,16 @@ function createTraceImport({
             selectedID: null
         });
     }
+    function beginInteraction() {
+        // 指を離すまで新しい区間は作らず、解析と検索は継続する。
+        if (pending?.mode === "refresh") refreshAfterSelection = true;
+        pending = null;
+        prefetch = null;
+        prefetchError = null;
+        waiting = false;
+        worker?.postMessage({ type: "cancel-window" } satisfies files.WorkerRequest);
+        updateStatus();
+    }
     function requestWindow(view: View, mode: Pending["mode"], historyIndex?: number) {
         if (!worker) return;
         pending = { id: ++serial, view, mode, historyIndex };
@@ -121,7 +138,7 @@ function createTraceImport({
         } satisfies files.WorkerRequest);
     }
     function refreshWindow() {
-        if (!displayed || !source || pending || error) return;
+        if (!displayed || !source || pending || error || navigation.dragging) return;
         if (
             refreshAfterSelection ||
             displayed.end < Math.min(source.lastCycle, displayed.view.start + displayed.view.span - 1)
@@ -180,7 +197,7 @@ function createTraceImport({
     }
     function advance(next: number): number | null {
         if (!displayed || !source) return null;
-        if (pending) return read().cycle;
+        if (pending || navigation.dragging) return read().cycle;
         if (element<HTMLInputElement>("file-loop").checked) {
             return next > displayed.end ? displayed.view.start : next;
         }

@@ -17,12 +17,16 @@ function createNavigation({
     read,
     navigate,
     search,
-    pause
+    pause,
+    beginInteraction,
+    endInteraction
 }: {
     read: () => { cycle: number; selectedID: number | null };
     navigate: (view: View, historyIndex?: number) => void;
     search: (query: Search) => void;
     pause: () => void;
+    beginInteraction: () => void;
+    endInteraction: () => void;
 }) {
     const el = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
     const overview = el<HTMLInputElement>("file-overview");
@@ -47,6 +51,27 @@ function createNavigation({
     let searching = false;
     let wheelTimer: ReturnType<typeof setTimeout> | undefined;
     let wheelView: View | null = null;
+    let overviewDrag: { pointer: number; source: files.Metadata } | null = null;
+    let overviewDraft: View | null = null;
+    let releaseTimer: ReturnType<typeof setTimeout> | undefined;
+
+    function overviewSource() {
+        return overviewDrag?.source ?? source;
+    }
+    function overviewView() {
+        return overviewDraft ?? requestedView ?? view;
+    }
+    function syncOverview(updateCycle = true) {
+        const source = overviewSource();
+        if (!source) return;
+        overview.min = String(source.firstCycle);
+        overview.max = String(Math.max(source.firstCycle, source.lastCycle - 1));
+        const current = overviewView();
+        if (current) {
+            overview.value = String(current.start);
+            if (updateCycle) cycle.value = overview.value;
+        }
+    }
 
     function snapshot(): View | null {
         return view ? { ...view, ...read() } : null;
@@ -70,19 +95,31 @@ function createNavigation({
     }
     function cancelGesture() {
         clearTimeout(wheelTimer);
+        clearTimeout(releaseTimer);
+        releaseTimer = undefined;
         wheelView = null;
         drag = null;
+        const pointer = overviewDrag?.pointer;
+        overviewDrag = null;
+        overviewDraft = null;
+        if (pointer !== undefined && overview.hasPointerCapture(pointer)) overview.releasePointerCapture(pointer);
         requestedView = null;
         requestedHistory = undefined;
+        syncOverview();
+        draw();
+        tick(read().cycle);
         controls();
     }
     function requested(next: View, index?: number) {
         requestedView = { ...next };
         requestedHistory = index;
+        syncOverview();
+        drawViewport();
+        tick(next.cycle);
         controls();
     }
     function goStart(start: number) {
-        const current = requestedView ?? view;
+        const current = overviewView();
         if (!current || !Number.isFinite(start)) return;
         go({ ...current, start, cycle: start, selectedID: null });
     }
@@ -101,8 +138,10 @@ function createNavigation({
     function setSource(next: files.Metadata) {
         const previous = source;
         source = next;
-        cycle.min = overview.min = String(source.firstCycle);
-        cycle.max = overview.max = String(Math.max(source.firstCycle, source.lastCycle - 1));
+        cycle.min = String(source.firstCycle);
+        cycle.max = String(Math.max(source.firstCycle, source.lastCycle - 1));
+        // 解析が進んでも、つかんでいる時間軸の縮尺と選択値は変えない。
+        if (!overviewDrag) syncOverview(false);
         if (!previous || source.threads.join() !== previous.threads.join()) {
             const selected = thread.value;
             thread.replaceChildren(...source.threads.map((id) => new Option(`Thread ${id}`, String(id))));
@@ -138,7 +177,7 @@ function createNavigation({
                 historyIndex = history.length - 1;
             }
         }
-        cycle.value = overview.value = String(view.start);
+        if (!overviewDrag) syncOverview();
         // ホイールで選んだ中間倍率もselectで正しく表示する。
         span.querySelector("option[data-custom]")?.remove();
         if (![...span.options].some((option) => Number(option.value) === view!.span)) {
@@ -153,12 +192,15 @@ function createNavigation({
         draw();
     }
     function tick(position: number) {
+        const view = overviewView();
         if (!source || !view) return;
+        if (overviewDraft || requestedView) position = view.cycle;
         const end = Math.min(source.lastCycle, view.start + view.span - 1);
         el("file-position").textContent =
             `${view.start.toLocaleString()}–${end.toLocaleString()} · cycle ${Math.floor(position).toLocaleString()}`;
     }
     function draw() {
+        const source = overviewSource();
         if (!source) return;
         const canvas = el<HTMLCanvasElement>("file-activity");
         const width = canvas.clientWidth;
@@ -188,7 +230,13 @@ function createNavigation({
                 context.fillRect(x, y, w, h);
             }
         }
-        if (view) {
+        drawViewport();
+    }
+    function drawViewport() {
+        const source = overviewSource();
+        const view = overviewView();
+        if (source && view) {
+            const duration = Math.max(1, source.lastCycle - source.firstCycle + 1);
             const viewport = el("file-viewport");
             viewport.style.left = `${((view.start - source.firstCycle) / duration) * 100}%`;
             viewport.style.width = `${(Math.min(view.span, source.lastCycle - view.start + 1) / duration) * 100}%`;
@@ -370,10 +418,44 @@ function createNavigation({
         }
     });
     overview.addEventListener("input", () => {
+        const current = overviewView();
+        if (!current) return;
+        overviewDraft = { ...current, start: Number(overview.value), cycle: Number(overview.value), selectedID: null };
         cycle.value = overview.value;
+        drawViewport();
+        tick(Number(overview.value));
     });
     overview.addEventListener("change", () => goStart(Number(overview.value)));
+    overview.addEventListener("pointerdown", (event) => {
+        if (!source || !view || !event.isPrimary || event.button !== 0) return;
+        const current = overviewView()!;
+        cancelGesture();
+        overviewDrag = { pointer: event.pointerId, source };
+        overviewDraft = { ...current };
+        syncOverview();
+        drawViewport();
+        overview.setPointerCapture(event.pointerId);
+        beginInteraction();
+    });
+    overview.addEventListener("pointerup", (event) => {
+        if (event.pointerId !== overviewDrag?.pointer) return;
+        // ネイティブrangeのchangeを先に処理し、値が変わらないクリックも確定する。
+        releaseTimer = setTimeout(() => {
+            releaseTimer = undefined;
+            if (overviewDrag) goStart(Number(overview.value));
+        }, 0);
+    });
+    function cancelOverview(event: PointerEvent) {
+        if (event.pointerId !== overviewDrag?.pointer) return;
+        cancelGesture();
+        endInteraction();
+    }
+    overview.addEventListener("pointercancel", cancelOverview);
+    overview.addEventListener("lostpointercapture", (event) => {
+        if (releaseTimer === undefined) cancelOverview(event);
+    });
     overview.addEventListener("pointermove", (event) => {
+        const source = overviewSource();
         if (!source) return;
         const rect = overview.getBoundingClientRect();
         const at =
@@ -517,6 +599,9 @@ function createNavigation({
         rememberCurrent,
         cancelGesture,
         requested,
+        get dragging() {
+            return Boolean(overviewDrag);
+        },
         get searching() {
             return searching;
         }

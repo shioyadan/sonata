@@ -11,6 +11,9 @@ const reviewNavigation = require("./load-test.cjs")("check-navigation.cts") as t
 const reviewFilePlayback = require("./load-test.cjs")(
     "check-file-playback.cts"
 ) as typeof import("./check-file-playback.cts");
+const reviewImportDrag = require("./load-test.cjs")(
+    "check-import-drag.cts"
+) as typeof import("./check-import-drag.cts");
 
 // 外部の実トレースをCIへ持ち込まず、形式・圧縮・区間移動を実際のFile入力で検査する。
 function fixture(count = 320) {
@@ -97,6 +100,9 @@ async function reviewImport(window: BrowserWindow, screenshots: string) {
             let holdFinal = false;
             let finalWindow;
             globalThis.postMessage = data => {
+                if (testFileName === "drag.kanata" && data.type === "window" && data.trace.firstCycle === 600) {
+                    finalWindow = data; sendTrace({type: "test-window-held"}); return;
+                }
                 if (data.type === "loaded" && data.source.complete && testFileName === "incremental.kanata") holdFinal = true;
                 if (holdFinal && data.type === "window") {
                     holdFinal = false; finalWindow = data; sendTrace({type: "test-final-held"}); return;
@@ -260,6 +266,18 @@ async function reviewImport(window: BrowserWindow, screenshots: string) {
                 ),
                 "Cancel left a partially imported trace selected"
             );
+            // 解析完了と古いwindow応答が、ネイティブrangeのドラッグに重なる。
+            await captureWorker();
+            const dragFile = path.join(dir, "drag.kanata");
+            fs.writeFileSync(dragFile, fixture(6000));
+            await debuggerAPI.sendCommand("DOM.setFileInputFiles", { nodeId, files: [dragFile] });
+            await waitFor(
+                ({ sonata }) =>
+                    sonata.trace.key === "local-file" && sonata.fileImport.loading && !sonata.fileImport.selecting,
+                "The drag fixture did not become usable before EOF"
+            );
+            await reviewImportDrag(window);
+
             // 最終loadedと古い部分windowの失敗が交差しても、完成した区間を再取得する。
             // 一度も部分表示できなかった場合はデモの時刻を引き継がず、区間先頭から表示する。
             await captureWorker();
