@@ -257,28 +257,53 @@
         </main>
 
         <footer class="transport">
-            <section id="file-window" aria-label="Trace file navigation" hidden>
-                <div class="file-overview-heading">
-                    <label class="field-label" for="file-overview">PARSED TRACE</label>
-                    <span class="file-overview-key" aria-label="Activity across all threads">
-                        <span class="file-fetched">Fetched</span>
-                        <span class="file-committed">Committed</span>
-                        <span
-                            class="file-squashed"
-                            title="Squashed instructions. gem5 places these at the last recorded stage, not an observed squash time."
-                            >Squashed</span
-                        >
-                        <span>All threads</span>
-                    </span>
-                    <output id="file-position" aria-label="Visible cycle window"></output>
+            <div class="transport-top">
+                <div class="playback">
+                    <button class="transport-button" id="reset" title="Restart trace" aria-label="Restart trace">
+                        ↺</button
+                    ><button
+                        class="transport-button"
+                        id="previous"
+                        title="Previous cycle (←)"
+                        aria-label="Previous cycle"
+                    >
+                        Ⅰ‹</button
+                    ><button class="play-button" id="play" title="Pause (Space)" aria-label="Pause">Ⅱ</button
+                    ><button class="transport-button" id="next" title="Next cycle (→)" aria-label="Next cycle">
+                        ›Ⅰ</button
+                    ><span class="playback-divider"></span
+                    ><select id="speed" aria-label="Playback speed">
+                        <option value="1">0.25×</option>
+                        <option value="2">0.5×</option>
+                        <option value="4" selected>1×</option>
+                        <option value="8">2×</option>
+                        <option value="16">4×</option></select
+                    ><span class="speed-unit">4 cycles / sec</span>
                 </div>
-                <div id="file-overview-wrap">
-                    <canvas id="file-activity" aria-hidden="true"></canvas>
-                    <div id="file-viewport" aria-hidden="true"></div>
-                    <input id="file-overview" type="range" step="1" aria-describedby="file-read-state" />
+                <div class="timeline-title">
+                    <span class="live-dot"></span> INSTRUCTION ACTIVITY <span id="range-label"></span>
                 </div>
-                <div class="file-navigation">
-                    <div class="file-window-buttons" aria-label="Move cycle window">
+                <button class="flush-button" id="next-flush"><span>↯</span> Jump to flush <span>→</span></button>
+            </div>
+            <div class="timeline-wrap" id="detail-timeline">
+                <canvas id="activity" aria-hidden="true"></canvas>
+                <div id="event-markers"></div>
+                <div id="playhead"></div>
+                <input
+                    id="timeline"
+                    type="range"
+                    step="0.01"
+                    aria-label="Trace cycle"
+                    aria-description="Instruction activity: committed, in flight, and flush"
+                    title="Instruction activity: committed, in flight, and flush"
+                />
+            </div>
+            <div class="transport-bottom">
+                <span id="first-cycle"></span
+                ><span class="timeline-key"><i></i> Committed <i></i> In flight <i></i> Flush</span>
+                <div id="file-detail-controls" aria-label="Detailed time axis controls" hidden>
+                    <div class="file-window-buttons" role="group" aria-label="Move cycle window">
+                        <span class="file-control-label">Window</span>
                         <button
                             id="file-previous"
                             class="quiet-button"
@@ -296,7 +321,8 @@
                             <span>Next</span> →
                         </button>
                     </div>
-                    <div class="file-window-buttons" aria-label="Time scale">
+                    <div class="file-window-buttons" role="group" aria-label="Time scale">
+                        <span class="file-control-label">Zoom</span>
                         <button
                             id="file-zoom-out"
                             class="quiet-button"
@@ -314,16 +340,53 @@
                             +
                         </button>
                     </div>
-                    <span class="file-navigation-hint">Detail: scroll to zoom · Shift-drag to pan</span>
+                    <span class="file-navigation-hint">Scroll to zoom · Shift-drag to pan</span>
+                </div>
+                <span id="last-cycle"></span>
+            </div>
+            <section id="file-window" aria-label="Trace file navigation" hidden>
+                <div class="file-overview-heading">
+                    <label class="field-label" for="file-overview"
+                        ><span class="file-parsed-label">PARSED </span>TRACE</label
+                    >
+                    <span class="file-overview-key" aria-label="Activity across all threads">
+                        <span class="file-fetched">Fetched</span>
+                        <span class="file-committed">Committed</span>
+                        <span
+                            class="file-squashed"
+                            title="Squashed instructions. gem5 places these at the last recorded stage, not an observed squash time."
+                            >Squashed</span
+                        >
+                        <span>All threads</span>
+                    </span>
+                    <output id="file-position" aria-label="Visible cycle window"></output>
+                </div>
+                <div class="file-navigation">
+                    <button
+                        id="file-first"
+                        class="quiet-button"
+                        aria-label="Show first parsed window"
+                        title="Show first parsed window"
+                    >
+                        Start
+                    </button>
+                    <button
+                        id="file-last"
+                        class="quiet-button"
+                        aria-label="Show latest parsed window"
+                        title="Show latest parsed window"
+                    >
+                        Latest
+                    </button>
                     <details class="file-navigation-options">
-                        <summary>Navigate</summary>
+                        <summary>Go to cycle</summary>
                         <div class="file-navigation-panel">
                             <div class="file-window-row">
                                 <label for="file-cycle"
                                     >Start cycle<input id="file-cycle" type="number" step="1"
                                 /></label>
                                 <label for="file-span"
-                                    >Window<select id="file-span">
+                                    >Visible cycles<select id="file-span">
                                         <option value="16">16 cycles</option>
                                         <option value="32">32 cycles</option>
                                         <option value="64">64 cycles</option>
@@ -360,47 +423,13 @@
                         </div>
                     </details>
                 </div>
+                <div id="file-overview-wrap">
+                    <canvas id="file-activity" aria-hidden="true"></canvas>
+                    <div id="file-viewport" aria-hidden="true"></div>
+                    <input id="file-overview" type="range" step="1" aria-describedby="file-read-state" />
+                </div>
                 <p id="file-window-status" role="status" hidden></p>
             </section>
-            <div class="transport-top">
-                <div class="playback">
-                    <button class="transport-button" id="reset" title="Restart trace" aria-label="Restart trace">
-                        ↺</button
-                    ><button
-                        class="transport-button"
-                        id="previous"
-                        title="Previous cycle (←)"
-                        aria-label="Previous cycle"
-                    >
-                        Ⅰ‹</button
-                    ><button class="play-button" id="play" title="Pause (Space)" aria-label="Pause">Ⅱ</button
-                    ><button class="transport-button" id="next" title="Next cycle (→)" aria-label="Next cycle">
-                        ›Ⅰ</button
-                    ><span class="playback-divider"></span
-                    ><select id="speed" aria-label="Playback speed">
-                        <option value="1">0.25×</option>
-                        <option value="2">0.5×</option>
-                        <option value="4" selected>1×</option>
-                        <option value="8">2×</option>
-                        <option value="16">4×</option></select
-                    ><span class="speed-unit">4 cycles / sec</span>
-                </div>
-                <div class="timeline-title">
-                    <span class="live-dot"></span> INSTRUCTION ACTIVITY <span id="range-label"></span>
-                </div>
-                <button class="flush-button" id="next-flush"><span>↯</span> Jump to flush <span>→</span></button>
-            </div>
-            <div class="timeline-wrap" id="detail-timeline">
-                <canvas id="activity" aria-hidden="true"></canvas>
-                <div id="event-markers"></div>
-                <div id="playhead"></div>
-                <input id="timeline" type="range" step="0.01" aria-label="Trace cycle" />
-            </div>
-            <div class="transport-bottom">
-                <span id="first-cycle"></span
-                ><span class="timeline-key"><i></i> Committed <i></i> In flight <i></i> Flush</span
-                ><span id="last-cycle"></span>
-            </div>
         </footer>
         <div class="statusbar">
             <span><span class="status-dot"></span> <span id="renderer-status">Initializing light field…</span></span

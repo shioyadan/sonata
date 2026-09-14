@@ -26,7 +26,7 @@ function createTraceImport({
     const progress = element<HTMLProgressElement>("import-progress");
     const cancel = element<HTMLButtonElement>("import-cancel");
     const panel = element<HTMLElement>("file-window");
-    const navigation = createNavigation({ read, navigate, search });
+    const navigation = createNavigation({ read, navigate, search, pause });
     let worker: Worker | null = null;
     let source: files.Metadata | null = null;
     let serial = 0;
@@ -90,7 +90,7 @@ function createTraceImport({
         if (!source || !worker) return;
         navigation.cancelGesture();
         navigation.rememberCurrent();
-        pause();
+        // 全体位置の変更は現在の再生意図を保ち、応答待ちの間だけ時計を止める。
         waiting = false;
         prefetch = null;
         prefetchError = null;

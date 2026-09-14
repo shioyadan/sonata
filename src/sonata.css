@@ -471,6 +471,7 @@ main {
 }
 .trace-import .quiet-button,
 #file-window .quiet-button,
+#file-detail-controls .quiet-button,
 .file-navigation-options > summary {
     min-height: 32px;
     padding: 6px 10px;
@@ -480,6 +481,7 @@ main {
 }
 .trace-import .quiet-button:hover,
 #file-window .quiet-button:hover,
+#file-detail-controls .quiet-button:hover,
 .file-navigation-options > summary:hover {
     color: var(--text);
     background: color-mix(in srgb, var(--text) 5%, transparent);
@@ -539,16 +541,17 @@ body:has(#file-window:not([hidden])) main {
     padding-top: 10px;
 }
 #file-window {
-    padding-bottom: 8px;
-    margin-bottom: 8px;
-    border-bottom: 1px solid var(--border);
+    padding-top: 8px;
+    margin-top: 8px;
+    border-top: 1px solid var(--border);
     font-size: 10px;
     color: var(--muted);
 }
 .file-overview-heading,
 .file-overview-key,
 .file-navigation,
-.file-window-buttons {
+.file-window-buttons,
+#file-detail-controls {
     display: flex;
     align-items: center;
     gap: 10px;
@@ -635,18 +638,49 @@ body:has(#file-window:not([hidden])) main {
     outline: 2px solid var(--cyan);
     outline-offset: 3px;
 }
+.transport-bottom:has(#file-detail-controls:not([hidden])) {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+    align-items: center;
+    gap: 8px;
+}
+.transport-bottom:has(#file-detail-controls:not([hidden])) .timeline-key {
+    display: none;
+}
+.transport-bottom:has(#file-detail-controls:not([hidden])) > span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.transport-bottom:has(#file-detail-controls:not([hidden])) #last-cycle {
+    text-align: right;
+}
+#file-detail-controls {
+    font: 10px sans-serif;
+    color: var(--muted);
+}
 .file-window-buttons {
     gap: 4px;
 }
+.file-window-buttons + .file-window-buttons {
+    padding-left: 10px;
+    border-left: 1px solid var(--border);
+}
+.file-control-label {
+    margin-right: 2px;
+    font-size: 9px;
+}
 .file-window-buttons button {
     min-width: 32px;
+}
+.file-window-buttons button span {
+    font-size: inherit;
 }
 .file-navigation-hint {
     font-size: 9px;
 }
 .file-navigation-options {
     position: relative;
-    margin-left: auto;
 }
 .file-navigation-options > summary {
     display: flex;

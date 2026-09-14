@@ -842,18 +842,16 @@ body.cinema .cinema-caption {
     cursor: default;
 }
 
-/* 全体軸と詳細軸を並べても、再生操作と図を画面内に保つ。 */
+/* 詳細の再生軸を図の近くへ置き、全体軸と同じ幅で表示する。 */
 @media (min-width: 601px) {
     #file-window {
         display: grid;
         grid-template-columns: minmax(0, 1fr) auto;
         column-gap: 12px;
     }
-    .file-overview-heading {
-        grid-column: 1 / -1;
-    }
     #file-overview-wrap {
-        margin-bottom: 4px;
+        grid-column: 1 / -1;
+        margin-bottom: 0;
     }
 }
 @media (max-width: 1100px) {
@@ -869,8 +867,8 @@ body.cinema .cinema-caption {
         padding-top: 6px;
     }
     #file-window {
-        padding-bottom: 5px;
-        margin-bottom: 5px;
+        padding-top: 5px;
+        margin-top: 5px;
     }
     #file-overview-wrap {
         height: 46px;
@@ -885,20 +883,32 @@ body.cinema .cinema-caption {
         font-size: 9px;
     }
     #file-window :is(button, input[type="number"], select),
+    #file-detail-controls .quiet-button,
     .trace-import :is(button, input[type="text"], select),
     .file-navigation-options > summary,
     .file-loop-label {
         min-height: 44px;
     }
     #file-window button,
+    #file-detail-controls button,
     .trace-import button {
         min-width: 44px;
     }
     .file-navigation-options > summary {
         font-size: 11px;
     }
-    .file-window-buttons button span {
+    .file-window-buttons button span,
+    .file-control-label {
         display: none;
+    }
+    #file-detail-controls {
+        gap: 6px;
+    }
+    .file-window-buttons {
+        gap: 2px;
+    }
+    .file-window-buttons + .file-window-buttons {
+        padding-left: 6px;
     }
     .file-window-buttons button {
         font-size: 16px;
@@ -911,6 +921,26 @@ body.cinema .cinema-caption {
     }
     .file-result-list :is(strong, small) {
         font-size: 11px;
+    }
+}
+@media (max-width: 600px) {
+    #file-window {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        column-gap: 6px;
+    }
+    .file-parsed-label,
+    #file-position {
+        display: none;
+    }
+    .file-navigation {
+        justify-content: flex-end;
+        gap: 6px;
+        margin: 4px 0;
+    }
+    #file-overview-wrap {
+        grid-column: 1 / -1;
+        margin-bottom: 0;
     }
 }
 @media (max-width: 600px) and (max-height: 700px) {
@@ -942,6 +972,14 @@ body.cinema .cinema-caption {
 @media (min-width: 601px) and (max-width: 1000px) and (max-height: 600px) {
     body:has(#file-window:not([hidden])) {
         grid-template-rows: calc(48px + env(safe-area-inset-top)) minmax(0, 1fr) auto;
+    }
+    #file-detail-controls {
+        position: absolute;
+        top: 6px;
+        right: 66px;
+    }
+    .transport-bottom:has(#file-detail-controls:not([hidden])) {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
     }
     body:has(#file-window:not([hidden])) .bound-scene {
         display: none;

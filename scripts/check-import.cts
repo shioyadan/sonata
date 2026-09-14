@@ -467,6 +467,7 @@ async function reviewImport(window: BrowserWindow, screenshots: string) {
         for (const [width, height] of [
             [320, 568],
             [390, 844],
+            [620, 430],
             [932, 430]
         ]) {
             window.setSize(width, height);
@@ -484,6 +485,8 @@ async function reviewImport(window: BrowserWindow, screenshots: string) {
                     "file-next",
                     "file-zoom-in",
                     "file-zoom-out",
+                    "file-first",
+                    "file-last",
                     "timeline",
                     "play",
                     "scene"
@@ -518,6 +521,27 @@ async function reviewImport(window: BrowserWindow, screenshots: string) {
                 visible.filter((r) => r.id.startsWith("file-")).every((r) => r.width >= 44 && r.height >= 44),
                 `Mobile file targets are too small: ${JSON.stringify(visible)}`
             );
+            assert.ok(
+                visible.find((r) => r.id === "timeline")!.bottom <= visible.find((r) => r.id === "file-overview")!.y,
+                "The detail timeline should be above the trace overview on mobile"
+            );
+            if (width > 600) {
+                assert.ok(
+                    await evaluate(() => {
+                        const controls = document.getElementById("file-detail-controls")!.getBoundingClientRect();
+                        const playback = document.querySelector(".playback")!.getBoundingClientRect();
+                        const flush = document.getElementById("next-flush")!.getBoundingClientRect();
+                        return [playback, flush].every(
+                            (neighbor) =>
+                                controls.left >= neighbor.right ||
+                                controls.right <= neighbor.left ||
+                                controls.top >= neighbor.bottom ||
+                                controls.bottom <= neighbor.top
+                        );
+                    }),
+                    "Landscape window controls overlap playback controls"
+                );
+            }
             await evaluate(() => {
                 (document.querySelector(".file-navigation-options") as HTMLDetailsElement).open = true;
             });
@@ -565,6 +589,7 @@ async function reviewImport(window: BrowserWindow, screenshots: string) {
                 ({ sonata }) =>
                     sonata.trace.key === "rename-rush" &&
                     sonata.fileImport.source === null &&
+                    document.getElementById("file-detail-controls")!.hidden &&
                     !document.querySelector('#trace-select option[value="local-file"]')
             ),
             "Restoring the page left a closed file selected"

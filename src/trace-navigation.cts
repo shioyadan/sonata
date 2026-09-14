@@ -16,11 +16,13 @@ type Bookmark = { name: string; view: View };
 function createNavigation({
     read,
     navigate,
-    search
+    search,
+    pause
 }: {
     read: () => { cycle: number; selectedID: number | null };
     navigate: (view: View, historyIndex?: number) => void;
     search: (query: Search) => void;
+    pause: () => void;
 }) {
     const el = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
     const overview = el<HTMLInputElement>("file-overview");
@@ -80,6 +82,8 @@ function createNavigation({
         el<HTMLButtonElement>("file-zoom-out").disabled = !view || view.span >= 512;
         el<HTMLButtonElement>("file-previous").disabled = !view || view.start <= source!.firstCycle;
         el<HTMLButtonElement>("file-next").disabled = !view || view.start + view.span > source!.lastCycle;
+        el<HTMLButtonElement>("file-first").disabled = !view;
+        el<HTMLButtonElement>("file-last").disabled = !view;
     }
     function setSource(next: files.Metadata) {
         const previous = source;
@@ -98,7 +102,7 @@ function createNavigation({
         el("file-read-state").textContent = source.complete
             ? "Entire file parsed. Activity shows all threads."
             : "Showing parsed cycles only; the unread cycle range is not yet known. Activity shows all threads.";
-        el("file-window").hidden = el("file-tools").hidden = false;
+        el("file-window").hidden = el("file-tools").hidden = el("file-detail-controls").hidden = false;
         draw();
         controls();
         for (const [index, button] of el("file-bookmarks")
@@ -226,6 +230,8 @@ function createNavigation({
                         : `Recorded lifetime: ${hit.endCycle - hit.cycle} cycles`;
                 button.addEventListener("click", () => {
                     if (!view) return;
+                    // 検索は選んだ命令の時刻を観察するため停止し、区間移動の再生継続と分ける。
+                    pause();
                     go({
                         ...view,
                         start: hit.cycle - Math.min(8, view.span / 4),
@@ -326,7 +332,7 @@ function createNavigation({
         lastSearch = null;
         lastHit = undefined;
         cancelGesture();
-        el("file-window").hidden = el("file-tools").hidden = true;
+        el("file-window").hidden = el("file-tools").hidden = el("file-detail-controls").hidden = true;
         el<HTMLInputElement>("file-loop").checked = false;
         el("file-search-results").replaceChildren();
         searchStatus.textContent = "";
@@ -376,6 +382,13 @@ function createNavigation({
     });
     el("file-next").addEventListener("click", () => {
         if (view) goStart(view.start + view.span);
+    });
+    el("file-first").addEventListener("click", () => {
+        if (source) goStart(source.firstCycle);
+    });
+    el("file-last").addEventListener("click", () => {
+        // 末尾そのものではなく最後の区間へ移動し、再生中ならその区間から続ける。
+        if (source && view) goStart(Math.max(source.firstCycle, source.lastCycle - view.span + 1));
     });
     el("file-back").addEventListener("click", () => {
         if (historyIndex > 0) go(history[historyIndex - 1], historyIndex - 1);

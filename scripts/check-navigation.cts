@@ -61,14 +61,14 @@ async function reviewNavigation(window: BrowserWindow, contents: string) {
     window.webContents.sendInputEvent({ type: "keyUp", keyCode: "Space" });
     await waitFor(
         () => (document.querySelector(".file-navigation-options") as HTMLDetailsElement).open,
-        "Navigate did not open from the keyboard"
+        "Go to cycle did not open from the keyboard"
     );
-    assert.equal(await evaluate(({ sonata }) => sonata.playing), false, "Opening Navigate also toggled playback");
+    assert.equal(await evaluate(({ sonata }) => sonata.playing), false, "Opening Go to cycle also toggled playback");
     window.webContents.sendInputEvent({ type: "keyDown", keyCode: "Escape" });
     window.webContents.sendInputEvent({ type: "keyUp", keyCode: "Escape" });
     await waitFor(
         () => !(document.querySelector(".file-navigation-options") as HTMLDetailsElement).open,
-        "Escape did not close Navigate"
+        "Escape did not close Go to cycle"
     );
     await evaluate(async () => {
         const detail = document.getElementById("detail-timeline")!;
@@ -104,6 +104,70 @@ async function reviewNavigation(window: BrowserWindow, contents: string) {
         overview.source.overview.bins.reduce((n, bin) => n + bin.committed, 0),
         320
     );
+    const navigationLayout = await evaluate(() => {
+        const detail = document.getElementById("detail-timeline")!;
+        const controls = document.getElementById("file-detail-controls")!;
+        const overview = document.getElementById("file-overview-wrap")!;
+        return {
+            detailBeforeControls: Boolean(detail.compareDocumentPosition(controls) & Node.DOCUMENT_POSITION_FOLLOWING),
+            controlsBeforeOverview: Boolean(
+                controls.compareDocumentPosition(overview) & Node.DOCUMENT_POSITION_FOLLOWING
+            ),
+            localButtons: ["file-previous", "file-next", "file-zoom-out", "file-zoom-in"].every((id) =>
+                controls.contains(document.getElementById(id))
+            )
+        };
+    });
+    assert.ok(
+        navigationLayout.detailBeforeControls && navigationLayout.controlsBeforeOverview,
+        "Detail timeline and its controls must precede the overall trace timeline"
+    );
+    assert.ok(navigationLayout.localButtons, "Local window buttons are outside the detail controls");
+    await evaluate(({ sonata }) => {
+        sonata.setPlaying(true);
+        const range = document.getElementById("file-overview") as HTMLInputElement;
+        range.value = "500";
+        range.dispatchEvent(new Event("input"));
+        range.dispatchEvent(new Event("change"));
+    });
+    await waitFor(
+        ({ sonata }) => sonata.trace.firstCycle === 500 && sonata.playing && sonata.cycle > 500,
+        "Moving the overall timeline did not continue playback in the new window"
+    );
+    await evaluate(() => {
+        const timeline = document.getElementById("timeline") as HTMLInputElement;
+        timeline.value = "505.5";
+        timeline.dispatchEvent(new Event("input"));
+    });
+    assert.equal(await evaluate(({ sonata }) => sonata.playing), false, "Detail seeking did not pause playback");
+    await evaluate(() => {
+        const range = document.getElementById("file-overview") as HTMLInputElement;
+        range.value = "200";
+        range.dispatchEvent(new Event("input"));
+        range.dispatchEvent(new Event("change"));
+    });
+    await ready();
+    assert.equal(await evaluate(({ sonata }) => sonata.trace.firstCycle), 200);
+    assert.equal(
+        await evaluate(({ sonata }) => sonata.playing),
+        false,
+        "Moving the overall timeline resumed paused playback"
+    );
+    await click("file-last");
+    assert.ok(
+        await evaluate(({ sonata }) => {
+            const source = sonata.fileImport.source!;
+            return (
+                sonata.trace.firstCycle ===
+                Math.max(source.firstCycle, source.lastCycle - sonata.fileImport.view!.span + 1)
+            );
+        }),
+        "Latest did not show the final cycle window"
+    );
+    assert.equal(await evaluate(({ sonata }) => sonata.playing), false, "Latest resumed paused playback");
+    await click("file-first");
+    assert.equal(await evaluate(({ sonata }) => sonata.trace.firstCycle), overview.source.firstCycle);
+    assert.equal(await evaluate(({ sonata }) => sonata.playing), false, "Start resumed paused playback");
     await evaluate(({ sonata }) => {
         if (document.getElementById("auto-camera")!.getAttribute("aria-pressed") === "true")
             document.getElementById("auto-camera")!.click();
@@ -112,8 +176,16 @@ async function reviewNavigation(window: BrowserWindow, contents: string) {
     const camera = await evaluate(({ sonata }) => sonata.camera);
     await search("id", "240");
     assert.equal(await evaluate(() => document.querySelectorAll("#file-search-results button").length), 1);
-    await evaluate(() => (document.querySelector("#file-search-results button") as HTMLButtonElement).click());
+    await evaluate(({ sonata }) => {
+        sonata.setPlaying(true);
+        (document.querySelector("#file-search-results button") as HTMLButtonElement).click();
+    });
     await ready();
+    assert.equal(
+        await evaluate(({ sonata }) => sonata.playing),
+        false,
+        "Selecting a search hit did not pause playback"
+    );
     assert.equal(await evaluate(({ sonata }) => sonata.selectedID), 240);
     assert.equal(await evaluate(({ sonata }) => sonata.cycle), 480);
     await click("file-back");
@@ -248,7 +320,12 @@ async function reviewNavigation(window: BrowserWindow, contents: string) {
     assert.equal(await evaluate(({ sonata }) => sonata.trace.firstCycle), following.start);
     await evaluate(({ sonata }) => sonata.captureAt(sonata.trace.lastCycle));
     const stepped = await evaluate(({ sonata }) => sonata.cycle + 1);
-    await click("next");
+    await evaluate(({ sonata }) => {
+        sonata.setPlaying(true);
+        document.getElementById("next")!.click();
+    });
+    await ready();
+    assert.equal(await evaluate(({ sonata }) => sonata.playing), false, "Cycle stepping did not pause playback");
     assert.equal(
         await evaluate(({ sonata }) => sonata.cycle),
         stepped,
@@ -271,18 +348,27 @@ async function reviewNavigation(window: BrowserWindow, contents: string) {
                 const nativeSend = globalThis.postMessage.bind(globalThis);
                 let held;
                 globalThis.postMessage = data => {
-                    if (data.type === 'window' && data.trace.firstCycle === 127) {
+                    if (data.type === 'window' && [127, 600].includes(data.trace.firstCycle)) {
                         held = data; nativeSend({type: 'test-held'});
                     } else nativeSend(data);
                 };
                 const nativeReceive = globalThis.onmessage;
                 globalThis.onmessage = event => {
-                    if (event.data.type === 'test-release') { if (held) nativeSend(held); held = null; }
+                    if (event.data.type === 'test-release') {
+                        if (held) nativeSend(held);
+                        held = null;
+                        nativeSend({type: 'test-released'});
+                    }
                     else nativeReceive(event);
                 };
             `;
-            const context = globalThis as typeof globalThis & { navigationWorker?: Worker; navigationHeld?: boolean };
+            const context = globalThis as typeof globalThis & {
+                navigationWorker?: Worker;
+                navigationHeld?: boolean;
+                navigationReleased?: boolean;
+            };
             context.navigationHeld = false;
+            context.navigationReleased = false;
             const Original = Worker;
             globalThis.Worker = new Proxy(Original, {
                 construct(Target, args) {
@@ -290,6 +376,7 @@ async function reviewNavigation(window: BrowserWindow, contents: string) {
                     context.navigationWorker = worker;
                     worker.addEventListener("message", (event) => {
                         if (event.data.type === "test-held") context.navigationHeld = true;
+                        if (event.data.type === "test-released") context.navigationReleased = true;
                     });
                     globalThis.Worker = Original;
                     return worker;
@@ -315,6 +402,10 @@ async function reviewNavigation(window: BrowserWindow, contents: string) {
                 type: "test-release"
             });
         });
+        await waitFor(
+            () => Boolean((globalThis as typeof globalThis & { navigationReleased?: boolean }).navigationReleased),
+            "Held continuation response was not delivered"
+        );
         await test.settle();
         assert.equal(
             await evaluate(({ sonata }) => sonata.cycle),
@@ -322,16 +413,68 @@ async function reviewNavigation(window: BrowserWindow, contents: string) {
             "An old continuation response overwrote a manual seek"
         );
         assert.equal(await evaluate(({ sonata }) => sonata.trace.firstCycle), 0);
+        await evaluate(({ sonata }) => {
+            const context = globalThis as typeof globalThis & {
+                navigationHeld?: boolean;
+                navigationReleased?: boolean;
+            };
+            context.navigationHeld = context.navigationReleased = false;
+            sonata.setPlaying(true);
+            const range = document.getElementById("file-overview") as HTMLInputElement;
+            range.value = "600";
+            range.dispatchEvent(new Event("input"));
+            range.dispatchEvent(new Event("change"));
+        });
+        await waitFor(
+            ({ sonata }) =>
+                sonata.fileImport.selecting &&
+                Boolean((globalThis as typeof globalThis & { navigationHeld?: boolean }).navigationHeld),
+            "Manual navigation response was not held"
+        );
+        assert.equal(await evaluate(({ sonata }) => sonata.playing), true, "Pending navigation lost playback intent");
+        await evaluate(() => document.getElementById("play")!.click());
+        assert.equal(await evaluate(({ sonata }) => sonata.playing), false, "Pause was ignored during navigation");
+        await evaluate(() => {
+            (globalThis as typeof globalThis & { navigationWorker: Worker }).navigationWorker.postMessage({
+                type: "test-release"
+            });
+        });
+        await waitFor(
+            ({ sonata }) =>
+                !sonata.fileImport.selecting &&
+                sonata.trace.firstCycle === 600 &&
+                Boolean((globalThis as typeof globalThis & { navigationReleased?: boolean }).navigationReleased),
+            "Paused navigation did not apply the requested window"
+        );
+        await test.settle();
+        assert.equal(
+            await evaluate(({ sonata }) => sonata.playing),
+            false,
+            "A late navigation response resumed paused playback"
+        );
     } finally {
         await evaluate((_page, source) => {
             globalThis.sonataTraceWorkerSource = source;
             document.getElementById("file-close")!.click();
-            const context = globalThis as typeof globalThis & { navigationWorker?: Worker; navigationHeld?: boolean };
+            const context = globalThis as typeof globalThis & {
+                navigationWorker?: Worker;
+                navigationHeld?: boolean;
+                navigationReleased?: boolean;
+            };
             delete context.navigationWorker;
             delete context.navigationHeld;
+            delete context.navigationReleased;
         }, original);
     }
     await open();
-    return { overview: true, search: true, history: true, bookmarks: true, continuous: true, staleResponse: true };
+    return {
+        overview: true,
+        search: true,
+        history: true,
+        bookmarks: true,
+        continuous: true,
+        playbackIntent: true,
+        staleResponse: true
+    };
 }
 export = reviewNavigation;
