@@ -20,6 +20,8 @@ type Options = {
     laneNames?: readonly string[];
     flushCycles?: ReadonlyMap<number, number>;
     profile?: StructureProfile;
+    storeClock?: StoreClock | null;
+    storeWaits?: readonly StoreWait[];
 };
 const limits = { operations: 16384, stages: 131072, cycles: 512, active: 512, queue: 128, rob: 224, width: 32 };
 type ExecutionKind = "integer" | "memory" | "branch";
@@ -191,38 +193,81 @@ function flushTimes(ops: readonly Readonly<Op>[], parser: Source["parser"]) {
     return result;
 }
 
-// ファイル名から ISA、周波数、物理レジスタ数を決めず、記録内の tick/cycle 対応だけを使う。
-function storeCompletions(ops: readonly Readonly<Op>[], parser: Source["parser"]): [number, number][] {
-    if (parser !== "gem5") return [];
-    const calibration = ops.flatMap((op) => {
+type StoreClock = { tick: number; cycle: number; period: number };
+type StoreWait = [id: number, fetch: number, start: number, end: number];
+function storeCycle(clock: StoreClock, tick: number) {
+    return clock.cycle + (tick - clock.tick) / clock.period;
+}
+
+// ファイル名や固定周波数を使わず、記録内のtick/cycle対応を一定量の状態で校正する。
+// snapshotは独立した値なので、Parserの追加観測が進行中の区間要求を変えない。
+function createStoreClock() {
+    let first: { tick: number; cycle: number } | null = null;
+    let clock: StoreClock | null = null;
+    let invalid = false;
+    function observe(op: Readonly<Op>) {
+        if (invalid) return;
         const match = /^Fetched Tick: (\d+)$/m.exec(op.labelDetail);
-        return match ? [{ tick: Number(match[1]), cycle: op.fetchedCycle }] : [];
-    });
-    const first = calibration[0],
-        second = calibration.find((entry) => entry.cycle !== first?.cycle);
-    if (!first || !second) return [];
-    const period = (second.tick - first.tick) / (second.cycle - first.cycle),
-        cycleAt = (tick: number) => first.cycle + (tick - first.tick) / period;
-    if (
-        !Number.isFinite(period) ||
-        period <= 0 ||
-        calibration.some(({ tick, cycle }) => !Number.isSafeInteger(tick) || Math.abs(cycleAt(tick) - cycle) > 1e-6)
-    )
-        return [];
-    return ops.flatMap((op) => {
-        if (!op.retired || op.flush || unfinished(op) || memoryModel.instructionType(op.labelName) !== "store")
-            return [];
-        const match = /^Store Tick: (\d+)$/m.exec(op.labelDetail),
-            tick = match ? Number(match[1]) : 0,
-            cycle = cycleAt(tick);
-        return Number.isSafeInteger(tick) && tick > 0 && Number.isFinite(cycle) && cycle >= op.fetchedCycle
-            ? [[op.id, cycle] as [number, number]]
-            : [];
-    });
+        if (!match) return;
+        const tick = Number(match[1]),
+            cycle = op.fetchedCycle;
+        if (!Number.isSafeInteger(tick) || !Number.isFinite(cycle)) {
+            invalid = true;
+            return;
+        }
+        if (!first) first = { tick, cycle };
+        else if (!clock && cycle !== first.cycle) {
+            const period = (tick - first.tick) / (cycle - first.cycle);
+            if (!Number.isFinite(period) || period <= 0) invalid = true;
+            else clock = { ...first, period };
+        } else if (clock ? Math.abs(storeCycle(clock, tick) - cycle) > 1e-6 : tick !== first.tick) invalid = true;
+    }
+    return {
+        observe,
+        snapshot: () => (!invalid && clock ? { ...clock } : null),
+        clear() {
+            first = null;
+            clock = null;
+            invalid = false;
+        }
+    };
+}
+function storeTick(op: Readonly<Op>): number | null {
+    if (!op.retired || op.flush || unfinished(op)) return null;
+    const match = /^Store Tick: (\d+)$/m.exec(op.labelDetail);
+    if (!match || memoryModel.instructionType(op.labelName) !== "store") return null;
+    const tick = Number(match[1]);
+    return Number.isSafeInteger(tick) && tick > 0 ? tick : null;
+}
+
+function storeCompletion(op: Readonly<Op>, clock: StoreClock | null): number | null {
+    const tick = clock && storeTick(op);
+    if (tick == null || !clock) return null;
+    const cycle = storeCycle(clock, tick);
+    return Number.isFinite(cycle) && cycle >= op.fetchedCycle ? cycle : null;
+}
+function storeWait(op: Readonly<Op>, clock: StoreClock | null): StoreWait | null {
+    const end = storeCompletion(op, clock);
+    if (end === null) return null;
+    // gem5のretiredCycleはRtの排他的描画終端。待機開始には記録上のretireを使う。
+    const start =
+        op.lanes.flatMap((lane) => lane?.stages ?? []).find((stage) => stage.name === "Rt")?.startCycle ??
+        op.retiredCycle;
+    return end >= start ? [op.id, op.fetchedCycle, start, end] : null;
 }
 
 function toTraceWindow(
-    { ops: input, firstCycle, lastCycle, source, laneNames = [], flushCycles: indexedFlushCycles, profile }: Options,
+    {
+        ops: input,
+        firstCycle,
+        lastCycle,
+        source,
+        laneNames = [],
+        flushCycles: indexedFlushCycles,
+        profile,
+        storeClock,
+        storeWaits = []
+    }: Options,
     measureOnly = false
 ): Trace {
     finiteCycle(firstCycle, "Window start");
@@ -239,6 +284,23 @@ function toTraceWindow(
         throw new Error(`Select at most ${limits.cycles} cycles and ${limits.operations} instructions`);
     if (!Number.isSafeInteger(source.opCount) || source.opCount < 0)
         throw new Error("The source instruction count is invalid");
+    if (storeWaits.length > limits.operations)
+        throw new Error(`Select at most ${limits.operations} outstanding store writes`);
+    let clock = storeClock ?? null;
+    if (storeClock === undefined && source.parser === "gem5") {
+        const calibration = createStoreClock();
+        input.forEach(calibration.observe);
+        clock = calibration.snapshot();
+    }
+    const waits = new Map(storeWaits.map((wait) => [wait[0], wait]));
+    const completions: [number, number][] = [];
+    for (const op of input) {
+        const completion = storeCompletion(op, clock);
+        if (completion !== null) completions.push([op.id, completion]);
+        const wait = storeWait(op, clock);
+        if (wait) waits.set(op.id, wait);
+    }
+    if (waits.size > limits.operations) throw new Error(`Select at most ${limits.operations} outstanding store writes`);
     let stageCount = 0;
     for (const op of input) {
         for (const lane of op.lanes) stageCount += lane?.stages.length ?? 0;
@@ -468,7 +530,8 @@ function toTraceWindow(
         fetchWidth,
         retireWidth,
         ops: compactOps,
-        storeCompletions: storeCompletions(ops, source.parser),
+        storeCompletions: completions.sort((a, b) => a[0] - b[0]),
+        storeWaits: [...waits.values()].sort((a, b) => a[0] - b[0]),
         ...(profile
             ? { displayProfile: { memoryMinimum: { ...profile.memoryMinimum }, memoryKinds: [...profile.memoryKinds] } }
             : {}),
@@ -622,8 +685,22 @@ function buildProfile(observed: StructureObservations, previous?: StructureProfi
 namespace traceWindow {
     export type StructureProfile = StructureProfileValue;
     export type Source = SourceValue;
+    export type StoreClock = StoreClockValue;
+    export type StoreWait = StoreWaitValue;
 }
 type StructureProfileValue = StructureProfile;
 type SourceValue = Source;
-const traceWindow = { toTraceWindow, buildProfile, limits, isUnfinished: unfinished };
+type StoreClockValue = StoreClock;
+type StoreWaitValue = StoreWait;
+const traceWindow = {
+    toTraceWindow,
+    buildProfile,
+    limits,
+    isUnfinished: unfinished,
+    createStoreClock,
+    storeCycle,
+    storeTick,
+    storeCompletion,
+    storeWait
+};
 export = traceWindow;

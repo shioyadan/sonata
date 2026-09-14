@@ -58,6 +58,7 @@ interface Block {
     ids: Uint32Array;
     ended: Uint32Array;
     flushGroups?: readonly FlushGroup[];
+    stores?: { firstCycle: number; lastTick: number; ids: Uint32Array };
 }
 interface FlushGroup {
     firstID: number;
@@ -196,6 +197,8 @@ function createTraceIndex(
 ) {
     const blocks = new Map<number, Block>();
     const overview = createOverview();
+    const storeClock = windows.createStoreClock();
+    let lastStoreTick = 0;
     const threads = new Set<number>();
     const flushGroups: FlushGroup[] = [];
     let firstCycle = Infinity;
@@ -260,6 +263,22 @@ function createTraceIndex(
             };
             blocks.set(firstID, block);
         }
+        if (parser === "gem5") {
+            storeClock.observe(op);
+            const tick = windows.storeTick(op);
+            if (tick !== null) {
+                const stores = (block.stores ??= {
+                    firstCycle: Infinity,
+                    lastTick: 0,
+                    ids: new Uint32Array(blockSize / 32)
+                });
+                const offset = op.id - firstID;
+                stores.ids[offset >>> 5] |= 1 << (offset & 31);
+                stores.firstCycle = Math.min(stores.firstCycle, recordedEnd(op, parser)!);
+                stores.lastTick = Math.max(stores.lastTick, tick);
+                lastStoreTick = Math.max(lastStoreTick, tick);
+            }
+        }
         block.maxFetchCycle = Math.max(block.maxFetchCycle, op.fetchedCycle);
         const offset = op.id - firstID;
         const word = offset >>> 5,
@@ -303,7 +322,12 @@ function createTraceIndex(
         };
     }
     function metadata(lastCycle: number) {
-        lastCycle = Math.max(lastCycle, observedLastCycle);
+        const clock = storeClock.snapshot();
+        lastCycle = Math.max(
+            lastCycle,
+            observedLastCycle,
+            clock && lastStoreTick ? windows.storeCycle(clock, lastStoreTick) : 0
+        );
         if (!blocks.size) throw new Error("No instructions were found in this trace.");
         if (!Number.isFinite(lastCycle) || lastCycle > Number.MAX_SAFE_INTEGER)
             throw new Error("The trace end cycle is invalid.");
@@ -337,6 +361,23 @@ function createTraceIndex(
         }
         return selected;
     }
+    // 命令本体が退役した後も、交差する書込み待機のIDだけを圧縮pageから取得する。
+    // 1命令ごとの全ログ配列を作らず、storeのあるIDブロックにビットと範囲を追加する。
+    function storeSnapshot(firstCycle: number, lastCycle: number) {
+        const clock = storeClock.snapshot();
+        const selected: Pick<Block, "firstID" | "lastID" | "ids">[] = [];
+        if (clock)
+            for (const block of blocks.values()) {
+                const stores = block.stores;
+                if (
+                    stores &&
+                    stores.firstCycle <= lastCycle &&
+                    windows.storeCycle(clock, stores.lastTick) >= firstCycle
+                )
+                    selected.push({ firstID: block.firstID, lastID: block.lastID, ids: stores.ids.slice() });
+            }
+        return { blocks: selected, clock };
+    }
     function previewSnapshot(after: number) {
         return [...blocks.values()]
             .filter((block) => block.maxFetchCycle > after)
@@ -352,12 +393,14 @@ function createTraceIndex(
     function clear() {
         blocks.clear();
         overview.clear();
+        storeClock.clear();
+        lastStoreTick = 0;
         firstCycle = Infinity;
         observedLastCycle = 0;
         threads.clear();
         flushGroups.length = 0;
     }
-    return { attach, observe, metadata, snapshot, previewSnapshot, searchSnapshot, finish, clear };
+    return { attach, observe, metadata, snapshot, storeSnapshot, previewSnapshot, searchSnapshot, finish, clear };
 }
 
 // fetch順だけの検索では、左境界より前に始まった長いメモリアクセスを落としてしまう。
@@ -402,6 +445,37 @@ async function selectOps(
         }
     }
     return ops;
+}
+
+async function selectStoreWaits(
+    trace: ParsedTrace,
+    snapshot: ReturnType<ReturnType<typeof createTraceIndex>["storeSnapshot"]>,
+    firstCycle: number,
+    lastCycle: number,
+    thread: number,
+    signal: AbortSignal
+) {
+    const waits: windows.StoreWait[] = [];
+    const pause = createScanYield(signal);
+    checkAbort(signal);
+    for (const block of snapshot.blocks) {
+        for (let id = block.firstID; id <= block.lastID; id++) {
+            const offset = id - block.firstID;
+            if (!(block.ids[offset >>> 5] & (1 << (offset & 31)))) continue;
+            const yielding = pause();
+            if (yielding) await yielding;
+            const op = trace.getOpForScan(id);
+            if (!op || op.tid !== thread) continue;
+            const wait = windows.storeWait(op, snapshot.clock);
+            if (!wait || wait[2] > lastCycle || wait[3] < firstCycle) continue;
+            if (waits.length >= maxWindowOps)
+                throw new Error(`Select at most ${maxWindowOps} outstanding store writes`);
+            // 時刻は直ちに値へ取り出し、Parserが追加するラベルやOpをawait後へ持ち越さない。
+            waits.push(wait);
+        }
+    }
+    checkAbort(signal);
+    return waits;
 }
 
 // 流入文字列だけを先読みする。将来のステージ・終了結果を再生モデルへ追加しない。
@@ -629,6 +703,7 @@ function createFileSession(send: (response: Response) => void) {
             const contextLast = Math.min(selectedSource.lastCycle, lastCycle + 1);
             const blocks = indexer.snapshot(contextFirst, contextLast);
             const previewBlocks = indexer.previewSnapshot(contextLast);
+            const storeSnapshot = indexer.storeSnapshot(contextFirst, contextLast);
             const flushCycles = new Map<number, number>();
             const ops = await selectOps(
                 trace,
@@ -640,8 +715,19 @@ function createFileSession(send: (response: Response) => void) {
                 flushCycles
             );
             checkAbort(controller.signal);
+            const storeWaits = await selectStoreWaits(
+                trace,
+                storeSnapshot,
+                contextFirst,
+                contextLast,
+                request.thread,
+                controller.signal
+            );
+            checkAbort(controller.signal);
             const selection = {
                 ops,
+                storeWaits,
+                storeClock: storeSnapshot.clock,
                 firstCycle,
                 lastCycle,
                 source: selectedSource,
@@ -723,6 +809,7 @@ const traceFile = {
     createFileSession,
     createTraceIndex,
     selectOps,
+    selectStoreWaits,
     searchOps,
     selectPreview,
     maxWindowOps,

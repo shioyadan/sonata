@@ -9,6 +9,7 @@ const {
     createFileSession,
     createTraceIndex,
     selectOps,
+    selectStoreWaits,
     searchOps,
     selectPreview,
     maxWindowOps,
@@ -212,6 +213,7 @@ async function check() {
         sparseSession.close();
     }
     checkOverview();
+    await checkStoreWaits();
     await checkSearch();
     await checkSearchSession();
     await checkScanCancellation();
@@ -321,6 +323,174 @@ function checkOverview() {
     assert.equal(overviewBin(overview, 10).flushed, 1);
     assert.equal(overviewBin(overview, 15).flushed, 1);
     assert.equal(overviewBin(overview, 16).flushed, 0, "Inferred flush groups leaked into the overview");
+}
+
+// 退役後の書込みを、直前の窓やseek履歴に依存せず、その窓の観測として取得する。
+async function checkStoreWaits() {
+    const signal = new AbortController().signal;
+    const operation = (id, fetch, start, end, tid = 0) => ({
+        id,
+        tid,
+        fetchedCycle: fetch,
+        retiredCycle: start + 1,
+        retired: true,
+        flush: false,
+        eof: false,
+        labelName: "str x0, [x1]",
+        labelDetail: `Fetched Tick: ${1000 + fetch * 800}\nStore Tick: ${1000 + end * 800}`,
+        lanes: [{ stages: [{ name: "Rt", startCycle: start, endCycle: start + 1 }] }]
+    });
+    const ops = [
+        operation(0, 0, 6, 1000),
+        operation(1024, 10, 16, 700, 1),
+        operation(2048, 20, 26, 500),
+        operation(3072, 1100, 1106, 2000)
+    ];
+    const index = createTraceIndex();
+    const values = new Map(ops.map((op) => [op.id, op]));
+    for (const op of ops) {
+        index.observe(op, "gem5");
+        index.observe(op, "gem5");
+    }
+    let reads = 0;
+    const trace = {
+        getOpForScan(id) {
+            reads++;
+            return values.get(id);
+        }
+    };
+    const select = (first, last = first + 15, thread = 0) =>
+        selectStoreWaits(trace, index.storeSnapshot(first, last), first, last, thread, signal);
+    const original = JSON.stringify(ops);
+    assert.equal(index.metadata(1107).lastCycle, 2000, "Trace EOF omitted an observed post-retire completion");
+    assert.deepEqual(overviewTotals(index.metadata(1107).overview), { fetched: 4, committed: 4, flushed: 0 });
+    assert.deepEqual(await selectOps(trace, index.snapshot(400, 415), 400, 415, 0, signal), []);
+    reads = 0;
+    assert.deepEqual(await select(400), [
+        [0, 0, 6, 1000],
+        [2048, 20, 26, 500]
+    ]);
+    assert.equal(reads, 3, "Store selection scanned unrelated future blocks or nonexistent sparse IDs");
+    assert.deepEqual(await select(400, 415, 1), [[1024, 10, 16, 700]]);
+    assert.deepEqual(await select(500, 500), [
+        [0, 0, 6, 1000],
+        [2048, 20, 26, 500]
+    ]);
+    assert.deepEqual(await select(501), [[0, 0, 6, 1000]]);
+    assert.deepEqual(await select(1000, 1000), [[0, 0, 6, 1000]]);
+    assert.deepEqual(await select(1001), []);
+    assert.deepEqual(
+        await select(400),
+        [
+            [0, 0, 6, 1000],
+            [2048, 20, 26, 500]
+        ],
+        "Reverse seek changed store waits"
+    );
+    assert.deepEqual(await select(0, 5), [], "Future stores became current waits before retire");
+    assert.equal(JSON.stringify(ops), original, "Store observation mutated parser operations");
+
+    const snapshot = index.storeSnapshot(400, 415);
+    const added = operation(1, 2, 8, 1500);
+    values.set(added.id, added);
+    index.observe(added, "gem5");
+    assert.deepEqual(await selectStoreWaits(trace, snapshot, 400, 415, 0, signal), [
+        [0, 0, 6, 1000],
+        [2048, 20, 26, 500]
+    ]);
+    assert.ok(
+        (await select(400)).some(([id]) => id === 1),
+        "A fresh store snapshot omitted parser additions"
+    );
+    const incomplete = createTraceIndex();
+    incomplete.observe(ops[0], "gem5");
+    assert.equal(incomplete.metadata(7).lastCycle, 7, "Store ticks were converted without observed calibration");
+    assert.deepEqual(incomplete.storeSnapshot(400, 415).blocks, []);
+    incomplete.observe(ops[2], "gem5");
+    assert.equal(incomplete.metadata(27).lastCycle, 1000, "A store written before calibration was lost");
+    incomplete.clear();
+    incomplete.observe(ops[0], "gem5");
+    assert.equal(incomplete.storeSnapshot(400, 415).clock, null, "Closing retained the previous file's clock");
+
+    const dense = createTraceIndex();
+    const denseOp = (id) => operation(id, id / 100, 200, 1000);
+    for (let id = 0; id <= maxWindowOps; id++) dense.observe(denseOp(id), "gem5");
+    await assert.rejects(
+        selectStoreWaits({ getOpForScan: denseOp }, dense.storeSnapshot(400, 415), 400, 415, 0, signal),
+        /outstanding store writes/
+    );
+    const originalNow = performance.now;
+    let elapsed = 0,
+        visits = 0;
+    performance.now = () => elapsed;
+    const controller = new AbortController();
+    try {
+        const selecting = selectStoreWaits(
+            {
+                getOpForScan(id) {
+                    visits++;
+                    elapsed += 9;
+                    return denseOp(id);
+                }
+            },
+            dense.storeSnapshot(400, 415),
+            400,
+            415,
+            0,
+            controller.signal
+        );
+        const rejection = assert.rejects(selecting, { name: "AbortError" });
+        assert.equal(visits, 1, "Store scan did not yield after an expensive page read");
+        controller.abort();
+        await rejection;
+    } finally {
+        performance.now = originalNow;
+    }
+
+    const record = (id, fetch, end) => {
+        const tick = 1000 + fetch * 1000;
+        return `O3PipeView:fetch:${tick}:0x1000:0:${id + 1}: str x0, [x1]\nO3PipeView:decode:${tick + 1000}\nO3PipeView:rename:${tick + 2000}\nO3PipeView:dispatch:${tick + 3000}\nO3PipeView:issue:${tick + 4000}\nO3PipeView:complete:${tick + 5000}\nO3PipeView:retire:${tick + 6000}:store:${1000 + end * 1000}\n`;
+    };
+    const box = mailbox(),
+        session = createFileSession(box.send);
+    try {
+        await session.open(new File([record(0, 0, 1000), record(1, 10, 500)], "store-tail.gem5"));
+        assert.equal(box.messages.find((message) => message.type === "loaded").source.lastCycle, 1000);
+        for (const [id, cycle] of [
+            [1, 400],
+            [2, 600],
+            [3, 400],
+            [4, 0],
+            [5, 990]
+        ]) {
+            await session.window({ type: "window", request: id, cycle, span: 16, thread: 0 });
+            const converted = box.messages.find((message) => message.type === "window" && message.request === id).trace;
+            if (cycle >= 400) {
+                assert.deepEqual(converted.ops, [], "A retired store was reinserted into drawable operations");
+                assert.deepEqual(converted.storeCompletions, []);
+                assert.deepEqual(
+                    converted.storeWaits,
+                    cycle > 500
+                        ? [[0, 0, 6, 1000]]
+                        : [
+                              [0, 0, 6, 1000],
+                              [1, 10, 16, 500]
+                          ]
+                );
+            } else {
+                assert.deepEqual(converted.storeCompletions, [
+                    [0, 1000],
+                    [1, 500]
+                ]);
+                assert.deepEqual(converted.storeWaits, [
+                    [0, 0, 6, 1000],
+                    [1, 10, 16, 500]
+                ]);
+            }
+        }
+    } finally {
+        session.close();
+    }
 }
 
 async function checkSearch() {

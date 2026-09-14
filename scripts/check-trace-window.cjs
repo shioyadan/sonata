@@ -463,6 +463,27 @@ assert.deepEqual(
     gem5.storeCompletions,
     stores.map((op) => [op.id, op.retiredCycle + 4])
 );
+assert.deepEqual(
+    gem5.storeWaits,
+    stores.map((op) => [op.id, op.fetchedCycle, op.retiredCycle, op.retiredCycle + 4])
+);
+const outstanding = [
+    [99, 0, 6, 1000],
+    [100, 10, 16, 500]
+];
+const retiredWindow = convert([], {
+    firstCycle: 400,
+    lastCycle: 415,
+    source: { name: "store-tail", parser: "gem5", opCount: 2, lastCycle: 1000 },
+    storeWaits: outstanding
+});
+assert.deepEqual(retiredWindow.ops, [], "Store waits created drawable retired instructions");
+assert.deepEqual(retiredWindow.storeCompletions, []);
+assert.deepEqual(retiredWindow.storeWaits, outstanding);
+assert.throws(
+    () => convert([], { storeWaits: Array.from({ length: limits.operations + 1 }, (_, id) => [id, 0, 1, 1000]) }),
+    /outstanding store writes/
+);
 assert.equal(gem5.evidence, undefined);
 assert.match(gem5.demo.provenance.note, /9999 instructions/);
 stores[3].labelDetail = stores[3].labelDetail.replace("Fetched Tick: 1600", "Fetched Tick: 1601");
