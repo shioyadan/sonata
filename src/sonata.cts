@@ -137,7 +137,7 @@ function start(gl: WebGL2RenderingContext) {
                     rate: dt > 0 ? (next - session.cycle) / (dt * session.speed) : 1
                 };
                 session.cycle =
-                    fileImport.advance(next) ?? (next > replay.trace.lastCycle ? replay.trace.firstCycle : next);
+                    fileImport.advance(next, dt) ?? (next > replay.trace.lastCycle ? replay.trace.firstCycle : next);
             }
             render(dt);
             if (now >= clock.nextUI) {

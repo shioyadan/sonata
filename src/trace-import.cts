@@ -1,10 +1,10 @@
 "use strict";
 // ファイルとWorkerの寿命・区間要求・先読み。全体命令列はWorkerに保持する。
 import type files = require("./trace-file.cts");
-import type replay = require("./replay-model.cts");
+import replay = require("./replay-model.cts");
 import createNavigation = require("./trace-navigation.cts");
 type View = createNavigation.Selection;
-type Pending = { id: number; view: View; mode: "navigate" | "refresh" | "continue"; historyIndex?: number };
+type Pending = { id: number; view: View; mode: "navigate" | "refresh" | "continue" | "skip"; historyIndex?: number };
 declare global {
     var sonataTraceWorkerSource: string;
 }
@@ -47,6 +47,21 @@ function createTraceImport({
     let error = "";
     let waiting = false;
     let refreshAfterSelection = false;
+    let emptyTarget: ((cycle: number) => number | null) | null = null;
+    let emptySeconds = 0;
+    let skipNotice = "";
+    let noticeUntil = 0;
+    const storeBusyUntil = new Map<number, number>();
+
+    function resetEmptyPlayback() {
+        emptySeconds = 0;
+        skipNotice = "";
+    }
+    function describeSkip(from: number, to: number) {
+        skipNotice = `Skipped ${Math.floor(to - from).toLocaleString()} empty cycles`;
+        noticeUntil = performance.now() + 2000;
+        emptySeconds = 0;
+    }
 
     function message(text: string) {
         status.textContent = text;
@@ -58,7 +73,15 @@ function createTraceImport({
         panel.setAttribute("aria-busy", String(Boolean(pending)));
         const text =
             error ||
-            (pending ? "Preparing cycle window…" : waiting ? "Waiting for parsed cycles…" : loading ? reading : "");
+            (pending?.mode === "skip"
+                ? "Skipping empty cycles…"
+                : pending
+                  ? "Preparing cycle window…"
+                  : waiting
+                    ? "Waiting for parsed cycles…"
+                    : loading
+                      ? reading
+                      : skipNotice);
         message(text);
         element("file-window-status").textContent = text;
         element("file-window-status").hidden = !text;
@@ -72,6 +95,9 @@ function createTraceImport({
         loading = waiting = false;
         pending = null;
         displayed = null;
+        emptyTarget = null;
+        storeBusyUntil.clear();
+        resetEmptyPlayback();
         prefetch = null;
         prefetchError = null;
         refreshAfterSelection = false;
@@ -97,6 +123,7 @@ function createTraceImport({
         if (!source || !worker) return;
         navigation.cancelGesture();
         navigation.rememberCurrent();
+        resetEmptyPlayback();
         // 全体位置の変更は現在の再生意図を保ち、応答待ちの間だけ時計を止める。
         waiting = false;
         prefetch = null;
@@ -114,6 +141,7 @@ function createTraceImport({
         });
     }
     function beginInteraction() {
+        resetEmptyPlayback();
         // 指を離すまで新しい区間は作らず、解析と検索は継続する。
         if (pending?.mode === "refresh") refreshAfterSelection = true;
         pending = null;
@@ -166,6 +194,7 @@ function createTraceImport({
         } else fail(text);
     }
     function show(trace: replay.Trace, selection: Pending) {
+        const previousCycle = read().cycle;
         const position =
             selection.mode === "refresh" && displayed
                 ? read()
@@ -174,6 +203,13 @@ function createTraceImport({
         const view = { ...selection.view, start: trace.firstCycle, ...position };
         apply(trace, { ...position, thread: view.thread });
         displayed = { view, end: trace.lastCycle };
+        // 窓移動で元のstoreが外れても、既知の書込み待ちを空白にしない。
+        for (const [, time] of trace.storeCompletions ?? []) {
+            storeBusyUntil.set(view.thread, Math.max(storeBusyUntil.get(view.thread) ?? -Infinity, time + 6));
+        }
+        emptyTarget = replay.createEmptyPlayback(trace);
+        if (selection.mode !== "continue") emptySeconds = 0;
+        if (selection.mode === "skip") describeSkip(previousCycle, position.cycle);
         pending = null;
         waiting = false;
         navigation.applied(view, selection.mode === "navigate" || !navigation.snapshot(), selection.historyIndex);
@@ -195,11 +231,42 @@ function createTraceImport({
             thread: view.thread
         } satisfies files.WorkerRequest);
     }
-    function advance(next: number): number | null {
+    function advance(next: number, seconds: number): number | null {
         if (!displayed || !source) return null;
         if (pending || navigation.dragging) return read().cycle;
         if (element<HTMLInputElement>("file-loop").checked) {
+            emptySeconds = 0;
             return next > displayed.end ? displayed.view.start : next;
+        }
+        // 未解析の命令が後から現れ得る間は、空白と断定して飛ばさない。
+        const target =
+            source.complete &&
+            read().cycle >= (storeBusyUntil.get(displayed.view.thread) ?? -Infinity) &&
+            !error &&
+            !prefetchError &&
+            element<HTMLInputElement>("file-skip-empty").checked
+                ? (emptyTarget?.(read().cycle) ?? null)
+                : null;
+        emptySeconds = target === null ? 0 : emptySeconds + seconds;
+        if (target !== null && emptySeconds >= 0.35) {
+            const destination = Math.min(target, source.lastCycle);
+            if (destination <= displayed.end) {
+                describeSkip(read().cycle, destination);
+                updateStatus();
+                return destination;
+            }
+            // 空の窓を一つずつ取得せず、次の命令の直前へ同じ表示幅で移る。
+            prefetch = null;
+            requestWindow(
+                {
+                    ...displayed.view,
+                    start: Math.floor(destination),
+                    cycle: destination,
+                    selectedID: read().selectedID
+                },
+                "skip"
+            );
+            return read().cycle;
         }
         if (next <= displayed.end) {
             if (displayed.end - next < displayed.view.span * 0.35) prepareNext();
@@ -246,6 +313,7 @@ function createTraceImport({
         return true;
     }
     function interact() {
+        resetEmptyPlayback();
         navigation.cancelGesture();
         // 完了時の再取得は最新の再生位置を読んで反映するため、同区間シークでも保持する。
         if (displayed && pending?.mode !== "refresh") pending = null;
@@ -256,7 +324,17 @@ function createTraceImport({
         if (refreshAfterSelection) refreshWindow();
     }
     function cancelContinuation() {
-        if (pending?.mode === "continue") interact();
+        resetEmptyPlayback();
+        if (pending?.mode === "skip") worker?.postMessage({ type: "cancel-window" } satisfies files.WorkerRequest);
+        if (pending?.mode === "continue" || pending?.mode === "skip") interact();
+        updateStatus();
+    }
+    function tick(position: number) {
+        navigation.tick(position);
+        if (skipNotice && performance.now() >= noticeUntil) {
+            skipNotice = "";
+            updateStatus();
+        }
     }
     function search(query: Omit<Extract<files.WorkerRequest, { type: "search" }>, "type" | "request">) {
         if (!worker || !source) return;
@@ -348,6 +426,8 @@ function createTraceImport({
         message("Trace loading canceled.");
     });
     element("file-close").addEventListener("click", reset);
+    element("file-skip-empty").addEventListener("change", cancelContinuation);
+    element("file-loop").addEventListener("change", cancelContinuation);
     document.addEventListener("dragover", (event) => {
         if (event.dataTransfer?.types.includes("Files")) event.preventDefault();
     });
@@ -369,7 +449,7 @@ function createTraceImport({
         seek,
         interact,
         cancelContinuation,
-        tick: navigation.tick,
+        tick,
         get source() {
             return source;
         },

@@ -659,6 +659,9 @@ function createFileSession(send: (response: Response) => void) {
                 controller.signal
             );
             converted.feedPreview = preview.ops;
+            // 集約histogramではなく、実際に確認した次fetchまでを空白判定へ渡す。
+            converted.emptyTailUntil =
+                preview.ops[0]?.fetch ?? (preview.limited ? lastCycle : selectedSource.lastCycle);
             if (preview.limited)
                 converted.demo.provenance.note += " Instruction text preview is limited for this interval.";
             checkAbort(controller.signal);

@@ -14,6 +14,9 @@ const reviewFilePlayback = require("./load-test.cjs")(
 const reviewImportDrag = require("./load-test.cjs")(
     "check-import-drag.cts"
 ) as typeof import("./check-import-drag.cts");
+const reviewEmptyPlayback = require("./load-test.cjs")(
+    "check-empty-playback.cts"
+) as typeof import("./check-empty-playback.cts");
 
 // 外部の実トレースをCIへ持ち込まず、形式・圧縮・区間移動を実際のFile入力で検査する。
 function fixture(count = 320) {
@@ -182,6 +185,16 @@ async function reviewImport(window: BrowserWindow, screenshots: string) {
             }));
             assert.ok(partial.count > 0 && partial.count < 6001);
             assert.ok(partial.loading && !partial.message && !partial.cancel);
+            await evaluate(async ({ sonata }) => {
+                sonata.captureAt(10);
+                sonata.setPlaying(true);
+                await new Promise((resolve) => setTimeout(resolve, 800));
+                sonata.setPlaying(false);
+            });
+            assert.ok(
+                await evaluate(({ sonata }) => sonata.cycle > 10 && sonata.cycle < 20 && sonata.fileImport.loading),
+                "Background parsing was treated as a confirmed empty gap"
+            );
             await evaluate(() => {
                 (document.getElementById("file-cycle") as HTMLInputElement).value = "600";
                 document.getElementById("file-go")!.click();
@@ -643,6 +656,7 @@ async function reviewImport(window: BrowserWindow, screenshots: string) {
         assert.equal(await evaluate(() => document.getElementById("playhead")!.style.left), "0%");
         await evaluate(({ sonata }) => sonata.loadTrace("rename-rush"));
         const continuity = await reviewFilePlayback(window);
+        const emptyPlayback = await reviewEmptyPlayback(window);
         return {
             formats: ["Kanata", "gem5", "gzip", "zstd"],
             sourceOps: 321,
@@ -655,7 +669,8 @@ async function reviewImport(window: BrowserWindow, screenshots: string) {
             seekBeforeEOF: true,
             preservePositionAtEOF: true,
             navigation,
-            continuity
+            continuity,
+            emptyPlayback
         };
     } finally {
         debuggerAPI.detach();
