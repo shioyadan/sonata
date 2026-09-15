@@ -1,6 +1,6 @@
-import fs from "node:fs";
-import { allocationEvidence, type AllocationEvent } from "./register-allocation";
 import type { Op } from "../vendor/konata-core/model";
+import evidence = require("../src/trace-evidence.cts");
+import { evidenceLines } from "./evidence-input";
 
 type Timing = {
     allocation: (op: Readonly<Op>) => number | null;
@@ -10,7 +10,7 @@ type Timing = {
 type Dependency = { id: number; ready: number | null; register?: string };
 type EvidenceOp = { id: number; dependencies: Dependency[]; slot?: number };
 
-// 対象は埋め込みデモ内の ARM64 スカラ命令に限定する。
+// 呼出し元がARM64と明示したデモのスカラ命令に限定する。
 // レジスタ RAW 依存だけを推定し、メモリの alias や物理レジスタ名は推測しない。
 function armOperands(label: string) {
     const text = label
@@ -49,7 +49,12 @@ function armOperands(label: string) {
     return { source: [...new Set(source)], dest: [...new Set(dest)] };
 }
 
-export function buildSchedulingEvidence(allOps: Readonly<Op>[], sampleOps: Readonly<Op>[], timing: Timing) {
+export function buildSchedulingEvidence(
+    allOps: Readonly<Op>[],
+    sampleOps: Readonly<Op>[],
+    timing: Timing,
+    allowArmInference = false
+) {
     const byID = new Map(allOps.map((o) => [o.id, o])),
         wanted = new Set(sampleOps.map((o) => o.id));
     const native = sampleOps.some((op) => op.prods.length > 0);
@@ -65,6 +70,7 @@ export function buildSchedulingEvidence(allOps: Readonly<Op>[], sampleOps: Reado
                 }))
             }))
         };
+    if (!allowArmInference) return null;
     const writers = new Map<string, number>(),
         previous = new Map<number, Array<[string, number | undefined]>>(),
         result: EvidenceOp[] = [];
@@ -107,173 +113,21 @@ export function buildSchedulingEvidence(allOps: Readonly<Op>[], sampleOps: Reado
     return { kind: "inferred", label: "Register RAW · disassembly estimate", ops: result };
 }
 
-export function readRsdRegisterEvidence(fileName: string, firstCycle: number, lastCycle: number, wanted: Set<number>) {
-    type Reg = { logical: number; physical: number; previous?: number };
-    type Record = {
-        id: number;
-        label: string;
-        map?: { cycle: number; line: number; dest: Reg[]; source: Reg[] };
-        slot?: number;
-        dependencies: Dependency[];
-        ready: number | null;
-        end: number;
-        flush: boolean;
-        results: Array<{ cycle: number; hex: string; load: boolean; line: number }>;
-    };
-    const records = new Map<number, Record>(),
-        physicalWriter = new Map<number, number>();
-    let cycle = 0;
-    const get = (id: number) => {
-        if (!records.has(id))
-            records.set(id, { id, label: "", dependencies: [], ready: null, end: Infinity, flush: false, results: [] });
-        return records.get(id)!;
-    };
-    const regs = (s: string): Reg[] =>
-        [...s.matchAll(/r(\d+)\(p(\d+)\)/g)].map((m) => ({ logical: Number(m[1]), physical: Number(m[2]) }));
-    for (const [index, line] of fs.readFileSync(fileName, "utf8").split("\n").entries()) {
-        const f = line.split("\t");
-        if (f[0] === "C") {
-            cycle += Number(f[1]);
-            continue;
-        }
-        if (!["L", "S", "R"].includes(f[0])) continue;
-        const r = get(Number(f[1]));
-        if (f[0] === "R") {
-            r.end = cycle;
-            r.flush = f[3] !== "0";
-            continue;
-        }
-        if (f[0] === "S") {
-            if (f[2] === "0" && f[3] === "Rw") r.ready = cycle;
-            continue;
-        }
-        if (f[2] === "0") {
-            r.label = f[3] ?? "";
-            continue;
-        }
-        if (f[2] !== "1") continue;
-        const message = (f[3] ?? "").replace(/\\n/g, " ");
-        const mapping = message.match(/map:\s*(.*?)\s*=\s*(.*?)\s*prev:\s*(.*?)(?:IQ alloc:|$)/);
-        if (mapping) {
-            const dest = regs(mapping[1]),
-                source = regs(mapping[2]),
-                previous = regs(mapping[3]);
-            dest.forEach((d) => {
-                d.previous = previous.find((p) => p.logical === d.logical)?.physical;
-            });
-            r.map = { cycle, line: index + 1, dest, source };
-            r.slot = Number(message.match(/IQ alloc:\s*(\d+)/)?.[1]);
-            r.dependencies = source
-                .filter((s) => s.logical !== 0)
-                .flatMap((s) => {
-                    const id = physicalWriter.get(s.physical);
-                    return id === undefined ? [] : [{ id, ready: null, register: `r${s.logical} / p${s.physical}` }];
-                });
-            dest.filter((d) => d.logical !== 0).forEach((d) => physicalWriter.set(d.physical, r.id));
-        }
-        const load = message.match(/#(0x[\da-f]+)\s*=\s*load\(\)/i),
-            alu = message.match(/\bd:(0x[\da-f]+)\s*=\s*fu\(/i);
-        if (load || alu) r.results.push({ cycle, hex: (load ?? alu)![1], load: !!load, line: index + 1 });
-    }
-    const registerEvents: any[] = [],
-        allocations: AllocationEvent[] = [];
-    for (const r of records.values()) {
-        r.dependencies.forEach((d) => {
-            d.ready = records.get(d.id)?.ready ?? null;
-        });
-        if (!r.map) continue;
-        const load = /\b(?:lb|lbu|lh|lhu|lw)\s/.test(r.label);
-        const result = r.results.filter((v) => v.load === load && v.cycle <= (r.ready ?? -Infinity)).at(-1);
-        for (const d of r.map.dest.filter((d) => d.logical !== 0)) {
-            registerEvents.push({ type: "rename", cycle: r.map.cycle, id: r.id, ...d, line: r.map.line });
-            if (d.previous !== undefined)
-                allocations.push({
-                    cycle: r.map.cycle,
-                    physical: d.previous,
-                    state: "allocated",
-                    reason: "previous mapping",
-                    line: r.map.line
-                });
-            allocations.push({
-                cycle: r.map.cycle,
-                physical: d.physical,
-                state: "allocated",
-                reason: "rename",
-                line: r.map.line
-            });
-            const freed = r.flush ? d.physical : d.previous;
-            if (Number.isFinite(r.end) && freed !== undefined && d.previous !== d.physical)
-                allocations.push({
-                    cycle: r.end,
-                    physical: freed,
-                    state: "free",
-                    reason: r.flush ? "squash (inferred)" : "commit (inferred)",
-                    id: r.id
-                });
-            if (result && r.ready !== null && r.ready < r.end)
-                registerEvents.push({
-                    type: "write",
-                    cycle: r.ready,
-                    id: r.id,
-                    logical: d.logical,
-                    physical: d.physical,
-                    hex: result.hex,
-                    line: result.line,
-                    observedCycle: result.cycle
-                });
-            if (r.flush && d.previous !== undefined)
-                registerEvents.push({ type: "restore", cycle: r.end, id: r.id, ...d });
-        }
-    }
-    const priority = { restore: 0, rename: 1, write: 2 };
-    registerEvents.sort(
-        (a, b) =>
-            a.cycle - b.cycle ||
-            priority[a.type] - priority[b.type] ||
-            (a.type === "restore" ? b.id - a.id : a.id - b.id)
+export function readRsdRegisterEvidence(
+    fileName: string,
+    firstCycle: number,
+    lastCycle: number,
+    wanted: Set<number>,
+    allOps: Readonly<Op>[] = []
+) {
+    const index = evidence.createEvidenceIndex();
+    for (const line of evidenceLines(fileName)) index.observeLine(line);
+    const byID = new Map(allOps.map((op) => [op.id, op]));
+    const { registers, scheduling } = index.windowEvidence(
+        firstCycle,
+        lastCycle,
+        allOps.filter((op) => wanted.has(op.id)),
+        (id) => byID.get(id)
     );
-    const mapping = new Map<number, number>(),
-        values = new Map<number, string>(),
-        owners = new Map<number, number>();
-    for (const e of registerEvents) {
-        if (e.cycle >= firstCycle) break;
-        if (e.type === "rename") {
-            mapping.set(e.logical, e.physical);
-            owners.set(e.physical, e.id);
-            values.delete(e.physical);
-        } else if (e.type === "restore" && mapping.get(e.logical) === e.physical) mapping.set(e.logical, e.previous);
-        else if (e.type === "write" && owners.get(e.physical) === e.id) values.set(e.physical, e.hex);
-    }
-    const events = registerEvents.filter((e) => e.cycle >= firstCycle && e.cycle <= lastCycle);
-    allocations.sort((a, b) => a.cycle - b.cycle || (a.state === "free" ? 0 : 1) - (b.state === "free" ? 0 : 1));
-    const rows = Array.from({ length: 32 }, (_, logical) => logical);
-    return {
-        scheduling: {
-            kind: "recorded",
-            label: "Physical register dependencies · RSD map annotations",
-            ops: [...records.values()]
-                .filter((r) => wanted.has(r.id))
-                .map((r) => ({
-                    id: r.id,
-                    dependencies: r.dependencies,
-                    sources: r.map?.source.filter((s) => s.logical !== 0) ?? [],
-                    slot: r.slot
-                }))
-        },
-        registers: {
-            kind: "recorded",
-            label: "RSD rename / writeback annotations",
-            rows,
-            constantRows: [0],
-            initial: { mapping: [...mapping], values: [...values], owners: [...owners] },
-            events,
-            allocation: allocationEvidence(
-                allocations,
-                firstCycle,
-                lastCycle,
-                "inferred",
-                "Allocation from RSD rename; release inferred at commit / squash. Observed cells only."
-            )
-        }
-    };
+    return { registers, scheduling };
 }
