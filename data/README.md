@@ -1,4 +1,6 @@
-# 同梱デモトレース
+# 配布デモトレース
+
+`data/traces.js` はデモ生成元です。通常ビルドでは各Traceを内容を変えずに `dist/samples/<key>.json` へ書き出します。本体HTMLには一覧だけを含め、オンラインで選択した1本を読み込みます。
 
 `traces.js` と `demo-manifest.json` は Git に含めます。前者はブラウザ用の実トレース抜粋、後者は出自・区間・イベント数などの生成レポートです。元の大きなログは含めません。
 
@@ -16,7 +18,7 @@ RSD のログはプロセッサ RSD から取得されたものです。`D$-miss
 
 公開前の照合で、元ログ全体の 108 種類の命令アドレスと命令内容が、RSD の `Asm/IntRegImm` テストの実行ファイルと一致しました。同梱デモの表示命令は `rsd-loader.c` の `_load`（データコピーと BSS 初期化）です。gem5 の4デモの命令アドレスは、CoreMark の行列処理・リスト初期化・リスト整列の関数に対応します。命令列の出典、照合したリビジョン、再配布時に保持する権利表示は [第三者ライセンス](../THIRD_PARTY_NOTICES.md) を参照してください。
 
-実行条件の根拠となる README / config の相対位置も、各デモの `demo.provenance.evidence` に残しています。それらの元ファイルは埋め込み HTML に含まれません。抽出条件は [generate-demos.ts](../scripts/generate-demos.ts)、表示する出自は [provenance.ts](../scripts/provenance.ts) が管理します。
+実行条件の根拠となる README / config の相対位置も、各デモの `demo.provenance.evidence` に残しています。それらの元ファイルは本体HTMLやサンプルJSONに含まれません。抽出条件は [generate-demos.ts](../scripts/generate-demos.ts)、表示する出自は [provenance.ts](../scripts/provenance.ts) が管理します。
 
 ## 再生成
 

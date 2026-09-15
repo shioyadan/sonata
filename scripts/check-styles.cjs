@@ -2,7 +2,7 @@
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
-const { createBrowserTest, waitFor: waitUntil } = require("./load-test.cjs")("browser-test.cts");
+const { createBrowserTest, waitFor: waitUntil, loadPage } = require("./load-test.cjs")("browser-test.cts");
 
 module.exports = async function reviewStyles(window, entry, screenshots) {
     const js = (source) => window.webContents.executeJavaScript(source);
@@ -45,7 +45,7 @@ module.exports = async function reviewStyles(window, entry, screenshots) {
         }
         return { pixels, metrics: { background, coverage: different / total, changed: changed / total } };
     };
-    await window.loadURL(entry);
+    await loadPage(window, entry);
     await waitFor("globalThis.sonata?.hasTrace && sonata.trace.key === 'rename-rush'", "Style test did not initialize");
     assert.equal(await js("sonata.visualStyle"), "neon", "Default style changed");
     assert.deepEqual(

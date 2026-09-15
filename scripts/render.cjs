@@ -10,7 +10,7 @@ const assert = require("node:assert/strict");
 app.commandLine.appendSwitch("use-gl", "angle");
 app.commandLine.appendSwitch("use-angle", "swiftshader");
 app.commandLine.appendSwitch("enable-unsafe-swiftshader");
-const { createBrowserTest, waitFor: waitUntil, delay } = require("./load-test.cjs")("browser-test.cts");
+const { createBrowserTest, waitFor: waitUntil, delay, loadPage } = require("./load-test.cjs")("browser-test.cts");
 const errors = [];
 const root = path.resolve(__dirname, "..");
 const screenshots = path.join(root, "artifacts/screenshots");
@@ -19,8 +19,14 @@ const sourceEntry = process.env.SONATA_HTML ? path.resolve(process.env.SONATA_HT
 const isolated = fs.mkdtempSync(path.join(os.tmpdir(), "sonata-offline-"));
 // ローカルでもCIと同じく、前回のGPUキャッシュや設定に依存しない初期状態から検査する。
 app.setPath("userData", path.join(isolated, "profile"));
-const entry = path.join(isolated, "sonata.html");
-fs.copyFileSync(sourceEntry, entry);
+const offlineEntry = path.join(isolated, "sonata.html");
+fs.copyFileSync(sourceEntry, offlineEntry);
+const siteDirectory = path.join(isolated, "site");
+fs.mkdirSync(siteDirectory);
+const siteEntry = path.join(siteDirectory, "sonata.html");
+fs.copyFileSync(sourceEntry, siteEntry);
+fs.cpSync(path.join(path.dirname(sourceEntry), "samples"), path.join(siteDirectory, "samples"), { recursive: true });
+const server = require("./serve.cjs").createServer(siteEntry);
 const unexpectedRequests = [];
 const timings = [];
 const begin = (name) => {
@@ -40,6 +46,21 @@ const review = async (name, run) => {
 };
 app.whenReady()
     .then(async () => {
+        await new Promise((resolve, reject) => {
+            server.once("error", reject);
+            server.listen(0, "127.0.0.1", resolve);
+        });
+        const baseURL = `http://127.0.0.1:${server.address().port}/`;
+        const entry = `${baseURL}sonata.html#demo=rename-rush`;
+        const samplePaths = fs.readdirSync(path.join(siteDirectory, "samples")).map((file) => `samples/${file}`);
+        const allowedURLs = new Set([
+            "about:blank",
+            pathToFileURL(offlineEntry).href,
+            baseURL,
+            `${baseURL}sonata.html`,
+            ...samplePaths.map((file) => baseURL + file)
+        ]);
+        const requests = [];
         const window = new BrowserWindow({
             width: 1440,
             height: 1000,
@@ -47,7 +68,10 @@ app.whenReady()
             webPreferences: { contextIsolation: true, sandbox: true, backgroundThrottling: false }
         });
         window.webContents.session.webRequest.onBeforeRequest((request, callback) => {
-            const allowed = request.url === pathToFileURL(entry).href;
+            const url = new URL(request.url);
+            url.hash = "";
+            requests.push(url.href);
+            const allowed = allowedURLs.has(url.href);
             if (!allowed) unexpectedRequests.push(request.url);
             callback({ cancel: !allowed });
         });
@@ -71,7 +95,14 @@ app.whenReady()
             }
             return { firstCycle, samples };
         };
-        await window.loadFile(entry);
+        const demos = await review("demos", () =>
+            require("./load-test.cjs")("check-demo-loading.cts")(window, offlineEntry, baseURL, requests, screenshots)
+        );
+        await loadPage(window, entry);
+        await waitUntil(
+            () => js("!!globalThis.sonata?.hasTrace && sonata.trace.key==='rename-rush'"),
+            "The initial sample did not load"
+        );
         if (process.argv.includes("--smoke")) {
             const smoke = await review("smoke", () =>
                 require("./load-test.cjs")("check-smoke.cts")(window, screenshots, begin)
@@ -82,8 +113,13 @@ app.whenReady()
             assert.deepEqual(errors, []);
             assert.deepEqual(unexpectedRequests, []);
             console.log(
-                JSON.stringify({ smoke, imports, timings, errors, externalRequests: unexpectedRequests }, null, 2)
+                JSON.stringify(
+                    { demos, smoke, imports, timings, errors, externalRequests: unexpectedRequests },
+                    null,
+                    2
+                )
             );
+            server.close();
             fs.rmSync(isolated, { recursive: true, force: true });
             app.quit();
             return;
@@ -94,7 +130,10 @@ app.whenReady()
             );
             assert.deepEqual(errors, []);
             assert.deepEqual(unexpectedRequests, []);
-            console.log(JSON.stringify({ imports, timings, errors, externalRequests: unexpectedRequests }, null, 2));
+            console.log(
+                JSON.stringify({ demos, imports, timings, errors, externalRequests: unexpectedRequests }, null, 2)
+            );
+            server.close();
             fs.rmSync(isolated, { recursive: true, force: true });
             app.quit();
             return;
@@ -103,7 +142,10 @@ app.whenReady()
             const styles = await review("styles", () => require("./check-styles.cjs")(window, entry, screenshots));
             assert.deepEqual(errors, []);
             assert.deepEqual(unexpectedRequests, []);
-            console.log(JSON.stringify({ styles, timings, errors, externalRequests: unexpectedRequests }, null, 2));
+            console.log(
+                JSON.stringify({ demos, styles, timings, errors, externalRequests: unexpectedRequests }, null, 2)
+            );
+            server.close();
             fs.rmSync(isolated, { recursive: true, force: true });
             app.quit();
             return;
@@ -118,8 +160,13 @@ app.whenReady()
             assert.deepEqual(errors, []);
             assert.deepEqual(unexpectedRequests, []);
             console.log(
-                JSON.stringify({ browser, imports, timings, errors, externalRequests: unexpectedRequests }, null, 2)
+                JSON.stringify(
+                    { demos, browser, imports, timings, errors, externalRequests: unexpectedRequests },
+                    null,
+                    2
+                )
             );
+            server.close();
             fs.rmSync(isolated, { recursive: true, force: true });
             app.quit();
             return;
@@ -128,7 +175,10 @@ app.whenReady()
             const mobile = await review("mobile", () => require("./check-mobile.cjs")(window, screenshots));
             assert.deepEqual(errors, []);
             assert.deepEqual(unexpectedRequests, []);
-            console.log(JSON.stringify({ mobile, timings, errors, externalRequests: unexpectedRequests }, null, 2));
+            console.log(
+                JSON.stringify({ demos, mobile, timings, errors, externalRequests: unexpectedRequests }, null, 2)
+            );
+            server.close();
             fs.rmSync(isolated, { recursive: true, force: true });
             app.quit();
             return;
@@ -157,11 +207,11 @@ app.whenReady()
         await js("document.querySelector('#license-panel button').click()");
         assert.ok(await js("!document.getElementById('license-panel').open"));
         const results = [];
-        const keys = await js("embeddedFlowTraces.map(t => t.key)");
+        const keys = await js("sonataDemoCatalog.map(t => t.key)");
         assert.deepEqual(keys, ["branch-storm", "wide-open", "memory-tide", "rename-rush", "x86-recovery"]);
         for (const key of keys) {
-            const result = await js(`(() => {
-            sonata.loadTrace(${JSON.stringify(key)});
+            const result = await js(`(async () => {
+            await sonata.loadTrace(${JSON.stringify(key)});
             const trace=sonata.trace;
             const checkpoints=[trace.firstCycle,trace.demo.screenshotCycle,...trace.demo.bookmarks.map(b=>b.cycle+.4),trace.lastCycle];
             const matching=checkpoints.every(t=>{
@@ -350,7 +400,9 @@ app.whenReady()
                 (await window.webContents.capturePage()).toPNG()
             );
         }
-        await js("sonata.loadTrace('branch-storm'); sonata.captureAt(sonata.trace.demo.screenshotCycle)");
+        await js(
+            "(async()=>{await sonata.loadTrace('branch-storm'); sonata.captureAt(sonata.trace.demo.screenshotCycle)})()"
+        );
         const feedBefore = await js("sonata.instructionFeed");
         assert.ok(feedBefore.length > 0, "Incoming instruction ribbon is empty");
         await js("sonata.captureAt(sonata.trace.firstCycle+40); sonata.captureAt(sonata.trace.demo.screenshotCycle)");
@@ -522,7 +574,7 @@ app.whenReady()
         assert.deepEqual(await js("sonata.codeFragments"), [], "Stream toggle left detached letters visible");
         await js("document.getElementById('instruction-stream').click(); sonata.captureAt(sonata.cycle)");
         await js(
-            "sonata.setCamera('cinema'); sonata.loadTrace('wide-open'); sonata.captureAt(sonata.trace.demo.screenshotCycle)"
+            "(async()=>{sonata.setCamera('cinema'); await sonata.loadTrace('wide-open'); sonata.captureAt(sonata.trace.demo.screenshotCycle)})()"
         );
         await delay(1100);
         assert.equal(
@@ -536,7 +588,7 @@ app.whenReady()
         assert.equal(await js("document.querySelector('[data-view=plan]').getAttribute('aria-pressed')"), "true");
         fs.writeFileSync(path.join(screenshots, "sonata-plan.png"), (await window.webContents.capturePage()).toPNG());
         await js(
-            "sonata.setCamera('orbit'); sonata.loadTrace('memory-tide'); sonata.captureAt(sonata.trace.demo.screenshotCycle)"
+            "(async()=>{sonata.setCamera('orbit'); await sonata.loadTrace('memory-tide'); sonata.captureAt(sonata.trace.demo.screenshotCycle)})()"
         );
         await delay(1100);
         fs.writeFileSync(path.join(screenshots, "sonata-memory.png"), (await window.webContents.capturePage()).toPNG());
@@ -696,10 +748,10 @@ app.whenReady()
         );
         assert.equal(new Set(registerReview.layout.cells.map((c) => JSON.stringify(c.position))).size, 41);
         assert.equal(registerReview.robLabel, true);
-        const renameWordReview = await js(`(()=>{
+        const renameWordReview = await js(`(async()=>{
         const result=[];
         for(const key of ['memory-tide','rename-rush','x86-recovery']){
-            sonata.loadTrace(key);
+            await sonata.loadTrace(key);
             const events=sonata.trace.evidence.registers.events;
             for(const type of ['rename','restore']){
                 const e=events.find(e=>e.type===type&&e.previous!==e.physical&&e.cycle<sonata.trace.lastCycle-1);
@@ -709,7 +761,7 @@ app.whenReady()
                 result.push({key,type,first,second,settled,rows:sonata.registers.rows});
             }
         }
-        sonata.loadTrace('memory-tide');sonata.captureAt(4068.2);
+        await sonata.loadTrace('memory-tide');sonata.captureAt(4068.2);
         return result;
     })()`);
         for (const r of renameWordReview) {
@@ -794,21 +846,23 @@ app.whenReady()
             assert.ok(read.cells.length);
             for (const cell of read.cells) assert.deepEqual(cell.color, read.color);
         }
-        const gem5RegisterReview = await js(`(()=>{
-        return ['branch-storm','rename-rush','x86-recovery'].map(key=>{
-            sonata.loadTrace(key);const data=sonata.trace.evidence.registers;
+        const gem5RegisterReview = await js(`(async()=>{
+        const results=[];
+        for(const key of ['branch-storm','rename-rush','x86-recovery']){
+            await sonata.loadTrace(key);const data=sonata.trace.evidence.registers;
             const read=data.reads.find(r=>sonata.ops.some(o=>o.id===r.id&&o.end>r.cycle+.1));
             const t=read?read.cycle+.1:sonata.trace.firstCycle;
             sonata.captureAt(t);const before=JSON.stringify(sonata.registers),state=sonata.registers;
             const active=sonata.registerReads;
             sonata.captureAt(sonata.trace.lastCycle);sonata.captureAt(t);
-            return {key,kind:data.kind,physical:state.physical.length,known:state.physical.filter(p=>p.value!==null).length,
+            results.push({key,kind:data.kind,physical:state.physical.length,known:state.physical.filter(p=>p.value!==null).length,
                 read,active,restored:before===JSON.stringify(sonata.registers),write:state.lastWrite,
                 cells:new Set(sonata.registerLayout.cells.map(c=>JSON.stringify(c.position))).size,
                 label:document.getElementById('register-writeback').textContent,
                 allocation:state.allocationCounts,allocationLabel:document.getElementById('register-allocation').textContent,
-                allocationCells:sonata.registerAllocationCells};
-        });
+                allocationCells:sonata.registerAllocationCells});
+        }
+        return results;
     })()`);
         for (const r of gem5RegisterReview) {
             assert.equal(r.physical, 256);
@@ -864,8 +918,8 @@ app.whenReady()
         for (const key of ["backend", "frontend", "badSpeculation", "active"])
             assert.ok(bounds.states.some((s) => s.dominant === key));
         assert.equal(bounds.restored, true, "Top-down analysis changed after seeking backwards");
-        const causalReview = await js(`(()=>{
-        sonata.loadTrace('branch-storm');const flush=sonata.flushEvents[0],samples=[];
+        const causalReview = await js(`(async()=>{
+        await sonata.loadTrace('branch-storm');const flush=sonata.flushEvents[0],samples=[];
         for(const t of [flush-.5,flush-.1,flush,flush+.5]){
             sonata.captureAt(t);samples.push({time:t,shares:sonata.topDown.shares,start:sonata.topDown.firstCycle,end:sonata.topDown.lastCycle});
         }
@@ -967,7 +1021,9 @@ app.whenReady()
         await js(
             "document.getElementById('speed').value='4';document.getElementById('speed').dispatchEvent(new Event('change'))"
         );
-        await js("sonata.loadTrace('memory-tide');sonata.captureAt(sonata.trace.demo.screenshotCycle)");
+        await js(
+            "(async()=>{await sonata.loadTrace('memory-tide');sonata.captureAt(sonata.trace.demo.screenshotCycle)})()"
+        );
         await js("document.getElementById('run-details').open=true");
         assert.match(await js("document.getElementById('run-file').textContent"), /mshr\.log/);
         await js("document.getElementById('run-details').open=false");
@@ -980,7 +1036,11 @@ app.whenReady()
         await window.webContents.debugger.sendCommand("Emulation.setEmulatedMedia", {
             features: [{ name: "prefers-reduced-motion", value: "reduce" }]
         });
-        await window.loadFile(entry);
+        await loadPage(window, entry);
+        await waitUntil(
+            () => js("!!globalThis.sonata?.hasTrace && sonata.trace.key==='rename-rush'"),
+            "The initial sample did not load"
+        );
         assert.equal(await js("matchMedia('(prefers-reduced-motion: reduce)').matches"), true);
         assert.equal(await js("sonata.playing"), true, "Playback must start without an enable action");
         assert.equal(
@@ -1066,7 +1126,11 @@ app.whenReady()
         await js("document.getElementById('motion-effects').click()");
         assert.ok(await js("sonata.codeFragments.length>40"), "Motion toggle did not restore the code animation");
         await js("document.getElementById('motion-effects').click()");
-        await window.loadFile(entry);
+        await loadPage(window, entry);
+        await waitUntil(
+            () => js("!!globalThis.sonata?.hasTrace && sonata.trace.key==='rename-rush'"),
+            "The initial sample did not load"
+        );
         assert.equal(
             await js(
                 "sonata.playing&&document.getElementById('motion-effects').getAttribute('aria-pressed')==='true'&&document.getElementById('motion-notice').hidden"
@@ -1085,11 +1149,12 @@ app.whenReady()
             require("./load-test.cjs")("check-import.cts")(window, screenshots)
         );
         assert.deepEqual(errors, [], `Browser errors: ${errors.join("; ")}`);
-        assert.deepEqual(unexpectedRequests, [], "The copied HTML tried to fetch another resource");
+        assert.deepEqual(unexpectedRequests, [], "The app requested a resource outside the published sample allowlist");
         console.log(
             JSON.stringify(
                 {
                     samples: results,
+                    demos,
                     imports,
                     controls,
                     rewind,
@@ -1119,18 +1184,24 @@ app.whenReady()
                     memory,
                     timings,
                     errors,
-                    standalone: { isolated: true, externalRequests: unexpectedRequests }
+                    standalone: {
+                        isolated: true,
+                        localFile: demos.standaloneFile,
+                        externalRequests: unexpectedRequests
+                    }
                 },
                 null,
                 2
             )
         );
+        server.close();
         fs.rmSync(isolated, { recursive: true, force: true });
         app.quit();
     })
     .catch((error) => {
         console.error(error);
         if (errors.length) console.error("Renderer errors:", errors);
+        server.close();
         fs.rmSync(isolated, { recursive: true, force: true });
         app.exit(1);
     });

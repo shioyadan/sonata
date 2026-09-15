@@ -94,11 +94,11 @@ npm run format:check
 
 ## ビルド
 
-`npm run build` は Node の標準ライブラリだけで、`src/index.html` にスタイル・スクリプト・デモを埋め込みます。出力は `dist/sonata.html`。ライセンス表示も HTML 内に保持します。埋め込み JSON の文字列内を変更せず、長すぎる行を改行します。
+`npm run build` は Node の標準ライブラリだけで、`src/index.html` にスタイル・スクリプト・解析器・ライセンスと小さなデモ一覧を埋め込みます。本体は `dist/sonata.html`、5本のデモは `dist/samples/<key>.json` へ出力します。JSONは `data/traces.js` の各Traceをそのまま保存し、記録値や出典を変えません。HTML単体で手元のFileを開けます。
 
-ブラウザ用の相対 CommonJS は `scripts/bundle.cjs` で結合します。`.cts` の型と CommonJS 用の import/export 構文は Node 標準の `stripTypeScriptTypes` の `transform` モードで変換します。新しいモジュールは拡張子付きの相対パスで参照し、実行時の外部読み込みを追加しません。ソースを直接開かず、ビルドした HTML または `npm start` で確認します。
+ブラウザ用の相対 CommonJS は `scripts/bundle.cjs` で結合します。`.cts` の型と CommonJS 用の import/export 構文は Node 標準の `stripTypeScriptTypes` の `transform` モードで変換します。新しいモジュールは拡張子付きの相対パスで参照し、実行時に別のスクリプトやスタイルを取得しません。ソースを直接開かず、ビルドした HTML または `npm start` で確認します。
 
-`npm start` はビルドした HTML だけを配信します。ソースディレクトリや元ログを公開するサーバーではありません。環境変数 `SONATA_HOST` / `SONATA_PORT` で待ち受け先を変更できます。スマートフォンから同じネットワーク経由で確認する場合の例:
+`npm start` はビルドした HTML とカタログに載るサンプルJSONだけを配信します。ソースディレクトリや元ログを公開するサーバーではありません。環境変数 `SONATA_HOST` / `SONATA_PORT` で待ち受け先を変更できます。スマートフォンから同じネットワーク経由で確認する場合の例:
 
 ```sh
 SONATA_HOST=0.0.0.0 npm start
@@ -113,7 +113,7 @@ npm ci
 npm run typecheck
 ```
 
-`src/` の全 `.cts` と画面検査の `scripts/check-browser.cts` / `scripts/check-smoke.cts` / `scripts/browser-test.cts` を `tsconfig.json` の `strict` と `noEmit` で検査します。再生モデル・経路計算から UI・固定シーン・動的表示・GPU への型の受け渡しも対象です。デモ抽出スクリプトと vendor はこの型検査の対象外です。型のためだけに `src/` のファイルを増やさず、共有型は所有者のモジュールから公開します。
+`src/` の全 `.cts` と画面検査の `scripts/check-*.cts` / `scripts/browser-test.cts` を `tsconfig.json` の `strict` と `noEmit` で検査します。再生モデル・経路計算から UI・固定シーン・動的表示・GPU への型の受け渡しも対象です。デモ抽出スクリプトと vendor はこの型検査の対象外です。型のためだけに `src/` のファイルを増やさず、共有型は所有者のモジュールから公開します。
 
 型検査用の TypeScript と Node の型定義は開発依存としてバージョンを固定します。通常ビルドはこれらを読み込みません。型変換だけでは型の正しさを検査できないため、CI は `npm run typecheck` と実行時の検証を別々に実施します。`scripts/check-types.cts` は誤った引数型や null の見落としを拒否することも確認し、型が `any` に落ちた場合に検出できるようにします。未生成の GPU 資源、Aluminum / Paper の材質設定、経路計算で保持すべき命令・ステージ情報も型の回帰検査に含めます。
 
@@ -121,21 +121,21 @@ npm run typecheck
 
 ## 検証
 
-`npm test` は再生モデルの整合性、紙箱・金属パックの接地と正立した滑走、ビルドの独立性を検査します。ビルド検査は、必要なソースだけを別の一時ディレクトリにコピーし、`node_modules` や Konata のチェックアウトなしで同一 HTML を作れることを確認します。デモの内容、UTF-8、外部スクリプトの不在、vendor のハッシュも確認します。
+`npm test` は再生モデルの整合性、紙箱・金属パックの接地と正立した滑走、ビルドの独立性を検査します。ビルド検査は、必要なソースだけを別の一時ディレクトリにコピーし、`node_modules` や Konata のチェックアウトなしで同一 HTML とサンプルJSONを作れることを確認します。全デモとの完全一致、HTMLへのデータ埋込みの不在、UTF-8、外部スクリプトの不在、vendor のハッシュも確認します。
 
 `scripts/check-scene.cjs` は全5デモの配置と命令経路を DOM / GPU なしで準備し、別のインスタンスへの状態混入と元データの変更を検出します。未読込み・空の一覧・読込み失敗時の状態保持と、再読込み後も配置が同じ参照を使えることも確認します。`scripts/check-bundle.cjs` は独立した JavaScript 環境で相対パス、変数スコープ、一度だけの実行、循環参照、不正な参照の拒否を確認します。`scripts/check-browser-test.cjs` はページ内関数の引数・Promise・例外の受け渡しと、フレーム待機・期限超過時の診断を別のJavaScript実行環境で確認します。条件・診断・描画の無応答、期限後の結果と例外、期限タイマーの回収も検査します。いずれも `npm test` に含まれます。
 
-Node の推奨バージョンは `.nvmrc` に固定し、セキュリティ修正版へ更新します。`npm run test:server` はローカルでサーバーを起動し、GET / HEAD、ソースの非公開、未対応メソッドと不正な URL の拒否、異常なリクエスト後も配信が継続することを確認します。
+Node の推奨バージョンは `.nvmrc` に固定し、セキュリティ修正版へ更新します。`npm run test:server` はローカルでサーバーを起動し、本体・全サンプルのGET / HEAD、ソースと一覧外のファイルの非公開、未対応メソッドと不正な URL の拒否、異常なリクエスト後も配信が継続することを確認します。
 
 `THIRD_PARTY_NOTICES.md` と `licenses/` の原文は、配布 HTML の **Licenses** パネルへ埋め込みます。デモの元プログラムやライセンスが変わった場合はこれらも更新し、`npm test` で全文の保持を確認してください。
 
-`npm run test:smoke` は、単一HTMLの起動と再生・操作、全5デモの代表時刻、3スタイルの描画、モバイル1サイズからデスクトップへの復帰、ライセンス表示を短く確認します。全描画検査と同じHTML単体コピー・外部要求禁止・一時プロファイルを使います。
+`npm run test:smoke` は、単一HTMLの起動と再生・操作、全5デモの代表時刻、3スタイルの描画、モバイル1サイズからデスクトップへの復帰、ライセンス表示を短く確認します。全描画検査と同じHTML単体のFile読込み、HTTPサンプル取得・取消し・失敗時の保持、一時プロファイルを使います。
 
-`npm run test:render` は、ビルドした単一 HTML だけを別の一時ディレクトリへコピーして Electron で開きます。外部リソースへのアクセスを禁止し、全5デモの FIFO、ステージ、pipe と接続線、依存行列、レジスタ、フラッシュ、Top-down、操作を検査します。OS の動きを減らす設定でも再生・演出が自動で始まること、手動で演出を OFF / ON にできること、再読込み時は再び ON になることも確認します。
+`npm run test:render` は、本体HTMLだけを一時ディレクトリへコピーし、ネットワーク要求なしでFileを開けることを確認します。別の隔離ディレクトリへ本体とサンプルをコピーしてローカルHTTPで配信し、起動時の未取得、`#demo=`、キャッシュ、失敗・再試行・取消しとFile切替えの競合も検査します。通信先はその本体とサンプルだけに限定し、全5デモの FIFO、ステージ、pipe と接続線、依存行列、レジスタ、フラッシュ、Top-down、操作を検査します。OS の動きを減らす設定でも再生・演出が自動で始まること、手動で演出を OFF / ON にできること、再読込み時は再び ON になることも確認します。
 
 モバイルは DPR 2 とタッチイベントを使い、320 × 568、390 × 844、430 × 932、932 × 430 で検査します。ピンチ、2本指の移動、指を離した後の回転、キャンセル、Fit、設定パネル、横向きからの復帰を含みます。実機 Safari / Chrome の検査を置き換えるものではありません。
 
-ブラウザの回帰検査は `scripts/check-browser.cts` にまとめ、`npm run test:render` と手動の全描画CIに含めています。個別に実行する場合は `npm run test:browser` を使います。ページ内で実行する操作も TypeScript の関数として記述し、診断 API の名前や引数の変更を型検査で検出します。検査用モジュールは Electron 側で Node 標準の型除去を使って読み込み、製品 HTML には含めません。共通の待機処理は `scripts/browser-test.cts` が担当し、検査ごとの期限・収束条件・失敗時の診断は呼び出し側で指定します。
+ブラウザの回帰検査は `scripts/check-browser.cts` にまとめ、`npm run test:render` と手動の全描画CIに含めています。個別に実行する場合は `npm run test:browser` を使います。ページ内で実行する操作も TypeScript の関数として記述し、診断 API の名前や引数の変更を型検査で検出します。検査用モジュールは Electron 側で Node 標準の型除去を使って読み込み、製品 HTML には含めません。共通の待機処理は `scripts/browser-test.cts` が担当し、検査ごとの期限・収束条件・失敗時の診断は呼び出し側で指定します。起動状態の検査には同ファイルの `loadPage` を使い、hash付きURLが同じページ内の移動になって初期化を飛ばすことを防ぎます。
 
 `waitFor` の `timeout` は条件の確認全体の期限です。1回の確認が応答しなくても終了し、ポーリングごとに期限を更新しません。既存の5秒・10秒・カメラ収束30秒と、50/60msの確認間隔を維持します。失敗時の診断取得は追加で最大1秒（`diagnosticsTimeout`）とし、診断が失敗しても元の検査メッセージを残します。`settle` は2フレームと任意の `gl.finish()` を合計10秒以内に待ち、必要なら `timeout` を指定できます。
 
@@ -185,7 +185,7 @@ GitHub Actionsで全描画検査を行う場合は **Verify and publish Sonata �
 
 ## Git に含めるもの
 
-ソース、埋め込みデモ、ロックファイル、解析器の出典、文書を管理します。README 用の代表画像だけは `docs/images/overview.png` に置きます。日々のスクリーンショットやレポートは `artifacts/`、配布用 HTML は `dist/`、元ログは `inputs/` に分離し、これらは `.gitignore` で除外します。
+ソース、デモの生成元データ、ロックファイル、解析器の出典、文書を管理します。README 用の代表画像だけは `docs/images/overview.png` に置きます。日々のスクリーンショットやレポートは `artifacts/`、配布用 HTML は `dist/`、元ログは `inputs/` に分離し、これらは `.gitignore` で除外します。
 
 Konata の解析コードを更新する場合は [vendor の手順](../vendor/konata-core/README.md) に従い、デモの再生成と描画検査を実行してください。ブラウザ側の演出を変えるだけなら、元ログや解析器の再生成は不要です。
 
@@ -193,7 +193,7 @@ Konata の解析コードを更新する場合は [vendor の手順](../vendor/k
 
 公開先は https://shioyadan.github.io/sonata/ です。初回公開前に GitHub リポジトリの **Settings → Pages → Build and deployment → Source** を **GitHub Actions** に設定してください。
 
-`.github/workflows/ci.yml` は `main` への push または手動実行でモデル・ビルド・サーバーと、選択された範囲の描画を検証し、成功した同じコミットから `dist/sonata.html` を生成して、Pages の `index.html` として公開します。pull request は検証だけを行います。通常は基本描画検査、手動で `full_render` を選んだ場合は全描画検査が公開条件です。Pagesジョブの上限は5分です。依存パッケージやソース、元ログを公開用ディレクトリへコピーしません。
+`.github/workflows/ci.yml` は `main` への push または手動実行でモデル・ビルド・サーバーと、選択された範囲の描画を検証し、成功した同じコミットから `dist/sonata.html` を生成して、Pages の `index.html` として、`dist/samples/` を隣の `samples/` として公開します。pull request は検証だけを行います。通常は基本描画検査、手動で `full_render` を選んだ場合は全描画検査が公開条件です。Pagesジョブの上限は5分です。依存パッケージやソース、元ログを公開用ディレクトリへコピーしません。
 
 README 冒頭の **ライブデモ** はこの公開先へリンクします。push 後は GitHub Actions で対象コミットの `verify` と `pages` が成功したことを確認し、公開 URL の応答と生成 HTML の内容を確認します。`verify` が失敗した場合は `pages` がスキップされ、初回は未公開、既存サイトがある場合は前の公開内容が維持されます。
 

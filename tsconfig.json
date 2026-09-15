@@ -17,6 +17,7 @@
     "scripts/check-import.cts",
     "scripts/check-navigation.cts",
     "scripts/check-file-playback.cts",
-    "scripts/browser-test.cts"
+    "scripts/browser-test.cts",
+    "scripts/check-demo-loading.cts"
   ]
 }

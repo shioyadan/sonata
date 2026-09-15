@@ -1,6 +1,6 @@
 # ソースの構造
 
-編集用の `src/` は TypeScript 15個、CSS 3個、HTML 1個の計19ファイルです。配布時には `dist/sonata.html` 一つへ結合します。画面の配置・記録値・再生時刻と、外観の材質・照明・合成を分けることで、Neon / Aluminum / Paper を同じ再生内容で比較できます。
+編集用の `src/` は責務に沿って分け、アプリ本体は配布時に `dist/sonata.html` 一つへ結合します。サンプルのデータは `dist/samples/` へ分離します。画面の配置・記録値・再生時刻と、外観の材質・照明・合成を分けることで、Neon / Aluminum / Paper を同じ再生内容で比較できます。
 
 ## 境界と編集先
 
@@ -11,6 +11,7 @@
 | `src/trace-file.cts` | Konata解析・圧縮store・全体索引と寿命 |
 | `src/trace-window.cts` | 選択区間を観測値に沿って再生データへ変換 |
 | `src/trace-structure.cts` | スレッド別に構造とメモリ基準の観測を蓄積し、Core検出用の標本を保持 |
+| `src/demo-loader.cts` | サンプルの固定一覧、非同期取得・取消し・キャッシュ、未選択時の内部データ |
 | `src/sonata.cts` | 起動、再生時計、共通操作、DOM 表示、検証用 API |
 | `src/camera.cts` | カメラの状態・補間・投影、マウスとタッチの操作 |
 | `src/replay-model.cts` | デモの準備、記録時刻に対応する FIFO・依存・レジスタ・Top-down の状態 |
@@ -63,7 +64,7 @@ CSS は sonata → scene → appearance の順に適用します。共通 UI、�
 
 ブラウザ用コードは、拡張子を含む相対パスの CommonJS で参照します。TypeScript の `.cts` では `import module = require("./module.cts")` と `export = module` を使い、公開関数の型を参照先へ伝えます。型だけの namespace は実行時には残りません。再生モデル・配置・GPU の公開型はそれぞれの所有者から参照し、必要な操作が少ない依存は最小の構造型で受けます。経路計算は入力命令の型をジェネリクスで保持し、表示先で命令の記録情報を型変換し直す必要をなくします。
 
-`createReplay` は読込み元を返し、`current` は未読込みなら `null` です。`loadTrace(key)` が準備済みの `Replay` を返した後で、scene・paths・activity を生成します。次のトレースは局所的に準備してから同じ `Replay` へ反映するため、利用側の参照を保ち、失敗時に中途半端な状態を見せません。空のデモ一覧は読込み時にエラーとなります。任意ファイルの重なる区間には `loadData(trace, { continuityAt })` で共有時刻を渡し、ROBの位相と同じ命令の待機位置を引き継ぎます。これは表示位置の継続であり、記録時刻やFIFOの結果を変更しません。
+`createReplay` は読込み元を返し、`current` は未読込みなら `null` です。アプリは命令のない内部データを `loadData` で準備し、scene・paths・activityを生成します。トレース未選択時は `hasTrace: false` としてシーン・観測値・再生操作を隠し、内部の仮配置を記録された構造として見せません。次のトレースは局所的に準備してから同じ `Replay` へ反映するため、利用側の参照を保ち、失敗時に中途半端な状態を見せません。サンプルの非同期取得は `demo-loader.cts`、表示とFileの寿命の調整は `sonata.cts` が担当し、`replay.loadData` は同期のまま保ちます。任意ファイルの重なる区間には `loadData(trace, { continuityAt })` で共有時刻を渡し、ROBの位相と同じ命令の待機位置を引き継ぎます。これは表示位置の継続であり、記録時刻やFIFOの結果を変更しません。
 
 activity は `drawDynamic` でそのサイクルの集計・依存・レジスタ状態をまとめて作ります。DOM と診断 API は描画後に `activity.frame` を参照し、初回描画前の参照は明示的なエラーにします。準備済みという型は観測済みという意味ではありません。レジスタの未知値や未観測の分類は従来の `null` / `available: false` を保ちます。
 
@@ -71,10 +72,10 @@ GPU の描画先は初期化前には `null` です。残る非 null assertion �
 
 `scripts/bundle.cjs` は Node 標準の `stripTypeScriptTypes` の `transform` モードで `.cts` を変換し、関数単位のモジュールとして包み、`sonata.cts` から実行するスクリプトを生成します。各モジュールは必要になったときに一度だけ実行されます。文字列の単純連結による変数共有や `eval` は使いません。
 
-`scripts/build.cjs` は CSS、データ、結合済みコード、ライセンスを HTML に埋め込みます。Node 標準機能だけでビルドでき、実行時の外部読み込みもありません。開発時も `npm start` で生成物を開きます。`src/index.html` を直接開く用途は想定していません。
+`scripts/build.cjs` は CSS、結合済みコード、解析器、ライセンスとデモ一覧を HTML に埋め込みます。デモJSONは選択時に取得し、HTTP(S)でのみ利用します。Node 標準機能だけでビルドでき、File読込みに外部資源は不要です。開発時も `npm start` で生成物を開きます。`src/index.html` を直接開く用途は想定していません。
 
 - `npm run typecheck`: ブラウザ用コードと型付きの画面検査を `strict` で検査。型境界の不正な入力・null の扱い・GPU 資源の前提も検査。
-- `npm test`: 再生・演出計算、独立したシーン間の状態分離、モジュールの解決・キャッシュ・スコープ・循環参照、単一 HTML の再現可能なビルド。
+- `npm test`: 再生・演出計算、独立したシーン間の状態分離、モジュールの解決・キャッシュ・スコープ・循環参照、本体HTMLとサンプルJSONの再現可能なビルド。
 - `npm run test:render`: 全5デモ、3スタイル、選択・接地・滑走・影、キーボード・タッチ、モバイル復帰、WebGL の障害と復旧。
 
 構造の変更でも、診断値だけで描画の同一性を判断しません。比較時は同じ時刻・カメラ・演出用時計を与え、canvas の画素も照合します。通常再生と実入力は既存の描画検査で別に確認します。検証環境と実行手順は [開発ガイド](development.md) を参照してください。

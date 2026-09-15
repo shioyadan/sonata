@@ -43,6 +43,7 @@ function fixture(count = 320) {
 async function reviewImport(window: BrowserWindow, screenshots: string) {
     const test = createBrowserTest(window);
     const { evaluate } = test;
+    await evaluate(({ sonata }) => sonata.loadTrace("rename-rush"));
     const waitFor = (
         condition: browserTest.PageCallback<[], unknown>,
         message: string,

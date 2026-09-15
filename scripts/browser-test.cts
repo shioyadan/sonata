@@ -148,7 +148,13 @@ function pageScript(fn: () => void) {
     return `(${fn.toString()})()`;
 }
 
-const browserTest = { createBrowserTest, delay, waitFor, pageScript };
+// hash付きの同じURLも、ページ内移動ではなく初期状態から検査する。
+async function loadPage(window: BrowserWindow, entry: string) {
+    await window.loadURL("about:blank");
+    await window.loadURL(entry);
+}
+
+const browserTest = { createBrowserTest, delay, waitFor, pageScript, loadPage };
 namespace browserTest {
     export type Context = PageContext;
     export type PageCallback<Args extends unknown[], Result> = PageFunction<Args, Result>;

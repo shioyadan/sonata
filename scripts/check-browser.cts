@@ -6,7 +6,8 @@ import type { BrowserWindow, KeyboardInputEvent, MouseInputEvent } from "electro
 const {
     createBrowserTest,
     waitFor: waitUntil,
-    pageScript
+    pageScript,
+    loadPage
 } = require("./load-test.cjs")("browser-test.cts") as typeof import("./browser-test.cts");
 
 // 実ブラウザへの入力、故障の注入、状態を待ってからの検査を組み合わせる。
@@ -92,7 +93,7 @@ async function reviewBrowser(window: BrowserWindow, entry: string, screenshots?:
         await settle();
     };
 
-    await window.loadURL(entry);
+    await loadPage(window, entry);
     await ready();
     window.focus();
     const playhead = await reviewPlayhead(window);
@@ -293,7 +294,7 @@ async function reviewBrowser(window: BrowserWindow, entry: string, screenshots?:
                 } as typeof original;
             })
         });
-        await window.loadURL(entry);
+        await loadPage(window, entry);
         assert.equal(await evaluate(({ $ }) => $("fallback").hidden), false, "Missing WebGL did not show the fallback");
         assert.equal(await evaluate(({ $ }) => $("renderer-status").textContent), "WebGL 2 unavailable");
         assert.equal(
@@ -324,7 +325,7 @@ async function reviewBrowser(window: BrowserWindow, entry: string, screenshots?:
             debuggerAPI.detach();
         }
     }
-    await window.loadURL(entry);
+    await loadPage(window, entry);
     await ready();
 
     // 全スタイルで context を失わせ、材質テクスチャ・影も復旧後に再生成できることを確認する。
@@ -404,7 +405,7 @@ async function reviewBrowser(window: BrowserWindow, entry: string, screenshots?:
                 };
             })
         });
-        await window.loadURL(entry);
+        await loadPage(window, entry);
         await ready();
         await evaluate(({ sonata, $ }) => {
             sonata.setPlaying(false);
@@ -463,7 +464,7 @@ async function reviewBrowser(window: BrowserWindow, entry: string, screenshots?:
             debuggerAPI.detach();
         }
     }
-    await window.loadURL(entry);
+    await loadPage(window, entry);
     await ready();
     return {
         playhead,
