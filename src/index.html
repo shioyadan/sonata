@@ -9,7 +9,7 @@
         <link rel="stylesheet" href="scene.css" />
         <link rel="stylesheet" href="appearance.css" />
     </head>
-    <body>
+    <body data-trace-loaded="false">
         <header class="topbar">
             <a class="brand" href="#" title="Sonata"
                 >sonata<span class="brand-divider"></span><span class="brand-section">pipeline visualizer</span></a
@@ -23,6 +23,35 @@
 
         <main>
             <section class="world" id="world" aria-label="Interactive 3D processor pipeline">
+                <section id="trace-welcome" class="trace-welcome" aria-labelledby="welcome-title">
+                    <div class="welcome-content">
+                        <span class="eyebrow">PROCESSOR TRACE VISUALIZER</span>
+                        <h1 id="welcome-title">Follow an instruction.</h1>
+                        <p>Open a trace to explore its pipeline, or choose a sample.</p>
+                        <button id="welcome-open" class="welcome-open">Open trace…</button>
+                        <span class="file-hint">Kanata / gem5 · gzip / zstd · or drop a file</span>
+                        <label class="field-label" for="welcome-demo-select">TRY A SAMPLE</label>
+                        <select id="welcome-demo-select">
+                            <option value="">Choose a sample…</option>
+                        </select>
+                        <div id="welcome-status">
+                            <div id="source-status">
+                                <p id="demo-status" role="status" hidden></p>
+                                <button id="demo-retry" class="quiet-button" hidden>Retry sample</button>
+                                <button id="demo-cancel" class="quiet-button" hidden>Cancel sample</button>
+                                <p id="import-status" role="status" hidden></p>
+                                <progress
+                                    id="import-progress"
+                                    max="1"
+                                    value="0"
+                                    aria-label="Trace loading progress"
+                                    hidden
+                                ></progress>
+                                <button id="import-cancel" class="quiet-button" hidden>Cancel</button>
+                            </div>
+                        </div>
+                    </div>
+                </section>
                 <canvas
                     id="scene"
                     tabindex="0"
@@ -117,7 +146,7 @@
                 <div id="fallback" hidden>
                     <strong>WebGL 2 is unavailable.</strong>
                     <p>Open this mockup in a browser with graphics acceleration enabled.</p>
-                    <p>Sonata requires WebGL 2. All demo data is included in this page.</p>
+                    <p>Sonata requires WebGL 2. Trace files stay on your device.</p>
                 </div>
                 <div class="cinema-caption">
                     SONATA <span>—</span> AN INSTRUCTION ODYSSEY<small id="cinema-source"></small>
@@ -127,23 +156,18 @@
             <aside class="telemetry">
                 <div class="panel-heading">
                     <span class="eyebrow">TRACE TELEMETRY</span
-                    ><span class="recording"><i></i> <span id="play-status">LIVE</span></span>
+                    ><span class="recording"><i></i> <span id="play-status">NO TRACE</span></span>
                 </div>
                 <label class="field-label" for="trace-select">TRACE / DEMO</label>
-                <div class="select-wrap"><select id="trace-select"></select></div>
+                <div class="select-wrap">
+                    <select id="trace-select">
+                        <option value="">Choose a sample…</option>
+                    </select>
+                </div>
                 <div class="trace-import">
                     <button id="trace-open" class="quiet-button">Open trace…</button>
                     <input id="trace-file" type="file" hidden aria-label="Open a Kanata or gem5 trace" />
                     <span class="file-hint">Kanata / gem5 · gzip / zstd · or drop a file</span>
-                    <p id="import-status" role="status" hidden></p>
-                    <progress
-                        id="import-progress"
-                        max="1"
-                        value="0"
-                        aria-label="Trace loading progress"
-                        hidden
-                    ></progress>
-                    <button id="import-cancel" class="quiet-button" hidden>Cancel</button>
                     <section id="file-tools" aria-label="Trace exploration" hidden>
                         <label class="field-label" for="file-search-kind">FIND IN TRACE</label>
                         <select id="file-search-kind">
@@ -249,7 +273,7 @@
                         ><button id="auto-camera" aria-pressed="true">Auto orbit <span>ON</span></button>
                     </div>
                 </div>
-                <div class="aside-foot"><span class="live-dot"></span> REAL TRACE. IN MOTION.</div>
+                <div class="aside-foot"><span class="live-dot"></span> TRACE FILES STAY ON YOUR DEVICE.</div>
                 <button id="license-open" class="license-open" aria-haspopup="dialog" aria-controls="license-panel">
                     Licenses
                 </button>

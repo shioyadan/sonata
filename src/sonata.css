@@ -495,7 +495,8 @@ main {
     overflow-wrap: anywhere;
     line-height: 1.5;
 }
-.trace-import progress {
+.trace-import progress,
+#source-status progress {
     width: 100%;
     accent-color: var(--cyan);
 }
@@ -1223,4 +1224,88 @@ body:has(#file-window:not([hidden])) main {
     font: 12px/1.7 monospace;
     white-space: pre-wrap;
     overflow-wrap: anywhere;
+}
+
+/* 未選択時には観測値と描画資源の仮の構造を見せず、読み込み操作を前面に置く。 */
+body[data-trace-loaded="false"] {
+    display: grid;
+    height: 100dvh;
+    grid-template-rows: 70px minmax(0, 1fr) 30px;
+}
+body[data-trace-loaded="false"] main {
+    height: auto;
+    min-height: 0;
+}
+body[data-trace-loaded="false"] .transport,
+body[data-trace-loaded="false"]
+    .telemetry
+    > :is(.trace-meta, .demo-reel, .cycle-block, .metric-pair, .occupancy, .stream-heading, .spotlight) {
+    display: none;
+}
+body[data-trace-loaded="false"] .world > :not(#trace-welcome, .scene-controls, #fallback) {
+    visibility: hidden;
+}
+.trace-welcome {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 110px 24px 28px;
+    overflow: auto;
+}
+.welcome-content {
+    max-width: 380px;
+    width: 100%;
+    margin: auto;
+}
+.welcome-content h1 {
+    margin: 12px 0;
+    font-size: clamp(24px, 3.5vw, 36px);
+    font-weight: 500;
+    letter-spacing: -1px;
+}
+.welcome-content p {
+    color: var(--muted);
+    line-height: 1.6;
+}
+.welcome-open {
+    display: block;
+    width: 100%;
+    min-height: 44px;
+    margin: 20px 0 8px;
+    border: 1px solid var(--cyan);
+    border-radius: 6px;
+    color: var(--cyan);
+}
+.welcome-content .field-label {
+    display: block;
+    margin-top: 24px;
+    margin-bottom: 8px;
+}
+#welcome-demo-select {
+    width: 100%;
+    min-height: 44px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--panel);
+    padding: 0 10px;
+}
+#source-status {
+    line-height: 1.6;
+    overflow-wrap: anywhere;
+}
+#source-status:has(> :not([hidden])) {
+    margin-top: 10px;
+}
+#source-status p {
+    margin: 6px 0;
+    color: var(--muted);
+}
+#source-status button {
+    min-height: 44px;
+    padding: 4px 12px;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    color: var(--text);
 }

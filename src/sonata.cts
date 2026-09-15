@@ -11,6 +11,7 @@ import rendering = require("./renderer.cts");
 const { createGpu, createRenderer } = rendering;
 import cameraModel = require("./camera.cts");
 import createTraceImport = require("./trace-import.cts");
+import demos = require("./demo-loader.cts");
 const { createCamera } = cameraModel;
 type CameraMode = cameraModel.Mode;
 interface Session {
@@ -29,7 +30,7 @@ type ElementFor<ID extends string> = ID extends "scene" | "activity"
     ? HTMLCanvasElement
     : ID extends "license-panel" | "mobile-panel"
       ? HTMLDialogElement
-      : ID extends "trace-select" | "speed"
+      : ID extends "trace-select" | "welcome-demo-select" | "speed"
         ? HTMLSelectElement
         : ID extends "timeline" | "bloom"
           ? HTMLInputElement
@@ -39,7 +40,7 @@ type ElementFor<ID extends string> = ID extends "scene" | "activity"
 // HTML に定義した固定要素は存在を前提とし、値・描画面・ダイアログの型だけを区別する。
 const $ = <ID extends string>(id: ID) => document.getElementById(id) as ElementFor<ID>;
 declare global {
-    var embeddedFlowTraces: sonataReplay.Trace[];
+    var sonataDemoCatalog: demos.Entry[];
     var sonata: ReturnType<typeof start> | undefined;
 }
 // 権利表示は WebGL の初期化状態にかかわらず開けるようにする。
@@ -57,7 +58,7 @@ function start(gl: WebGL2RenderingContext) {
     // 利用者の選択だけを共有し、トレース・描画結果・GPU 資源は各モジュールが所有する。
     const session: Session = {
         cycle: 0,
-        playing: true,
+        playing: false,
         speed: 4,
         selectedID: null,
         visualStyle: "neon",
@@ -81,15 +82,15 @@ function start(gl: WebGL2RenderingContext) {
     };
     function setPlaying(value: boolean) {
         if (!value) fileImport.cancelContinuation();
-        session.playing = value;
+        session.playing = value && hasTrace;
         $("play").textContent = session.playing ? "Ⅱ" : "▶";
         $("play").setAttribute("aria-label", session.playing ? "Pause" : "Play");
         $("play").title = session.playing ? "Pause (Space)" : "Play (Space)";
-        $("play-status").textContent = session.playing ? "LIVE" : "PAUSED";
+        $("play-status").textContent = !hasTrace ? "NO TRACE" : session.playing ? "LIVE" : "PAUSED";
     }
 
     function setCycle(value: number) {
-        if (!Number.isFinite(value)) return;
+        if (!hasTrace || !Number.isFinite(value)) return;
         session.cycle = clamp(value, replay.trace.firstCycle, replay.trace.lastCycle);
         render();
         updateUI();
@@ -125,7 +126,7 @@ function start(gl: WebGL2RenderingContext) {
         clock.lastTime = now;
         if (!document.hidden) {
             if (!session.reducedMotion) clock.artTime += dt;
-            if (session.playing) {
+            if (hasTrace && session.playing) {
                 const duration = session.instructionStream ? sonataReplay.codeRewindDuration : 2.5;
                 const next = sonataReplay.advancePlayback(session.cycle, dt, session.speed, replay.flushEvents, {
                     duration,
@@ -150,17 +151,22 @@ function start(gl: WebGL2RenderingContext) {
                 clock.fps = Math.round((clock.frameCount * 1000) / (now - clock.fpsTime));
                 clock.frameCount = 0;
                 clock.fpsTime = now;
-                $("renderer-status").textContent =
-                    `WebGL 2 · ${clock.fps} fps · ${gpu.msaaSamples ? `${gpu.msaaSamples}× MSAA + ` : ""}${session.style.matte ? "matte surfaces" : "smooth light"}`;
+                $("renderer-status").textContent = hasTrace
+                    ? `WebGL 2 · ${clock.fps} fps · ${gpu.msaaSamples ? `${gpu.msaaSamples}× MSAA + ` : ""}${session.style.matte ? "matte surfaces" : "smooth light"}`
+                    : "WebGL 2 · Ready";
             }
         }
         clock.animationID = requestAnimationFrame(animate);
     }
 
-    const samples = globalThis.embeddedFlowTraces;
+    const samples = globalThis.sonataDemoCatalog;
+    const demoLoader = demos.createLoader(samples, location.href);
+    let lastDemo: sonataReplay.Trace | null = null;
+    let retryDemo = "";
+    let hasTrace = false;
     const gpu = createGpu({ gl, canvas, onResize: drawTimeline });
-    const replaySource = sonataReplay.createReplay({ samples });
-    const replay = replaySource.loadTrace(samples.find((sample) => sample.key === "rename-rush")?.key ?? "");
+    const replaySource = sonataReplay.createReplay({ samples: [] });
+    const replay = replaySource.loadData(demos.emptyTrace());
     const scene = createScene({ gpu, replay, session });
     const paths = createPaths<sonataReplay.Operation>({ scene, replay, session });
     const camera = createCamera({
@@ -206,7 +212,7 @@ function start(gl: WebGL2RenderingContext) {
     }
 
     function render(dt = 0) {
-        if (gpu.contextLost) return;
+        if (gpu.contextLost || !hasTrace) return;
         renderer.render(dt);
         updateLabels(dt);
     }
@@ -217,23 +223,83 @@ function start(gl: WebGL2RenderingContext) {
         activity.reset();
         if (scene.worldBuildCount() !== previous) renderer.buildMaterialShadow();
     }
-    function loadTrace(key: string) {
-        if (key === "local-file") return;
-        fileImport.close();
-        fileLayouts.clear();
-        replaySource.loadTrace(key);
-        applyTrace();
+    const offlineMessage = "Samples require the online site or a local HTTP server. You can open a trace file offline.";
+    function sampleStatus(text = "", busy = false) {
+        $("demo-status").textContent = text || (demoLoader.online ? "" : offlineMessage);
+        $("demo-status").hidden = !$("demo-status").textContent;
+        $("demo-cancel").hidden = !busy;
+        $("demo-retry").hidden = !retryDemo || busy;
+        $("trace-select").setAttribute("aria-busy", String(busy));
+        $("welcome-demo-select").setAttribute("aria-busy", String(busy));
+    }
+    function syncSampleSelection() {
+        $("trace-select").value = replay.trace.key;
+        $("welcome-demo-select").value = replay.trace.key === "local-file" ? "" : replay.trace.key;
+    }
+    function cancelDemo() {
+        demoLoader.cancel();
+        retryDemo = "";
+        sampleStatus();
+        syncSampleSelection();
+    }
+    async function loadTrace(key: string): Promise<void> {
+        if (key === "local-file") {
+            cancelDemo();
+            return;
+        }
+        if (!key) {
+            cancelDemo();
+            return;
+        }
+        const request = demoLoader.load(key);
+        const revision = demoLoader.revision;
+        retryDemo = "";
+        sampleStatus(`Loading ${samples.find((sample) => sample.key === key)?.label ?? "sample"}…`, true);
+        try {
+            const trace = await request;
+            if (!trace || revision !== demoLoader.revision) return;
+            const startPlaying = !hasTrace && !fileImport.busy;
+            // prepareTraceが失敗しても既存のFileと表示を維持する。
+            replaySource.loadData(trace);
+            fileImport.close();
+            fileLayouts.clear();
+            lastDemo = trace;
+            hasTrace = true;
+            applyTrace();
+            setPlaying(startPlaying || session.playing);
+            sampleStatus();
+            render();
+            updateUI();
+        } catch (error) {
+            if (revision !== demoLoader.revision) return;
+            demoLoader.forget(key);
+            retryDemo = samples.some((sample) => sample.key === key) && demoLoader.online ? key : "";
+            sampleStatus(error instanceof Error ? error.message : String(error));
+            syncSampleSelection();
+            throw error;
+        }
+    }
+    function chooseSample(key: string) {
+        void loadTrace(key).catch(() => undefined); // 取得失敗は現在の表示を保ち、statusと再試行ボタンへ出す。
     }
     const fileImport = createTraceImport({
-        reset: () => {
-            loadTrace("rename-rush");
+        reset: (reason) => {
+            // 古いFileの障害は、それより後に選ばれたサンプルの取得を取り消さない。
+            if (reason !== "error") cancelDemo();
+            fileImport.close();
+            fileLayouts.clear();
+            replaySource.loadData(lastDemo ?? demos.emptyTrace());
+            hasTrace = lastDemo !== null;
+            applyTrace();
+            setPlaying(false);
             render();
             updateUI();
         },
         pause: () => setPlaying(false),
         read: () => ({ cycle: session.cycle, selectedID: session.selectedID }),
         apply: (trace, position) => {
-            const sameThread = fileImport.view?.thread === position.thread;
+            const sameThread =
+                hasTrace && replay.trace.key === "local-file" && fileImport.view?.thread === position.thread;
             const overlapStart = Math.max(replay.trace.firstCycle, trace.firstCycle);
             const overlapEnd = Math.min(replay.trace.lastCycle, trace.lastCycle);
             retainFileLayout(trace, position.thread);
@@ -246,6 +312,7 @@ function start(gl: WebGL2RenderingContext) {
                     : undefined;
             replaySource.loadData(trace, continuityAt === undefined ? undefined : { continuityAt });
             retainFileLayout(replay.trace, position.thread);
+            hasTrace = true;
             let option = $("trace-select").querySelector<HTMLOptionElement>('option[value="local-file"]');
             if (!option) {
                 option = new Option(trace.label, "local-file");
@@ -261,11 +328,23 @@ function start(gl: WebGL2RenderingContext) {
             return replay.ops;
         }
     });
+    function placeSourceStatus() {
+        if (hasTrace || $("mobile-panel").open) $("file-tools").before($("source-status"));
+        else $("welcome-status").append($("source-status"));
+    }
     function applyTrace(reuse = false) {
-        $("trace-select").value = replay.trace.key;
+        document.body.dataset.traceLoaded = String(hasTrace);
+        $("trace-welcome").hidden = hasTrace;
+        $("play-status").textContent = !hasTrace ? "NO TRACE" : session.playing ? "LIVE" : "PAUSED";
+        placeSourceStatus();
+        syncSampleSelection();
         session.selectedID = null;
         rebuildWorld(reuse);
         session.cycle = replay.trace.initialCycle;
+        if (!hasTrace) {
+            camera.update(0, clock.artTime);
+            activity.drawDynamic(0);
+        }
         showTrace();
     }
     function setVisualStyle(key: sceneModel.StyleKey) {
@@ -295,22 +374,22 @@ function start(gl: WebGL2RenderingContext) {
         updateUI();
     }
 
-    for (const sample of samples) {
-        const option = document.createElement("option");
-        option.value = sample.key;
-        option.textContent = sample.label;
-        $("trace-select").append(option);
+    for (const id of ["trace-select", "welcome-demo-select"] as const) {
+        $(id).disabled = !demoLoader.online;
+        if (!demoLoader.online) $(id).title = offlineMessage;
+        for (const sample of samples) $(id).append(new Option(sample.label, sample.key));
+        $(id).addEventListener("change", () => chooseSample($(id).value));
     }
+    $("welcome-open").addEventListener("click", () => $("trace-open").click());
+    $("demo-retry").addEventListener("click", () => chooseSample(retryDemo));
+    $("demo-cancel").addEventListener("click", cancelDemo);
+    window.addEventListener("pagehide", cancelDemo);
+    sampleStatus();
     document
         .querySelectorAll<HTMLButtonElement>("[data-style-choice]")
         .forEach((button) =>
             button.addEventListener("click", () => setVisualStyle(button.dataset.styleChoice as sceneModel.StyleKey))
         );
-    $("trace-select").addEventListener("change", () => {
-        loadTrace($("trace-select").value);
-        render();
-        updateUI();
-    });
     $("play").addEventListener("click", () => setPlaying(!session.playing));
     $("previous").addEventListener("click", () => step(-1));
     $("next").addEventListener("click", () => step(1));
@@ -431,7 +510,9 @@ function start(gl: WebGL2RenderingContext) {
     $("mobile-details").addEventListener("click", () => {
         mobilePanel.scrollTop = 0;
         mobilePanel.showModal();
+        placeSourceStatus();
     });
+    mobilePanel.addEventListener("close", placeSourceStatus);
     $("mobile-close").addEventListener("click", () => mobilePanel.close());
     mobilePanel.addEventListener("click", (event) => {
         const rect = mobilePanel.getBoundingClientRect();
@@ -484,6 +565,13 @@ function start(gl: WebGL2RenderingContext) {
     const diagnostics = createDiagnostics();
     globalThis.sonata = diagnostics;
     clock.animationID = requestAnimationFrame(animate);
+    function readDemoLink() {
+        const key = new URLSearchParams(location.hash.slice(1)).get("demo");
+        if (key) chooseSample(key);
+        else cancelDemo();
+    }
+    window.addEventListener("hashchange", readDemoLink);
+    readDemoLink();
     return diagnostics;
     // シーンの DOM ラベル、情報パネルとタイムライン。
     // loadTrace → rebuildWorld → render が設定した状態・要素を参照する。
@@ -674,6 +762,9 @@ function start(gl: WebGL2RenderingContext) {
     }
 
     function updateUI() {
+        $("motion-effects").setAttribute("aria-pressed", String(!session.reducedMotion));
+        $("motion-effects").lastElementChild!.textContent = session.reducedMotion ? "OFF" : "ON";
+        if (!hasTrace) return;
         updatePlaybackPosition();
         fileImport.tick(session.cycle);
         const integer = Math.floor(session.cycle),
@@ -721,8 +812,6 @@ function start(gl: WebGL2RenderingContext) {
         const feedPhase = stream.feedState!.phase,
             rewinding = feedPhase === "rewind" || feedPhase === "discard" || feedPhase === "notice";
         $("motion-notice").hidden = !session.reducedMotion;
-        $("motion-effects").setAttribute("aria-pressed", String(!session.reducedMotion));
-        $("motion-effects").lastElementChild!.textContent = session.reducedMotion ? "OFF" : "ON";
         feedLabel.classList.toggle("rewinding", rewinding);
         feedLabel.classList.toggle("recovering", feedPhase === "refill");
         feedTitle.textContent = rewinding
@@ -824,6 +913,10 @@ function start(gl: WebGL2RenderingContext) {
     }
 
     function showTrace() {
+        if (!hasTrace) {
+            $("mobile-demo").textContent = "No trace selected";
+            return;
+        }
         $("timeline").min = String(replay.trace.firstCycle);
         $("timeline").max = String(replay.trace.lastCycle);
         updatePlaybackPosition();
@@ -889,6 +982,9 @@ function start(gl: WebGL2RenderingContext) {
     // 描画と同じ状態を読む検証用 API。
     function createDiagnostics() {
         return {
+            get hasTrace() {
+                return hasTrace;
+            },
             get visualStyle() {
                 return session.visualStyle;
             },

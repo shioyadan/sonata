@@ -15,7 +15,7 @@ function createTraceImport({
     read,
     pause
 }: {
-    reset: () => void;
+    reset: (reason: "open" | "close" | "error" | "restore") => void;
     apply: (
         trace: replay.Trace,
         position: { cycle: number; selectedID: number | null; thread: number }
@@ -386,7 +386,7 @@ function createTraceImport({
         worker.postMessage({ ...query, type: "search", request: ++searchID } satisfies files.WorkerRequest);
     }
     function openFile(file: File) {
-        reset();
+        reset("open");
         pause();
         navigation.reset(file);
         loading = true;
@@ -408,7 +408,7 @@ function createTraceImport({
         next.onerror = (event) => {
             if (worker !== next) return;
             event.preventDefault();
-            reset();
+            reset("error");
             fail(event.message || "The trace reader stopped unexpectedly.");
         };
         next.onmessage = (event: MessageEvent<files.WorkerResponse>) => {
@@ -448,7 +448,7 @@ function createTraceImport({
                 if (response.operation === "search") {
                     if (response.request === searchID) navigation.searchFailed(response.message);
                 } else if (response.request === undefined) {
-                    reset();
+                    reset("error");
                     fail(response.message);
                 } else if (response.request === pending?.id) windowFailed(response.message);
                 else if (response.request === prefetch?.id) {
@@ -467,10 +467,10 @@ function createTraceImport({
         if (file) openFile(file);
     });
     cancel.addEventListener("click", () => {
-        reset();
+        reset("close");
         message("Trace loading canceled.");
     });
-    element("file-close").addEventListener("click", reset);
+    element("file-close").addEventListener("click", () => reset("close"));
     element("file-skip-empty").addEventListener("change", cancelContinuation);
     element("file-speed-waits").addEventListener("change", cancelContinuation);
     element("file-loop").addEventListener("change", cancelContinuation);
@@ -485,7 +485,7 @@ function createTraceImport({
     });
     window.addEventListener("pagehide", close);
     window.addEventListener("pageshow", (event) => {
-        if (event.persisted) reset();
+        if (event.persisted) reset("restore");
     });
     return {
         close,

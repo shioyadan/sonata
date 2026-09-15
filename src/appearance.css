@@ -1286,3 +1286,30 @@ body.cinema .cinema-caption {
 [data-style="aluminum"] :is(#license-panel, #mobile-panel)::backdrop {
     background: #29394366;
 }
+
+@media (max-width: 760px), (max-width: 1000px) and (max-height: 600px) {
+    body[data-trace-loaded="false"] {
+        grid-template-rows: calc(56px + env(safe-area-inset-top)) minmax(0, 1fr);
+    }
+    .trace-welcome {
+        padding-inline: max(20px, env(safe-area-inset-left));
+        padding-bottom: max(24px, env(safe-area-inset-bottom));
+    }
+}
+@media (max-width: 1000px) and (max-height: 600px) and (min-width: 601px) {
+    body[data-trace-loaded="false"] {
+        grid-template-rows: calc(48px + env(safe-area-inset-top)) minmax(0, 1fr);
+    }
+    .trace-welcome {
+        padding-top: 24px;
+        padding-right: 228px;
+        padding-left: 32px;
+    }
+    .welcome-content h1 {
+        margin-top: 6px;
+    }
+    .welcome-open,
+    .welcome-content .field-label {
+        margin-top: 12px;
+    }
+}
