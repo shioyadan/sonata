@@ -10,7 +10,7 @@ const {
 } = require("./load-test.cjs")("browser-test.cts") as typeof import("./browser-test.cts");
 
 // 実ブラウザへの入力、故障の注入、状態を待ってからの検査を組み合わせる。
-// 別リポジトリや元ログに依存せず、コピー済みの配布 HTML を使う。
+// 別リポジトリや元ログに依存せず、配布 HTML と外部サンプルをローカル HTTP から読む。
 interface Frame {
     colored: number;
     error: number;
@@ -48,7 +48,11 @@ async function reviewBrowser(window: BrowserWindow, entry: string, screenshots?:
         waitFor(
             () =>
                 evaluate(
-                    ({ $ }) => !!globalThis.sonata && globalThis.sonata.renderer.error === 0 && $("fallback").hidden
+                    ({ $ }) =>
+                        !!globalThis.sonata?.hasTrace &&
+                        globalThis.sonata.trace.key === "rename-rush" &&
+                        globalThis.sonata.renderer.error === 0 &&
+                        $("fallback").hidden
                 ),
             "Renderer did not initialize"
         );
@@ -88,7 +92,7 @@ async function reviewBrowser(window: BrowserWindow, entry: string, screenshots?:
         await settle();
     };
 
-    await window.loadFile(entry);
+    await window.loadURL(entry);
     await ready();
     window.focus();
     const playhead = await reviewPlayhead(window);
@@ -289,7 +293,7 @@ async function reviewBrowser(window: BrowserWindow, entry: string, screenshots?:
                 } as typeof original;
             })
         });
-        await window.loadFile(entry);
+        await window.loadURL(entry);
         assert.equal(await evaluate(({ $ }) => $("fallback").hidden), false, "Missing WebGL did not show the fallback");
         assert.equal(await evaluate(({ $ }) => $("renderer-status").textContent), "WebGL 2 unavailable");
         assert.equal(
@@ -320,7 +324,7 @@ async function reviewBrowser(window: BrowserWindow, entry: string, screenshots?:
             debuggerAPI.detach();
         }
     }
-    await window.loadFile(entry);
+    await window.loadURL(entry);
     await ready();
 
     // 全スタイルで context を失わせ、材質テクスチャ・影も復旧後に再生成できることを確認する。
@@ -376,8 +380,8 @@ async function reviewBrowser(window: BrowserWindow, entry: string, screenshots?:
         if (visualStyle === "paper" || visualStyle === "aluminum")
             assert.ok(frame.upright, `${visualStyle}: context recovery rotated a sliding instruction`);
         if (visualStyle !== "neon") {
-            await evaluate(({ sonata }) => {
-                sonata.loadTrace("rename-rush");
+            await evaluate(async ({ sonata }) => {
+                await sonata.loadTrace("rename-rush");
                 return sonata.captureAt(459.4);
             });
             frame.pieceShadows = await require("./check-piece-shadows.cjs")(window);
@@ -400,7 +404,7 @@ async function reviewBrowser(window: BrowserWindow, entry: string, screenshots?:
                 };
             })
         });
-        await window.loadFile(entry);
+        await window.loadURL(entry);
         await ready();
         await evaluate(({ sonata, $ }) => {
             sonata.setPlaying(false);
@@ -436,8 +440,8 @@ async function reviewBrowser(window: BrowserWindow, entry: string, screenshots?:
                 instructionShape(style),
                 "MSAA fallback changed the instruction shape"
             );
-            await evaluate(({ sonata }) => {
-                sonata.loadTrace("rename-rush");
+            await evaluate(async ({ sonata }) => {
+                await sonata.loadTrace("rename-rush");
                 return sonata.captureAt(459.4);
             });
             frame.pieceShadows = await require("./check-piece-shadows.cjs")(window);
@@ -459,7 +463,7 @@ async function reviewBrowser(window: BrowserWindow, entry: string, screenshots?:
             debuggerAPI.detach();
         }
     }
-    await window.loadFile(entry);
+    await window.loadURL(entry);
     await ready();
     return {
         playhead,
@@ -506,8 +510,8 @@ async function reviewRobMarkers(window: BrowserWindow) {
             }, cycle)
         );
     try {
-        await evaluate(({ sonata }) => {
-            sonata.loadTrace("rename-rush");
+        await evaluate(async ({ sonata }) => {
+            await sonata.loadTrace("rename-rush");
             if (document.getElementById("motion-effects")!.getAttribute("aria-pressed") !== "true")
                 document.getElementById("motion-effects")!.click();
         });
@@ -537,8 +541,8 @@ async function reviewRobMarkers(window: BrowserWindow) {
         }
         return { styles: 3, afterEvent: true, continuous: true, reverseSeek: true, pause: true, motionToggle: true };
     } finally {
-        await evaluate(({ sonata }, original) => {
-            sonata.loadTrace(original.key);
+        await evaluate(async ({ sonata }, original) => {
+            await sonata.loadTrace(original.key);
             document.getElementById("style-" + original.style)!.click();
             const motion = document.getElementById("motion-effects")!;
             if ((motion.getAttribute("aria-pressed") === "true") !== original.motion) motion.click();
@@ -594,13 +598,13 @@ async function reviewPlayhead(window: BrowserWindow) {
             const inputSeek = sample();
             sonata.setCycle(sonata.trace.lastCycle);
             const end = sample();
-            sonata.loadTrace("wide-open");
+            await sonata.loadTrace("wide-open");
             const switched = sample();
             return { playing, stopped, paused, reverseSeek, inputSeek, end, switched };
         } finally {
             speed.value = original.speed;
             speed.dispatchEvent(new Event("change"));
-            sonata.loadTrace(original.key);
+            await sonata.loadTrace(original.key);
             sonata.setCycle(original.cycle);
             sonata.setPlaying(original.playing);
         }

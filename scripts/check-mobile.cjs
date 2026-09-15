@@ -22,9 +22,9 @@ module.exports = async function reviewMobile(window, screenshots, visualStyle = 
     try {
         await command("Emulation.setTouchEmulationEnabled", { enabled: true, maxTouchPoints: 2 });
         await js(`document.getElementById('style-'+${JSON.stringify(visualStyle)}).click()`);
-        await js(`sonata.loadTrace('rename-rush');sonata.captureAt(sonata.trace.demo.screenshotCycle);
+        await js(`(async()=>{await sonata.loadTrace('rename-rush');sonata.captureAt(sonata.trace.demo.screenshotCycle);
             if(document.getElementById('auto-camera').getAttribute('aria-pressed')==='true')document.getElementById('auto-camera').click();
-            document.querySelector('[data-view=orbit]').click();`);
+            document.querySelector('[data-view=orbit]').click();})()`);
         for (const [width, height, name] of [
             [320, 568, "-small"],
             [390, 844, ""],
@@ -206,10 +206,14 @@ module.exports = async function reviewMobile(window, screenshots, visualStyle = 
         assert.ok(
             await js("!document.getElementById('license-panel').open&&document.getElementById('mobile-panel').open")
         );
-        const keys = await js("embeddedFlowTraces.map(t=>t.key)");
+        const keys = await js("sonataDemoCatalog.map(t=>t.key)");
         for (const key of keys) {
             await js(
                 `(()=>{const select=document.getElementById('trace-select');select.value=${JSON.stringify(key)};select.dispatchEvent(new Event('change'));})()`
+            );
+            await waitUntil(
+                () => js(`sonata.hasTrace && sonata.trace.key===${JSON.stringify(key)}`),
+                "Mobile demo selection did not settle"
             );
             assert.ok(
                 await js(`document.getElementById('mobile-demo').textContent===sonata.trace.label
@@ -218,7 +222,7 @@ module.exports = async function reviewMobile(window, screenshots, visualStyle = 
             );
         }
         await js(
-            "sonata.loadTrace('memory-tide');sonata.captureAt(4068.6);document.getElementById('run-details').open=true"
+            "(async()=>{await sonata.loadTrace('memory-tide');sonata.captureAt(4068.6);document.getElementById('run-details').open=true;})()"
         );
         await settle();
         await capture("-settings");

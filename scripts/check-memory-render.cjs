@@ -51,8 +51,8 @@ module.exports = async function reviewMemory(window, screenshots) {
 
     for (const key of ["branch-storm", "rename-rush", "x86-recovery"]) {
         const selected = await sampleFrame(() =>
-            evaluate(({ sonata, $ }, key) => {
-                sonata.loadTrace(key);
+            evaluate(async ({ sonata, $ }, key) => {
+                await sonata.loadTrace(key);
                 $("style-aluminum").click();
                 const record = sonata.trace.storeCompletions.find(([id, end]) => {
                     const op = sonata.ops.find((op) => op.id === id);
@@ -130,8 +130,8 @@ module.exports = async function reviewMemory(window, screenshots) {
     }
 
     const waiting = await sampleFrame(() =>
-        evaluate(({ sonata, gl }) => {
-            sonata.loadTrace("memory-tide");
+        evaluate(async ({ sonata, gl }) => {
+            await sonata.loadTrace("memory-tide");
             const draw = gl.drawArraysInstanced,
                 batches = [];
             // ROB の診断座標だけでなく、駒と影の描画に渡したインスタンス座標も照合する。

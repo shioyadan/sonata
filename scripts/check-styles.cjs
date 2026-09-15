@@ -45,8 +45,8 @@ module.exports = async function reviewStyles(window, entry, screenshots) {
         }
         return { pixels, metrics: { background, coverage: different / total, changed: changed / total } };
     };
-    await window.loadFile(entry);
-    await waitFor("!!globalThis.sonata", "Style test did not initialize");
+    await window.loadURL(entry);
+    await waitFor("globalThis.sonata?.hasTrace && sonata.trace.key === 'rename-rush'", "Style test did not initialize");
     assert.equal(await js("sonata.visualStyle"), "neon", "Default style changed");
     assert.deepEqual(
         await js("[...document.querySelectorAll('[data-style-choice]')].map(el=>el.dataset.styleChoice)"),
@@ -83,9 +83,9 @@ module.exports = async function reviewStyles(window, entry, screenshots) {
             effects:['trails','auto-camera','motion-effects','instruction-stream'].map(id=>document.getElementById(id).getAttribute('aria-pressed'))});void 0;`);
     const scenes = [];
     let fixedRadius;
-    for (const key of await js("embeddedFlowTraces.map(t=>t.key)")) {
+    for (const key of await js("sonataDemoCatalog.map(t=>t.key)")) {
         const checkpoints = await js(
-            `sonata.loadTrace(${JSON.stringify(key)});[sonata.trace.demo.screenshotCycle,...sonata.trace.demo.bookmarks.map(b=>b.cycle+.4)]`
+            `(async()=>{await sonata.loadTrace(${JSON.stringify(key)});return [sonata.trace.demo.screenshotCycle,...sonata.trace.demo.bookmarks.map(b=>b.cycle+.4)];})()`
         );
         const stageLayout = await require("./check-stage-layout.cjs")(window);
         const stageTransfers = await require("./check-stage-transfers.cjs")(window);
@@ -199,14 +199,16 @@ module.exports = async function reviewStyles(window, entry, screenshots) {
         });
     }
     // 実入力で駒をピン留めし、カメラの補間途中でも同期的な切り替えが状態を変えないことを確認。
-    await js("sonata.loadTrace('rename-rush');sonata.captureAt(sonata.trace.demo.screenshotCycle)");
+    await js(
+        "(async()=>{await sonata.loadTrace('rename-rush');return sonata.captureAt(sonata.trace.demo.screenshotCycle);})()"
+    );
     assert.equal(await js("sonata.visualStyle"), matteStyles.at(-1), "Changing demos reset the style");
     await js("reviewStyle('aluminum')");
     // 実際の長い scheduler 待機・pipe 内の移動・commit と squash 後の経路を確認する。
     const sliding = {};
     for (const style of matteStyles) {
         const result = await sampleFrame(() =>
-            js(`(()=>{
+            js(`(async()=>{
             reviewStyle(${JSON.stringify(style)});
             const sample=t=>{sonata.captureAt(t);return sonata.pieces.find(p=>p.id===761);};
             const waiting=[sample(448),sample(455)],moving=[sample(459.4),sample(460.4)];
@@ -214,7 +216,7 @@ module.exports = async function reviewStyles(window, entry, screenshots) {
             sonata.captureAt(466.2);const retired=sonata.pieces.find(p=>p.id===761);
             sonata.captureAt(459.7);sonata.captureAt(460.4);const rewind=sonata.pieces;
             reviewStyle('neon');reviewStyle(${JSON.stringify(style)});const restoredStyle=sonata.pieces;
-            sonata.loadTrace('wide-open');sonata.loadTrace('rename-rush');sonata.captureAt(460.4);const reloaded=sonata.pieces;
+            await sonata.loadTrace('wide-open');await sonata.loadTrace('rename-rush');sonata.captureAt(460.4);const reloaded=sonata.pieces;
             sonata.captureAt(528.4);const squashed=sonata.pieces.filter(p=>sonata.ops.find(o=>o.id===p.id)?.flush);
             sonata.captureAt(459.4);
             return {waiting,moving,retired,rewound:JSON.stringify(original)===JSON.stringify(rewind),

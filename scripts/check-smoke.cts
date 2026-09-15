@@ -56,7 +56,16 @@ async function reviewSmoke(window: BrowserWindow, screenshots: string, begin: (n
         );
     };
     let done = begin("smoke/startup and playback");
-    await wait(() => evaluate(({ $ }) => !!globalThis.sonata && $("fallback").hidden), "Smoke page did not initialize");
+    await wait(
+        () =>
+            evaluate(
+                ({ $ }) =>
+                    !!globalThis.sonata?.hasTrace &&
+                    globalThis.sonata.trace.key === "rename-rush" &&
+                    $("fallback").hidden
+            ),
+        "Smoke page did not initialize"
+    );
     assert.equal(await evaluate(() => document.querySelectorAll("script[src],link[rel=stylesheet]").length), 0);
     const initial = await evaluate(({ sonata, $ }) => ({
         playing: sonata.playing,
@@ -106,7 +115,9 @@ async function reviewSmoke(window: BrowserWindow, screenshots: string, begin: (n
 
     done = begin("smoke/demos");
     const keys = await evaluate(() =>
-        [...document.querySelectorAll<HTMLOptionElement>("#trace-select option")].map((option) => option.value)
+        [...document.querySelectorAll<HTMLOptionElement>("#trace-select option")]
+            .map((option) => option.value)
+            .filter(Boolean)
     );
     assert.deepEqual(keys, ["branch-storm", "wide-open", "memory-tide", "rename-rush", "x86-recovery"]);
     const demos = [];
@@ -116,6 +127,10 @@ async function reviewSmoke(window: BrowserWindow, screenshots: string, begin: (n
             select.value = key;
             select.dispatchEvent(new Event("change"));
         }, key);
+        await wait(
+            () => evaluate(({ sonata }, key) => sonata.hasTrace && sonata.trace.key === key, key),
+            "Demo selector did not finish loading"
+        );
         const frame = await readFrame();
         assert.equal(frame.trace, key, "Demo selector did not load the requested trace");
         checkFrame(frame);
@@ -124,8 +139,8 @@ async function reviewSmoke(window: BrowserWindow, screenshots: string, begin: (n
     done();
 
     done = begin("smoke/styles and stores");
-    await evaluate(({ sonata }) => {
-        sonata.loadTrace("memory-tide");
+    await evaluate(async ({ sonata }) => {
+        await sonata.loadTrace("memory-tide");
         sonata.captureAt(3970.9);
     });
     const styles = [];
