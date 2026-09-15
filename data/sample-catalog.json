@@ -1,0 +1,261 @@
+[
+  {
+    "key": "branch-storm",
+    "label": "01 · Branch storm",
+    "url": "samples/gem5-arm-coremark.log.gz",
+    "name": "gem5-traces/full-2iter/arm64/trace.log.gz",
+    "firstCycle": 73208,
+    "lastCycle": 73335,
+    "initialCycle": 73208,
+    "source": "gem5 ARM64 CoreMark",
+    "provenance": {
+      "simulator": "gem5 v25.1.0.1 · O3",
+      "workload": "CoreMark · 2 iterations",
+      "processor": "ARM64 / AArch64 · out-of-order",
+      "configuration": "8-wide fetch / decode / rename / dispatch / issue / commit; 192-entry ROB; 2 GHz; one thread; L1 caches; 512 MiB memory.",
+      "note": "CoreMark performance workload, 2 KB input. Both ARM64 demos are excerpts from the same run. This short run is for trace inspection, not a scored CoreMark result.",
+      "workloadKnown": true,
+      "robEntries": 192,
+      "evidence": [
+        "gem5-traces/full-2iter/README.md",
+        "gem5-traces/full-2iter/arm64/config.ini",
+        "gem5-traces/full-2iter/arm64/coremark.out"
+      ]
+    },
+    "description": "Wide bursts of work, then successive waves of wrong-path instructions scatter.",
+    "theme": "BRANCH RECOVERY",
+    "bookmarks": [
+      {
+        "cycle": 73228,
+        "label": "34 squashed",
+        "type": "flush"
+      },
+      {
+        "cycle": 73253,
+        "label": "32 squashed",
+        "type": "flush"
+      },
+      {
+        "cycle": 73269,
+        "label": "33 squashed",
+        "type": "flush"
+      },
+      {
+        "cycle": 73287,
+        "label": "29 squashed",
+        "type": "flush"
+      },
+      {
+        "cycle": 73312,
+        "label": "51 squashed",
+        "type": "flush"
+      },
+      {
+        "cycle": 73323,
+        "label": "54 squashed",
+        "type": "flush"
+      }
+    ],
+    "screenshotCycle": 73211.4,
+    "config": {
+      "isa": "aarch64",
+      "machineOrder": "out-of-order",
+      "robEntries": 192,
+      "allocationWidth": 8,
+      "wordBits": 64
+    }
+  },
+  {
+    "key": "wide-open",
+    "label": "02 · Wide open",
+    "url": "samples/gem5-arm-coremark.log.gz",
+    "name": "gem5-traces/full-2iter/arm64/trace.log.gz",
+    "firstCycle": 73388,
+    "lastCycle": 73515,
+    "initialCycle": 73388,
+    "source": "gem5 ARM64 CoreMark",
+    "provenance": {
+      "simulator": "gem5 v25.1.0.1 · O3",
+      "workload": "CoreMark · 2 iterations",
+      "processor": "ARM64 / AArch64 · out-of-order",
+      "configuration": "8-wide fetch / decode / rename / dispatch / issue / commit; 192-entry ROB; 2 GHz; one thread; L1 caches; 512 MiB memory.",
+      "note": "CoreMark performance workload, 2 KB input. Both ARM64 demos are excerpts from the same run. This short run is for trace inspection, not a scored CoreMark result.",
+      "workloadKnown": true,
+      "robEntries": 192,
+      "evidence": [
+        "gem5-traces/full-2iter/README.md",
+        "gem5-traces/full-2iter/arm64/config.ini",
+        "gem5-traces/full-2iter/arm64/coremark.out"
+      ]
+    },
+    "description": "A dense stream of instructions fills the machine and pours into commit.",
+    "theme": "HIGH THROUGHPUT",
+    "bookmarks": [
+      {
+        "cycle": 73398,
+        "label": "Commit burst",
+        "type": "highlight"
+      }
+    ],
+    "screenshotCycle": 73499.4,
+    "config": {
+      "isa": "aarch64",
+      "machineOrder": "out-of-order",
+      "robEntries": 192,
+      "allocationWidth": 8,
+      "wordBits": 64
+    }
+  },
+  {
+    "key": "memory-tide",
+    "label": "03 · Miss & recover",
+    "url": "samples/rsd-memory.log.gz",
+    "name": "rsd/mshr.log.gz",
+    "firstCycle": 3964,
+    "lastCycle": 4091,
+    "initialCycle": 3964,
+    "source": "RSD memory",
+    "provenance": {
+      "simulator": "RSD processor",
+      "workload": "IntRegImm test · startup",
+      "processor": "RSD · RISC-V · out-of-order",
+      "configuration": "Captured from the RSD processor. The simulator backend, version and run configuration are not identified in the retained trace.",
+      "note": "Source: mshr.log. The recorded instruction stream matches RSD's IntRegImm test. This excerpt shows the _load startup routine copying initialized data and clearing BSS. D$-miss / MSHR and Br-pred-miss-ex annotations record cache misses and branch mispredictions.",
+      "workloadKnown": true,
+      "evidence": [
+        "User confirmation: trace acquired from processor RSD",
+        "rsd/mshr.log",
+        "https://github.com/rsd-devel/rsd/blob/7b65f6ba0bce58d4d859082660123b7100aae975/Processor/Src/Verification/TestCode/rsd-loader.c",
+        "https://github.com/rsd-devel/rsd/blob/7b65f6ba0bce58d4d859082660123b7100aae975/Processor/Src/Verification/TestCode/Asm/IntRegImm/code.s"
+      ]
+    },
+    "description": "D-cache misses hold up loads, then a branch misprediction clears the wrong path.",
+    "theme": "BRANCH + CACHE MISSES",
+    "bookmarks": [
+      {
+        "cycle": 3992,
+        "label": "D-cache miss",
+        "type": "highlight"
+      },
+      {
+        "cycle": 4014,
+        "label": "Memory ready → scheduler",
+        "type": "highlight"
+      },
+      {
+        "cycle": 4066,
+        "label": "Branch misprediction",
+        "type": "highlight"
+      },
+      {
+        "cycle": 4068,
+        "label": "15 squashed",
+        "type": "flush"
+      }
+    ],
+    "screenshotCycle": 3970.4,
+    "config": {
+      "isa": "riscv",
+      "machineOrder": "out-of-order"
+    }
+  },
+  {
+    "key": "rename-rush",
+    "label": "04 · Rename rush",
+    "url": "samples/gem5-arm-registers.log.gz",
+    "name": "gem5-traces/detailed/arm64/trace.log.gz",
+    "firstCycle": 404,
+    "lastCycle": 531,
+    "initialCycle": 404,
+    "source": "gem5 ARM64 · register trace",
+    "provenance": {
+      "simulator": "gem5 v25.1.0.1 · O3",
+      "workload": "CoreMark · 1 iteration",
+      "processor": "ARM64 / AArch64 · out-of-order",
+      "configuration": "8-wide pipeline; 192-entry ROB; 256 integer physical registers; 2 GHz; one thread.",
+      "note": "Detailed O3PipeView + O3CPUAll trace of CoreMark's core_list_init function. Actual integer rename mappings, register reads and values are recorded. The rename map shows x0–x30 and SP_EL0; unobserved mappings stay blank. This short run is for trace inspection, not a scored CoreMark result.",
+      "workloadKnown": true,
+      "robEntries": 192,
+      "evidence": [
+        "gem5-parser-study/report.md",
+        "gem5-traces/detailed/arm64/config.ini",
+        "gem5-traces/detailed/arm64/trace.log"
+      ]
+    },
+    "description": "ARM64 fills the register bank with new versions, then unwinds mappings on recovery.",
+    "theme": "RECORDED REGISTER ACTIVITY",
+    "bookmarks": [
+      {
+        "cycle": 420,
+        "label": "Register write burst",
+        "type": "highlight"
+      },
+      {
+        "cycle": 528,
+        "label": "184 squashed · mapping recovery",
+        "type": "flush"
+      }
+    ],
+    "screenshotCycle": 459.4,
+    "config": {
+      "isa": "aarch64",
+      "machineOrder": "out-of-order",
+      "robEntries": 192,
+      "allocationWidth": 8,
+      "wordBits": 64,
+      "integerRegisters": 256
+    }
+  },
+  {
+    "key": "x86-recovery",
+    "label": "05 · x86 recovery",
+    "url": "samples/gem5-x86-registers.log.gz",
+    "name": "gem5-traces/detailed/x86/trace.log.gz",
+    "firstCycle": 1596,
+    "lastCycle": 1723,
+    "initialCycle": 1596,
+    "source": "gem5 x86 · register trace",
+    "provenance": {
+      "simulator": "gem5 v25.1.0.1 · O3",
+      "workload": "CoreMark · 1 iteration",
+      "processor": "x86-64 · out-of-order · micro-ops",
+      "configuration": "8-wide pipeline; 192-entry ROB; 256 integer physical registers; 2 GHz; one thread.",
+      "note": "Detailed O3PipeView + O3CPUAll trace of CoreMark's core_list_mergesort and cmp_idx functions. x86 macro-instructions expand into micro-ops. Actual integer rename mappings, register reads and values are recorded. The rename map shows all 16 architectural integer registers and 16 micro-op temporaries; unobserved mappings stay blank. This short run is for trace inspection, not a scored CoreMark result.",
+      "workloadKnown": true,
+      "robEntries": 192,
+      "evidence": [
+        "gem5-parser-study/report.md",
+        "gem5-traces/detailed/x86/config.ini",
+        "gem5-traces/detailed/x86/trace.log"
+      ]
+    },
+    "description": "x86 micro-ops fan out across the machine, with real register reads and waves of recovery.",
+    "theme": "MICRO-OPS + REGISTER VALUES",
+    "bookmarks": [
+      {
+        "cycle": 1600,
+        "label": "54 squashed · mapping recovery",
+        "type": "flush"
+      },
+      {
+        "cycle": 1634,
+        "label": "Register write burst",
+        "type": "highlight"
+      },
+      {
+        "cycle": 1688,
+        "label": "45 squashed · mapping recovery",
+        "type": "flush"
+      }
+    ],
+    "screenshotCycle": 1634.4,
+    "config": {
+      "isa": "x86",
+      "machineOrder": "out-of-order",
+      "robEntries": 192,
+      "allocationWidth": 8,
+      "wordBits": 64,
+      "integerRegisters": 256
+    }
+  }
+]

@@ -1,0 +1,45 @@
+{
+  "version": 1,
+  "sources": [
+    {
+      "file": "gem5-arm-coremark.log.gz",
+      "source": "gem5-traces/full-2iter/arm64/trace.log",
+      "sourceBytes": 210340486,
+      "sourceSha256": "8211ebb72756fcd2f46a5e1eb6c1215a48bc532aa3d5e8c0fd4203a0692f4fa2",
+      "prefixBytes": 24043690,
+      "rawSha256": "58552bc7fd2d274fca4c0ef55de8a1f36249e90854097fe926e661134034d3e8",
+      "bytes": 1469582,
+      "sha256": "4a79ff67481998a18e1fc5b0ea011329cc027737f8054fe554c06d29c2eb881f"
+    },
+    {
+      "file": "gem5-arm-registers.log.gz",
+      "source": "gem5-traces/detailed/arm64/trace.log",
+      "sourceBytes": 49947266,
+      "sourceSha256": "b86cd538f0ade2b40fecfbe2448369b308d079e9baf0a6e4320c432c0927f291",
+      "prefixBytes": 7398575,
+      "rawSha256": "9f16d1f7fa9b1c51d904c0b42deb1a89233bae9d2e583abe33fec6372746ec16",
+      "bytes": 638810,
+      "sha256": "a42927f804f568fde33d2baddce15dafac2ac9bea817df6ef141d34629967116"
+    },
+    {
+      "file": "gem5-x86-registers.log.gz",
+      "source": "gem5-traces/detailed/x86/trace.log",
+      "sourceBytes": 79074234,
+      "sourceSha256": "2bdf232690f058d5657b049c4b1efdd1272c2fe0a8484a47c1b8fdac66141875",
+      "prefixBytes": 23764168,
+      "rawSha256": "1a5022c4ef437625c00c8f3c41e48cb6dec1faddc8a99f728a25435246c29d36",
+      "bytes": 2014699,
+      "sha256": "49cb78b27c46c53a5272457922cf94e2dc244eb55a8b543bf3c70ecd801bad57"
+    },
+    {
+      "file": "rsd-memory.log.gz",
+      "source": "rsd/mshr.log",
+      "sourceBytes": 4321125,
+      "sourceSha256": "31af9d3798e9770e17d53073010b9bf4308fdbdf7572466fc573d6bbfb77a246",
+      "prefixBytes": 4321125,
+      "rawSha256": "31af9d3798e9770e17d53073010b9bf4308fdbdf7572466fc573d6bbfb77a246",
+      "bytes": 736198,
+      "sha256": "5d44b40d811ebd0a17c9cc8b2ee41770a6bef82ece3ab007bb734ecd764acb90"
+    }
+  ]
+}

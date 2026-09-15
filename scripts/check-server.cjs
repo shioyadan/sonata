@@ -79,8 +79,8 @@ async function main() {
             "/%2e%2e/README.md",
             "/samples/../data/traces.js",
             "/samples/%2e%2e/.git/config",
-            "/samples/missing.json",
-            "/samples/branch-storm.json/extra"
+            "/samples/missing.log.gz",
+            "/samples/gem5-arm-coremark.log.gz/extra"
         ]) {
             assert.equal((await request(target)).status, 404, `Source path exposed: ${target}`);
         }
@@ -91,8 +91,13 @@ async function main() {
             const response = await request(`${target}?cache=1`);
             assert.equal(response.status, 200);
             assert.deepEqual(response.body, bytes);
-            assert.match(response.headers["content-type"], /application\/json; charset=utf-8/);
+            assert.match(response.headers["content-type"], /^application\/gzip$/);
             assert.equal(response.headers["x-content-type-options"], "nosniff");
+            assert.equal(
+                response.headers["content-encoding"],
+                undefined,
+                "gzip bytes must reach the trace reader unchanged"
+            );
             const sampleHead = await request(target, "HEAD");
             assert.equal(sampleHead.status, 200);
             assert.equal(sampleHead.body.length, 0);
@@ -137,7 +142,10 @@ async function checkIsolatedDistribution() {
         for (const file of fs.readdirSync(path.join(root, "dist/samples"))) {
             const response = await fetch(`${origin}/samples/${file}`);
             assert.equal(response.status, 200);
-            assert.equal(await response.text(), fs.readFileSync(path.join(temp, "samples", file), "utf8"));
+            assert.deepEqual(
+                Buffer.from(await response.arrayBuffer()),
+                fs.readFileSync(path.join(temp, "samples", file))
+            );
         }
         assert.equal((await fetch(`${origin}/samples/unlisted.json`)).status, 404, "Server exposed an unlisted file");
         const missing = fs.readdirSync(path.join(root, "dist/samples"))[0];
@@ -148,7 +156,9 @@ async function checkIsolatedDistribution() {
         assert.equal((await missingHead.arrayBuffer()).byteLength, 0);
         const html = fs.readFileSync(htmlPath, "utf8");
         for (const entry of [
-            { key: "../escape", url: "samples/../escape.json" },
+            { key: "../escape", url: "samples/../escape.log.gz" },
+            { key: "branch-storm", url: "https://example.test/trace.log.gz" },
+            { key: "branch-storm", url: "samples/../escape.log.gz" },
             { key: "branch-storm", url: "../data/traces.js" }
         ]) {
             fs.writeFileSync(

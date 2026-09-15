@@ -17,6 +17,8 @@ const readTrace = (source) => {
 };
 const original = read("data/traces.js");
 const expected = readTrace(original);
+const definitions = JSON.parse(read("data/sample-catalog.json"));
+const sources = JSON.parse(read("data/sample-sources.json")).sources;
 assert.deepEqual(readTrace(formatTraceScript(original)), expected);
 assert.equal(
     formatTraceScript(formatTraceScript(original)),
@@ -64,14 +66,26 @@ assert.equal(workerContext.embeddedFlowTraces, undefined, "HTML still initialize
 const catalog = JSON.parse(JSON.stringify(workerContext.sonataDemoCatalog));
 assert.deepEqual(
     catalog,
-    expected.map(({ key, label }) => ({ key, label, url: `samples/${key}.json` })),
-    "Demo catalog changed the labels, order or portable sample URLs"
+    definitions.map((entry) => ({
+        ...entry,
+        size: sources.find((source) => entry.url === `samples/${source.file}`).bytes
+    })),
+    "Demo catalog changed the labels, metadata or portable sample URLs"
 );
-const sampleFiles = expected.map(({ key }) => `${key}.json`).sort();
+assert.deepEqual(
+    catalog.map(({ key, label }) => ({ key, label })),
+    expected.map(({ key, label }) => ({ key, label }))
+);
+assert.ok(JSON.stringify(catalog).length < 32768, "Sample metadata is no longer a small catalog");
+const sampleFiles = sources.map(({ file }) => file).sort();
 assert.deepEqual(fs.readdirSync(path.join(root, "dist/samples")).sort(), sampleFiles);
-for (const [index, demo] of expected.entries()) {
-    const sample = fs.readFileSync(path.join(root, "dist", catalog[index].url));
-    assert.deepEqual(JSON.parse(sample), demo, `Sample changed recorded data or provenance: ${demo.key}`);
+for (const source of sources) {
+    const sample = fs.readFileSync(path.join(root, "dist/samples", source.file));
+    assert.deepEqual(sample, fs.readFileSync(path.join(root, "data/samples", source.file)));
+    assert.equal(createHash("sha256").update(sample).digest("hex"), source.sha256);
+    assert.deepEqual([...sample.subarray(0, 3)], [31, 139, 8], "Sample is not a raw gzip stream");
+}
+for (const demo of expected) {
     assert.ok(!html.includes(JSON.stringify(demo.ops)), `HTML still includes instructions: ${demo.key}`);
 }
 assert.ok(workerContext.sonataTraceWorkerSource.includes("PagedOpStore"), "Offline trace reader missing");
@@ -81,6 +95,9 @@ try {
     for (const entry of ["src", "data", "vendor", "LICENSE.md", "THIRD_PARTY_NOTICES.md", "licenses"]) {
         fs.cpSync(path.join(root, entry), path.join(temp, entry), { recursive: true });
     }
+    // 旧デモJSONは移行比較用だけで、ビルドには不要。
+    fs.unlinkSync(path.join(temp, "data/traces.js"));
+    fs.unlinkSync(path.join(temp, "data/demo-manifest.json"));
     fs.mkdirSync(path.join(temp, "scripts"));
     for (const file of ["build.cjs", "bundle.cjs"])
         fs.copyFileSync(path.join(root, "scripts", file), path.join(temp, "scripts", file));
@@ -110,17 +127,36 @@ try {
     assert.deepEqual(fs.readdirSync(isolatedSamples).sort(), sampleFiles);
     // ファイル名はデータから組み立てるため、ディレクトリ移動や重複を生成前に拒否する。
     for (const key of ["../escape", "a/b", "a\\b", "%2e%2e", "demo.json", expected[1].key]) {
-        const invalid = structuredClone(expected);
+        const invalid = structuredClone(definitions);
         invalid[0].key = key;
-        fs.writeFileSync(
-            path.join(temp, "data/traces.js"),
-            `globalThis.embeddedFlowTraces=${JSON.stringify(invalid)};`
-        );
+        fs.writeFileSync(path.join(temp, "data/sample-catalog.json"), JSON.stringify(invalid));
         const rejected = isolatedBuild();
         assert.notEqual(rejected.status, 0, `Unsafe demo key accepted: ${key}`);
         assert.match(rejected.stderr, /Invalid or duplicate demo key/);
     }
-    assert.ok(!fs.existsSync(path.join(temp, "dist/escape.json")), "Demo key escaped its output directory");
+    assert.ok(!fs.existsSync(path.join(temp, "dist/escape.log.gz")), "Demo key escaped its output directory");
+    for (const url of [
+        "../escape.log.gz",
+        "samples/../escape.log.gz",
+        "https://example.test/trace.log.gz",
+        "samples/missing.log.gz",
+        "samples/rename-rush.json"
+    ]) {
+        const invalid = structuredClone(definitions);
+        invalid[0].url = url;
+        fs.writeFileSync(path.join(temp, "data/sample-catalog.json"), JSON.stringify(invalid));
+        const rejected = isolatedBuild();
+        assert.notEqual(rejected.status, 0, `Unsafe sample URL accepted: ${url}`);
+        assert.match(rejected.stderr, /Invalid or missing sample URL/);
+    }
+    fs.writeFileSync(path.join(temp, "data/sample-catalog.json"), JSON.stringify(definitions));
+    const samplePath = path.join(temp, "data/samples", sampleFiles[0]);
+    const changed = fs.readFileSync(samplePath);
+    changed[changed.length - 1] ^= 1;
+    fs.writeFileSync(samplePath, changed);
+    const rejected = isolatedBuild();
+    assert.notEqual(rejected.status, 0, "Build accepted changed raw sample bytes");
+    assert.match(rejected.stderr, /Sample bytes changed/);
 } finally {
     fs.rmSync(temp, { recursive: true, force: true });
 }
@@ -132,5 +168,5 @@ for (const [file, hash] of Object.entries(upstream.files)) {
     assert.equal(actual, hash, `Vendored ${file} changed; document the change in UPSTREAM.json`);
 }
 console.log(
-    `Build: ${expected.length} external samples unchanged; catalog only in HTML; UTF-8; offline reader; reproducible outside checkout; ${Object.keys(upstream.files).length} upstream files verified`
+    `Build: ${expected.length} demos / ${sampleFiles.length} raw gzip samples unchanged; catalog only in HTML; UTF-8; offline reader; reproducible outside checkout; ${Object.keys(upstream.files).length} upstream files verified`
 );

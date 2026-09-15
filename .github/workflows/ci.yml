@@ -33,7 +33,7 @@ jobs:
         run: npm run format:check
       - name: Check TypeScript boundaries
         run: npm run typecheck
-      - name: Check replay model and portable HTML build
+      - name: Check replay model, portable HTML and raw samples
         run: npm test
       - name: Check preview server and malformed requests
         run: npm run test:server
@@ -82,7 +82,7 @@ jobs:
         with:
           node-version-file: .nvmrc
       # 検証済みのコミットを Node だけでビルドし、実行時の依存パッケージは含めない。
-      - name: Build the live demo
+      - name: Build the live demo and raw trace samples
         run: |
           npm run build
           mkdir -p artifacts/pages

@@ -11,14 +11,17 @@ function createServer(htmlPath = build()) {
     const catalog = JSON.parse(assignment[1]);
     if (!Array.isArray(catalog)) throw new Error("Invalid demo catalog");
     const samples = new Map();
+    const keys = new Set();
     for (const { key, url } of catalog) {
         if (
+            keys.has(key) ||
             typeof key !== "string" ||
             !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(key) ||
-            url !== `samples/${key}.json` ||
-            samples.has(`/${url}`)
+            typeof url !== "string" ||
+            !/^samples\/[a-z0-9]+(?:-[a-z0-9]+)*\.log\.gz$/.test(url)
         )
             throw new Error(`Invalid or duplicate demo URL: ${url}`);
+        keys.add(key);
         samples.set(`/${url}`, path.join(path.dirname(htmlPath), url));
     }
     return http.createServer((request, response) => {
@@ -41,7 +44,7 @@ function createServer(htmlPath = build()) {
         }
         const send = (content, type) => {
             response.writeHead(200, {
-                "Content-Type": `${type}; charset=utf-8`,
+                "Content-Type": type,
                 "Cache-Control": "no-store",
                 "Content-Length": content.length,
                 "X-Content-Type-Options": "nosniff"
@@ -49,7 +52,7 @@ function createServer(htmlPath = build()) {
             response.end(request.method === "HEAD" ? undefined : content);
         };
         if (["/", "/sonata.html"].includes(pathname)) {
-            send(html, "text/html");
+            send(html, "text/html; charset=utf-8");
             return;
         }
         const sample = samples.get(pathname);
@@ -60,7 +63,7 @@ function createServer(htmlPath = build()) {
         // カタログで確定した生成物だけを配信する。URL から任意の fs パスを組み立てない。
         fs.readFile(sample, (error, content) => {
             if (error) fail(error.code === "ENOENT" ? 404 : 500, error.code === "ENOENT" ? "Not found" : "Read failed");
-            else send(content, "application/json");
+            else send(content, "application/gzip");
         });
     });
 }

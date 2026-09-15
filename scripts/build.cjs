@@ -1,7 +1,8 @@
 "use strict";
-// Node の標準機能だけで、本体 HTML と必要時に読み込むサンプル JSON を生成する。
+// Node の標準機能だけで、本体 HTML と必要時に読み込む生トレースの圧縮ファイルを生成する。
 const fs = require("node:fs");
 const path = require("node:path");
+const { createHash } = require("node:crypto");
 const root = path.resolve(__dirname, "..");
 const { bundle } = require("./bundle.cjs");
 const read = (file) => fs.readFileSync(path.join(root, file), "utf8");
@@ -46,16 +47,48 @@ function formatTraceScript(source) {
 }
 
 function build() {
-    const traces = JSON.parse(traceJson(read("data/traces.js")).json);
-    if (!Array.isArray(traces) || !traces.length) throw new Error("Missing demo traces");
+    const definitions = JSON.parse(read("data/sample-catalog.json"));
+    const sources = JSON.parse(read("data/sample-sources.json"));
+    if (!Array.isArray(definitions) || !definitions.length || sources.version !== 1 || !Array.isArray(sources.sources))
+        throw new Error("Missing demo catalog or sample sources");
+    const files = new Map();
+    for (const source of sources.sources) {
+        if (
+            typeof source.file !== "string" ||
+            !/^[a-z0-9]+(?:-[a-z0-9]+)*\.log\.gz$/.test(source.file) ||
+            files.has(source.file)
+        )
+            throw new Error(`Invalid or duplicate sample file: ${source.file}`);
+        const bytes = fs.readFileSync(path.join(root, "data/samples", source.file));
+        if (bytes.length !== source.bytes || createHash("sha256").update(bytes).digest("hex") !== source.sha256)
+            throw new Error(`Sample bytes changed: ${source.file}`);
+        files.set(source.file, bytes);
+    }
     const keys = new Set();
-    const catalog = traces.map(({ key, label }) => {
+    const used = new Set();
+    const catalog = definitions.map((entry) => {
+        const { key, label, url, firstCycle, lastCycle, initialCycle } = entry;
         if (typeof key !== "string" || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(key) || keys.has(key))
             throw new Error(`Invalid or duplicate demo key: ${key}`);
         if (typeof label !== "string" || !label) throw new Error(`Missing demo label: ${key}`);
+        const filename = typeof url === "string" && /^samples\/([a-z0-9]+(?:-[a-z0-9]+)*\.log\.gz)$/.exec(url)?.[1];
+        const bytes = filename && files.get(filename);
+        if (!bytes) throw new Error(`Invalid or missing sample URL: ${url}`);
+        if (
+            ![firstCycle, lastCycle, initialCycle].every(Number.isFinite) ||
+            firstCycle < 0 ||
+            lastCycle < firstCycle ||
+            initialCycle < firstCycle ||
+            initialCycle > lastCycle
+        )
+            throw new Error(`Invalid demo window: ${key}`);
+        if (["ops", "evidence", "topDown", "events"].some((field) => field in entry))
+            throw new Error(`Demo catalog contains parsed records: ${key}`);
         keys.add(key);
-        return { key, label, url: `samples/${key}.json` };
+        used.add(filename);
+        return { ...entry, size: bytes.length };
     });
+    if (used.size !== files.size) throw new Error("Unreferenced sample source");
     let html = read("src/index.html");
     const license = read("LICENSE.md").replace(/--/g, "—");
     html = html.replace("<!doctype html>", () => `<!doctype html>\n<!-- Sonata · BSD-3-Clause\n${license}\n-->`);
@@ -92,15 +125,14 @@ function build() {
         .map((file) => path.join(root, "src", file));
     const scripts = [
         [
-            "../data/traces.js",
+            '<script id="demo-catalog"></script>',
             `globalThis.sonataDemoCatalog=${JSON.stringify(catalog)};\n` +
                 `globalThis.sonataTraceWorkerSource=${JSON.stringify(worker)};\n`
         ],
-        ["sonata.cts", bundle(root, "src/sonata.cts", uiFiles)]
+        ['<script src="sonata.cts"></script>', bundle(root, "src/sonata.cts", uiFiles)]
     ];
-    for (const [url, source] of scripts) {
-        const tag = `<script src="${url}"></script>`;
-        if (!html.includes(tag)) throw new Error(`Missing source script: ${url}`);
+    for (const [tag, source] of scripts) {
+        if (!html.includes(tag)) throw new Error(`Missing source script: ${tag}`);
         html = html.replace(tag, () => `<script>\n${source.replace(/<\/script/gi, "<\\/script")}\n</script>`);
     }
     if (/<script\b[^>]*\bsrc\s*=|<link\b[^>]*rel="stylesheet"|(?:src|href)="(?:\.\.\/|sonata-)/i.test(html))
@@ -110,12 +142,10 @@ function build() {
     // 再ビルドで削除済みのデモを配布しない。生成物以外には触れない。
     fs.rmSync(samples, { recursive: true, force: true });
     fs.mkdirSync(samples, { recursive: true });
-    traces.forEach((trace, index) => {
-        fs.writeFileSync(path.join(path.dirname(output), catalog[index].url), JSON.stringify(trace) + "\n");
-    });
+    for (const [filename, bytes] of files) fs.writeFileSync(path.join(samples, filename), bytes);
     fs.writeFileSync(output, html);
     console.log(
-        `${path.relative(process.cwd(), output)} · ${Math.round(Buffer.byteLength(html) / 1024)} KiB · ${catalog.length} external samples`
+        `${path.relative(process.cwd(), output)} · ${Math.round(Buffer.byteLength(html) / 1024)} KiB · ${catalog.length} demos / ${files.size} raw trace files`
     );
     return output;
 }
