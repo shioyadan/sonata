@@ -2,8 +2,10 @@
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const http = require("node:http");
+const os = require("node:os");
 const path = require("node:path");
 const { spawn } = require("node:child_process");
+const { createServer } = require("./serve.cjs");
 const root = path.resolve(__dirname, "..");
 
 async function main() {
@@ -74,15 +76,34 @@ async function main() {
             "/.git/config",
             "/work/HANDOFF.md",
             "/../README.md",
-            "/%2e%2e/README.md"
+            "/%2e%2e/README.md",
+            "/samples/../data/traces.js",
+            "/samples/%2e%2e/.git/config",
+            "/samples/missing.json",
+            "/samples/branch-storm.json/extra"
         ]) {
             assert.equal((await request(target)).status, 404, `Source path exposed: ${target}`);
+        }
+        const sampleDirectory = path.join(root, "dist/samples");
+        for (const file of fs.readdirSync(sampleDirectory)) {
+            const target = `/samples/${file}`;
+            const bytes = fs.readFileSync(path.join(sampleDirectory, file));
+            const response = await request(`${target}?cache=1`);
+            assert.equal(response.status, 200);
+            assert.deepEqual(response.body, bytes);
+            assert.match(response.headers["content-type"], /application\/json; charset=utf-8/);
+            assert.equal(response.headers["x-content-type-options"], "nosniff");
+            const sampleHead = await request(target, "HEAD");
+            assert.equal(sampleHead.status, 200);
+            assert.equal(sampleHead.body.length, 0);
+            assert.equal(Number(sampleHead.headers["content-length"]), bytes.length);
+            assert.equal((await request(target, "POST")).status, 405);
         }
         const post = await request("/", "POST");
         assert.equal(post.status, 405);
         assert.equal(post.headers.allow, "GET, HEAD");
         // 不正なリクエストを拒否した後も、次の利用者へ配信できることを確認する。
-        for (const target of ["//[", "//%"]) {
+        for (const target of ["//[", "//%", "/samples/%", "/samples/%ff"]) {
             assert.equal((await request(target)).status, 400);
             assert.equal((await request("/")).status, 200, "Malformed URL stopped the server");
         }
@@ -91,13 +112,64 @@ async function main() {
             `(node:${child.pid}) ExperimentalWarning: stripTypeScriptTypes is an experimental feature and might change at any time\n` +
             "(Use `node --trace-warnings ...` to show where the warning was created)\n";
         assert.ok(errors === "" || errors === transformWarning, `Unexpected server diagnostics:\n${errors}`);
-        console.log("Server: HTML / HEAD / source isolation / method rejection / malformed URL recovery verified");
+        console.log(
+            "Server: HTML / samples / HEAD / source isolation / method rejection / malformed URL recovery verified"
+        );
     } finally {
         child.kill();
         await stopped;
     }
 }
-main().catch((error) => {
-    console.error(error);
-    process.exitCode = 1;
-});
+async function checkIsolatedDistribution() {
+    const temp = fs.mkdtempSync(path.join(os.tmpdir(), "sonata-server-"));
+    let server;
+    try {
+        fs.cpSync(path.join(root, "dist"), temp, { recursive: true });
+        const htmlPath = path.join(temp, "sonata.html");
+        fs.writeFileSync(path.join(temp, "samples/unlisted.json"), '{"private":true}');
+        server = createServer(htmlPath);
+        await new Promise((resolve, reject) => {
+            server.once("error", reject);
+            server.listen(0, "127.0.0.1", resolve);
+        });
+        const origin = `http://127.0.0.1:${server.address().port}`;
+        assert.equal(await (await fetch(origin)).text(), fs.readFileSync(htmlPath, "utf8"));
+        for (const file of fs.readdirSync(path.join(root, "dist/samples"))) {
+            const response = await fetch(`${origin}/samples/${file}`);
+            assert.equal(response.status, 200);
+            assert.equal(await response.text(), fs.readFileSync(path.join(temp, "samples", file), "utf8"));
+        }
+        assert.equal((await fetch(`${origin}/samples/unlisted.json`)).status, 404, "Server exposed an unlisted file");
+        const missing = fs.readdirSync(path.join(root, "dist/samples"))[0];
+        fs.unlinkSync(path.join(temp, "samples", missing));
+        assert.equal((await fetch(`${origin}/samples/${missing}`)).status, 404, "Missing sample did not return 404");
+        const missingHead = await fetch(`${origin}/samples/${missing}`, { method: "HEAD" });
+        assert.equal(missingHead.status, 404);
+        assert.equal((await missingHead.arrayBuffer()).byteLength, 0);
+        const html = fs.readFileSync(htmlPath, "utf8");
+        for (const entry of [
+            { key: "../escape", url: "samples/../escape.json" },
+            { key: "branch-storm", url: "../data/traces.js" }
+        ]) {
+            fs.writeFileSync(
+                htmlPath,
+                html.replace(
+                    /^globalThis\.sonataDemoCatalog=(.+);$/m,
+                    () => `globalThis.sonataDemoCatalog=${JSON.stringify([entry])};`
+                )
+            );
+            assert.throws(() => createServer(htmlPath), /Invalid or duplicate demo URL/);
+        }
+        console.log("Server: relocated distribution / fixed catalog / missing sample recovery verified");
+    } finally {
+        if (server) await new Promise((resolve) => server.close(resolve));
+        fs.rmSync(temp, { recursive: true, force: true });
+    }
+}
+
+main()
+    .then(checkIsolatedDistribution)
+    .catch((error) => {
+        console.error(error);
+        process.exitCode = 1;
+    });

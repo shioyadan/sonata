@@ -55,11 +55,25 @@ for (const file of [
 }
 const scripts = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)].map((m) => m[1]);
 assert.equal(scripts.length, 2);
-assert.deepEqual(readTrace(scripts[0]), expected, "HTML changed the recorded demo data");
+assert.ok(!html.includes("globalThis.embeddedFlowTraces="), "HTML still embeds the demo data");
 assert.equal(new Set(expected.map((t) => t.key)).size, 5);
 for (const script of scripts) new vm.Script(script);
 const workerContext = {};
 vm.runInNewContext(scripts[0], workerContext);
+assert.equal(workerContext.embeddedFlowTraces, undefined, "HTML still initializes embedded demos");
+const catalog = JSON.parse(JSON.stringify(workerContext.sonataDemoCatalog));
+assert.deepEqual(
+    catalog,
+    expected.map(({ key, label }) => ({ key, label, url: `samples/${key}.json` })),
+    "Demo catalog changed the labels, order or portable sample URLs"
+);
+const sampleFiles = expected.map(({ key }) => `${key}.json`).sort();
+assert.deepEqual(fs.readdirSync(path.join(root, "dist/samples")).sort(), sampleFiles);
+for (const [index, demo] of expected.entries()) {
+    const sample = fs.readFileSync(path.join(root, "dist", catalog[index].url));
+    assert.deepEqual(JSON.parse(sample), demo, `Sample changed recorded data or provenance: ${demo.key}`);
+    assert.ok(!html.includes(JSON.stringify(demo.ops)), `HTML still includes instructions: ${demo.key}`);
+}
 assert.ok(workerContext.sonataTraceWorkerSource.includes("PagedOpStore"), "Offline trace reader missing");
 new vm.Script(workerContext.sonataTraceWorkerSource);
 const temp = fs.mkdtempSync(path.join(os.tmpdir(), "sonata-build-"));
@@ -70,16 +84,43 @@ try {
     fs.mkdirSync(path.join(temp, "scripts"));
     for (const file of ["build.cjs", "bundle.cjs"])
         fs.copyFileSync(path.join(root, "scripts", file), path.join(temp, "scripts", file));
-    const result = spawnSync(process.execPath, [path.join(temp, "scripts/build.cjs")], {
-        cwd: os.tmpdir(),
-        encoding: "utf8"
-    });
+    const isolatedBuild = () =>
+        spawnSync(process.execPath, [path.join(temp, "scripts/build.cjs")], {
+            cwd: os.tmpdir(),
+            encoding: "utf8"
+        });
+    const result = isolatedBuild();
     assert.equal(result.status, 0, result.stderr);
     assert.deepEqual(
         fs.readFileSync(path.join(temp, "dist/sonata.html")),
         bytes,
         "Build depends on checkout location or installed packages"
     );
+    const isolatedSamples = path.join(temp, "dist/samples");
+    assert.deepEqual(fs.readdirSync(isolatedSamples).sort(), sampleFiles);
+    for (const file of sampleFiles)
+        assert.deepEqual(
+            fs.readFileSync(path.join(isolatedSamples, file)),
+            fs.readFileSync(path.join(root, "dist/samples", file)),
+            `Sample build depends on checkout location: ${file}`
+        );
+    // 削除したデモを再ビルド後の配布へ混ぜない。
+    fs.writeFileSync(path.join(isolatedSamples, "obsolete-demo.json"), "{}");
+    assert.equal(isolatedBuild().status, 0);
+    assert.deepEqual(fs.readdirSync(isolatedSamples).sort(), sampleFiles);
+    // ファイル名はデータから組み立てるため、ディレクトリ移動や重複を生成前に拒否する。
+    for (const key of ["../escape", "a/b", "a\\b", "%2e%2e", "demo.json", expected[1].key]) {
+        const invalid = structuredClone(expected);
+        invalid[0].key = key;
+        fs.writeFileSync(
+            path.join(temp, "data/traces.js"),
+            `globalThis.embeddedFlowTraces=${JSON.stringify(invalid)};`
+        );
+        const rejected = isolatedBuild();
+        assert.notEqual(rejected.status, 0, `Unsafe demo key accepted: ${key}`);
+        assert.match(rejected.stderr, /Invalid or duplicate demo key/);
+    }
+    assert.ok(!fs.existsSync(path.join(temp, "dist/escape.json")), "Demo key escaped its output directory");
 } finally {
     fs.rmSync(temp, { recursive: true, force: true });
 }
@@ -91,5 +132,5 @@ for (const [file, hash] of Object.entries(upstream.files)) {
     assert.equal(actual, hash, `Vendored ${file} changed; document the change in UPSTREAM.json`);
 }
 console.log(
-    `Build: ${expected.length} demos unchanged; UTF-8; offline; reproducible outside checkout; ${Object.keys(upstream.files).length} upstream files verified`
+    `Build: ${expected.length} external samples unchanged; catalog only in HTML; UTF-8; offline reader; reproducible outside checkout; ${Object.keys(upstream.files).length} upstream files verified`
 );

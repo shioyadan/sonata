@@ -1,19 +1,27 @@
 "use strict";
-// Node の標準機能だけでオフライン配布用 HTML を生成し、実行時の外部資源を不要にする。
+// Node の標準機能だけで、本体 HTML と必要時に読み込むサンプル JSON を生成する。
 const fs = require("node:fs");
 const path = require("node:path");
 const root = path.resolve(__dirname, "..");
 const { bundle } = require("./bundle.cjs");
 const read = (file) => fs.readFileSync(path.join(root, file), "utf8");
 
-function formatTraceScript(source) {
+function traceJson(source) {
     const marker = "globalThis.embeddedFlowTraces=",
         start = source.indexOf(marker);
     if (start < 0) throw new Error("Missing embedded trace assignment");
-    const json = source
-        .slice(start + marker.length)
-        .trim()
-        .replace(/;$/, "");
+    return {
+        marker,
+        start,
+        json: source
+            .slice(start + marker.length)
+            .trim()
+            .replace(/;$/, "")
+    };
+}
+
+function formatTraceScript(source) {
+    const { marker, start, json } = traceJson(source);
     JSON.parse(json); // 整形対象を JSON に限定し、任意の JavaScript は整形しない。
     let quoted = false,
         escaped = false,
@@ -38,6 +46,16 @@ function formatTraceScript(source) {
 }
 
 function build() {
+    const traces = JSON.parse(traceJson(read("data/traces.js")).json);
+    if (!Array.isArray(traces) || !traces.length) throw new Error("Missing demo traces");
+    const keys = new Set();
+    const catalog = traces.map(({ key, label }) => {
+        if (typeof key !== "string" || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(key) || keys.has(key))
+            throw new Error(`Invalid or duplicate demo key: ${key}`);
+        if (typeof label !== "string" || !label) throw new Error(`Missing demo label: ${key}`);
+        keys.add(key);
+        return { key, label, url: `samples/${key}.json` };
+    });
     let html = read("src/index.html");
     const license = read("LICENSE.md").replace(/--/g, "—");
     html = html.replace("<!doctype html>", () => `<!doctype html>\n<!-- Sonata · BSD-3-Clause\n${license}\n-->`);
@@ -75,7 +93,7 @@ function build() {
     const scripts = [
         [
             "../data/traces.js",
-            formatTraceScript(read("data/traces.js")) +
+            `globalThis.sonataDemoCatalog=${JSON.stringify(catalog)};\n` +
                 `globalThis.sonataTraceWorkerSource=${JSON.stringify(worker)};\n`
         ],
         ["sonata.cts", bundle(root, "src/sonata.cts", uiFiles)]
@@ -86,12 +104,18 @@ function build() {
         html = html.replace(tag, () => `<script>\n${source.replace(/<\/script/gi, "<\\/script")}\n</script>`);
     }
     if (/<script\b[^>]*\bsrc\s*=|<link\b[^>]*rel="stylesheet"|(?:src|href)="(?:\.\.\/|sonata-)/i.test(html))
-        throw new Error("The deliverable still depends on another file.");
+        throw new Error("The application still depends on an external script or stylesheet.");
     const output = path.join(root, "dist/sonata.html");
-    fs.mkdirSync(path.dirname(output), { recursive: true });
+    const samples = path.join(path.dirname(output), "samples");
+    // 再ビルドで削除済みのデモを配布しない。生成物以外には触れない。
+    fs.rmSync(samples, { recursive: true, force: true });
+    fs.mkdirSync(samples, { recursive: true });
+    traces.forEach((trace, index) => {
+        fs.writeFileSync(path.join(path.dirname(output), catalog[index].url), JSON.stringify(trace) + "\n");
+    });
     fs.writeFileSync(output, html);
     console.log(
-        `${path.relative(process.cwd(), output)} · ${Math.round(Buffer.byteLength(html) / 1024)} KiB · self-contained`
+        `${path.relative(process.cwd(), output)} · ${Math.round(Buffer.byteLength(html) / 1024)} KiB · ${catalog.length} external samples`
     );
     return output;
 }

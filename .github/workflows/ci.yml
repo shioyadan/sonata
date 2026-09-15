@@ -87,6 +87,7 @@ jobs:
           npm run build
           mkdir -p artifacts/pages
           cp dist/sonata.html artifacts/pages/index.html
+          cp -R dist/samples artifacts/pages/samples
       - uses: actions/configure-pages@v6
       - uses: actions/upload-pages-artifact@v5
         with:
