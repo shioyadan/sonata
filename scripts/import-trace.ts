@@ -13,6 +13,7 @@ import { readGem5Registers, configuredGem5Registers } from "./gem5-registers";
 import { buildSchedulingEvidence, readRsdRegisterEvidence } from "./scheduling-evidence";
 import { topDownObservationTimes } from "./top-down";
 import memoryModel = require("../src/memory.cts");
+import type traceEvidence = require("../src/trace-evidence.cts");
 
 export interface TraceSource {
     readonly key: string;
@@ -27,6 +28,7 @@ export interface TraceSource {
     readonly initialCycle?: number;
     readonly includeTopDown?: boolean;
     readonly includeEvidence?: boolean;
+    readonly config?: traceEvidence.Configuration;
 }
 
 interface StageRange {
@@ -623,7 +625,9 @@ export async function buildSample(source: TraceSource) {
                   baseLatency: inferredMemoryBaseLatency
               };
 
-    const explicitRsdStages = source.includeEvidence && source.fileName.endsWith("/rsd/mshr.log");
+    const explicitRsdStages =
+        source.includeEvidence &&
+        allOps.some((op) => op.lanes.some((lane) => lane?.stages.some((stage) => stage.name === "Rr")));
     const compactOps = sampleOps.map((op) => {
         const observation = observations.get(op.id);
         if (observation === undefined) {
@@ -811,8 +815,14 @@ export async function buildSample(source: TraceSource) {
     }
     let evidence = null;
     if (source.includeEvidence) {
-        evidence = source.fileName.endsWith("/rsd/mshr.log")
-            ? readRsdRegisterEvidence(source.fileName, firstCycle, lastCycle, new Set(sampleOps.map((o) => o.id)))
+        evidence = allOps.some((op) => op.lanes.some((lane) => lane?.stages.some((stage) => stage.name === "Rr")))
+            ? readRsdRegisterEvidence(
+                  source.fileName,
+                  firstCycle,
+                  lastCycle,
+                  new Set(sampleOps.map((o) => o.id)),
+                  allOps
+              )
             : {
                   scheduling: buildSchedulingEvidence(allOps, sampleOps, {
                       allocation: (op) => observations.get(op.id)?.allocationCycle ?? null,
@@ -823,9 +833,9 @@ export async function buildSample(source: TraceSource) {
               };
     }
     if (source.includeEvidence && source.parser === "gem5") {
-        evidence.registers = source.fileName.includes("/detailed/")
-            ? readGem5Registers(source.fileName, allOps, firstCycle, lastCycle, source.prefixBytes)
-            : configuredGem5Registers();
+        evidence.registers =
+            readGem5Registers(source.fileName, allOps, firstCycle, lastCycle, source.prefixBytes, source.config) ??
+            configuredGem5Registers(source.config);
     }
     const sampledIDs = new Set(sampleOps.map((op) => op.id));
     const storeCompletions = getGem5StoreCompletions(source, allOps).filter(([id]) => sampledIDs.has(id));

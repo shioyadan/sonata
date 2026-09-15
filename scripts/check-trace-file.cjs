@@ -221,6 +221,7 @@ async function check() {
     await checkStreaming();
     await checkSettledPrefix();
     await checkFileStructure();
+    await checkThreadNotices();
     await checkConcurrentIndex();
     await checkFlushGroups();
     await checkWorkerRequests();
@@ -972,6 +973,32 @@ async function checkSettledPrefix() {
         assert.equal(box.messages.find((m) => m.type === "window" && m.request === 3).trace.playbackSafeUntil, null);
         input.finish();
         await opening;
+    } finally {
+        session.close();
+    }
+}
+
+// 明示注釈も表示するthreadの命令だけに限定する。
+async function checkThreadNotices() {
+    const lines = ["Kanata\t0004"];
+    for (const id of [0, 1]) lines.push(`I\t${id}\t${id}\t${id}`, `S\t${id}\t0\tF`);
+    lines.push("C\t1");
+    for (const id of [0, 1]) lines.push(`L\t${id}\t1\tBr-pred-miss-ex`);
+    lines.push("C\t3");
+    for (const id of [0, 1]) lines.push(`E\t${id}\t0\tF`, `R\t${id}\t${id}\t0`);
+    const box = mailbox(),
+        session = createFileSession(box.send);
+    try {
+        await session.open(new File([lines.join("\n") + "\n"], "threads.kanata"));
+        for (const thread of [0, 1]) {
+            await session.window({ type: "window", request: thread, cycle: 0, span: 16, thread });
+            const trace = box.messages.find((m) => m.type === "window" && m.request === thread).trace;
+            assert.deepEqual(
+                trace.demo.events.map((e) => e.id),
+                [thread]
+            );
+            assert.equal(trace.evidence?.registers ?? null, null, "SMT fabricated shared register values");
+        }
     } finally {
         session.close();
     }

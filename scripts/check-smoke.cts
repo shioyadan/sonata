@@ -164,12 +164,19 @@ async function reviewSmoke(window: BrowserWindow, screenshots: string, begin: (n
                 const op = sonata.ops.find((op) => op.id === id);
                 const stage = op?.stages.find((stage) => stage.start <= sonata.cycle && stage.end > sonata.cycle);
                 const entry = sonata.rob.entries.find((entry) => entry.id === id);
-                return { id, node: stage?.node, slot: entry?.slot, ready: entry?.ready };
+                return {
+                    id,
+                    node: stage?.node,
+                    slot: entry?.slot,
+                    // 抜粋前の文脈でリングの起点は変わる。実際のFIFO先頭からの順序を照合する。
+                    offset: entry ? (entry.slot - sonata.rob.head + sonata.rob.capacity) % sonata.rob.capacity : null,
+                    ready: entry?.ready
+                };
             })
         );
         assert.deepEqual(
-            stores.map((store) => store.slot),
-            [14, 19, 24, 29, 34, 39]
+            stores.map((store) => store.offset),
+            [3, 8, 13, 18, 23, 28]
         );
         assert.ok(
             stores.every((store) => store.node === "rob" && store.ready === false),

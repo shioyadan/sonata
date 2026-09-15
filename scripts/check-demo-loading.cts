@@ -13,7 +13,8 @@ const { createBrowserTest, waitFor } = require("./load-test.cjs")(
 declare global {
     var demoReview:
         | {
-              fetch: typeof fetch;
+              Worker: typeof Worker;
+              source: string;
               release?: () => void;
               started?: boolean;
               pending?: Promise<void>;
@@ -63,45 +64,84 @@ async function reviewDemoLoading(
         }, key);
         await until((s) => s.loaded && s.key === key, `The selected sample did not load: ${key}`);
     }
-    async function inject(key: string, mode: "delay" | "missing" | "invalid" | "mismatch") {
+    async function inject(key: string, mode: "delay" | "late-window" | "missing" | "invalid" | "mismatch") {
         await evaluate(
-            (_page, key, mode) => {
-                const original = globalThis.fetch.bind(globalThis);
-                const control = (globalThis.demoReview = { fetch: original } as NonNullable<
-                    typeof globalThis.demoReview
-                >);
-                const gate = new Promise<void>((resolve) => (control.release = resolve));
-                globalThis.fetch = async (input, init) => {
-                    const url = new URL(input instanceof Request ? input.url : String(input), location.href);
-                    if (url.pathname !== `/samples/${key}.json`) return original(input, init);
-                    if (mode === "missing") return new Response("Not found", { status: 404 });
-                    if (mode === "invalid") return new Response("{not JSON}");
-                    const response = await original(input, init);
-                    const body = await response.text();
-                    if (mode === "mismatch")
-                        return new Response(JSON.stringify({ ...JSON.parse(body), key: "unexpected" }));
-                    // 既に受信済みの応答はAbortだけでは取り消せない。遅い完了を明示的に配送する。
-                    control.started = true;
-                    await gate;
-                    return new Response(body, { status: response.status });
+            (_page, key, mode, text) => {
+                const original = globalThis.Worker;
+                const workers: Worker[] = [];
+                const control = (globalThis.demoReview = {
+                    Worker: original,
+                    source: globalThis.sonataTraceWorkerSource
+                } as NonNullable<typeof globalThis.demoReview>);
+                const entry = globalThis.sonataDemoCatalog.find((entry) => entry.key === key)!;
+                const intercept = (target: string, mode: string, text: string) => {
+                    const fetch = globalThis.fetch.bind(globalThis);
+                    let release: () => void;
+                    const gate = new Promise<void>((resolve) => {
+                        release = resolve;
+                    });
+                    globalThis.addEventListener("message", (event) => {
+                        if (event.data?.type !== "sample-test-release") return;
+                        event.stopImmediatePropagation();
+                        release();
+                    });
+                    globalThis.fetch = async (input, init) => {
+                        const url = new URL(input instanceof Request ? input.url : String(input));
+                        if (!url.pathname.endsWith(target) || mode === "late-window") return fetch(input, init);
+                        if (mode === "missing") return new Response("Not found", { status: 404 });
+                        if (mode === "invalid") return new Response("invalid gzip bytes");
+                        if (mode === "mismatch")
+                            return new Response(new Blob([text]).stream().pipeThrough(new CompressionStream("gzip")));
+                        globalThis.postMessage({ type: "sample-test-started" });
+                        await gate;
+                        return fetch(input, init);
+                    };
                 };
+                globalThis.sonataTraceWorkerSource = `(${intercept.toString()})(${JSON.stringify(entry.url)},${JSON.stringify(mode)},${JSON.stringify(text)});\n${control.source}`;
+                globalThis.Worker = new Proxy(original, {
+                    construct(target, args: ConstructorParameters<typeof Worker>) {
+                        const worker = new target(...args);
+                        workers.push(worker);
+                        worker.addEventListener("message", (event) => {
+                            if (
+                                mode === "late-window" &&
+                                event.data?.type === "window" &&
+                                event.data.trace.fileName === entry.name
+                            ) {
+                                const receive = worker.onmessage!;
+                                control.release = () => receive.call(worker, event);
+                                control.started = true;
+                                event.stopImmediatePropagation();
+                                return;
+                            }
+                            if (event.data?.type !== "sample-test-started") return;
+                            event.stopImmediatePropagation();
+                            control.started = true;
+                        });
+                        return worker;
+                    }
+                });
+                control.release = () =>
+                    workers.forEach((worker) => worker.postMessage({ type: "sample-test-release" }));
             },
             key,
-            mode
+            mode,
+            fileText
         );
     }
     async function restore() {
         await evaluate(async () => {
             const control = globalThis.demoReview;
             if (!control) return;
-            globalThis.fetch = control.fetch;
+            globalThis.Worker = control.Worker;
+            globalThis.sonataTraceWorkerSource = control.source;
             control.release?.();
             await control.pending;
             delete globalThis.demoReview;
         });
     }
-    async function delayed(key: string) {
-        await inject(key, "delay");
+    async function delayed(key: string, mode: "delay" | "late-window" = "delay") {
+        await inject(key, mode);
         await evaluate(({ sonata }, key) => {
             globalThis.demoReview!.pending = sonata.loadTrace(key);
         }, key);
@@ -179,12 +219,11 @@ async function reviewDemoLoading(
         await window.loadURL(`${baseURL}sonata.html#demo=rename-rush`);
         await ready();
         await until((s) => s.key === "rename-rush" && s.loaded, "The demo link did not load its sample");
-        assert.deepEqual(
-            sampleRequests()
-                .slice(beforeRoot)
-                .map((url) => new URL(url).pathname),
-            ["/samples/rename-rush.json"]
-        );
+        const fetched = sampleRequests()
+            .slice(beforeRoot)
+            .map((url) => new URL(url).pathname);
+        assert.deepEqual([...new Set(fetched)], ["/samples/gem5-arm-registers.log.gz"]);
+        assert.ok(fetched.length >= 1 && fetched.length <= 2, "Format detection repeatedly downloaded the trace");
         assert.ok((await state()).playing, "The first sample did not start playback");
         const original = await evaluate(({ sonata }) => ({
             ops: JSON.stringify(sonata.trace.ops),
@@ -222,7 +261,7 @@ async function reviewDemoLoading(
         await evaluate(() => document.getElementById("demo-retry")!.click());
         await until((s) => s.key === "wide-open", "Retry did not load the failed sample");
 
-        await delayed("branch-storm");
+        await delayed("branch-storm", "late-window");
         await openFile();
         await restore();
         assert.equal((await state()).key, "local-file", "An old demo response replaced the user's File");

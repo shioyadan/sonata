@@ -11,7 +11,8 @@ let closed = false;
 async function run(request: Extract<files.WorkerRequest, { type: "open" | "window" | "search" }>) {
     if (closed) return;
     try {
-        if (request.type === "open") await session.open(request.file);
+        if (request.type === "open")
+            await session.open("remote" in request ? files.remoteInput(request.remote) : request.file, request.config);
         else if (request.type === "window") await session.window(request);
         else if (request.type === "search") await session.search(request);
     } catch (error) {

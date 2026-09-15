@@ -7,6 +7,19 @@ import windows = require("./trace-window.cts");
 import structures = require("./trace-structure.cts");
 import replay = require("./replay-model.cts");
 import memory = require("./memory.cts");
+import evidence = require("./trace-evidence.cts");
+import topDown = require("./top-down.cts");
+
+interface Configuration extends evidence.Configuration {
+    robEntries?: number;
+    allocationWidth?: number;
+    machineOrder?: string;
+}
+interface RemoteInput {
+    url: string;
+    name: string;
+    size: number;
+}
 
 interface OverviewBin {
     fetched: number;
@@ -72,7 +85,8 @@ interface Progress {
     value: number;
 }
 type Request =
-    | { type: "open"; file: File }
+    | { type: "open"; file: File; config?: Configuration }
+    | { type: "open"; remote: RemoteInput; config?: Configuration }
     | { type: "window"; request: number; cycle: number; span: number; thread: number }
     | SearchRequest
     | { type: "cancel-search" }
@@ -590,7 +604,12 @@ async function searchOps(
 function createFileSession(send: (response: Response) => void) {
     const abort = new AbortController();
     const profiles = structures.createProfiles();
-    const indexer = createTraceIndex(scheduleUpdate, profiles.observe);
+    let records = evidence.createEvidenceIndex();
+    let config: Configuration = {};
+    const indexer = createTraceIndex(scheduleUpdate, (op, parser, firstWrite) => {
+        profiles.observe(op, parser, firstWrite);
+        records.observeOp(op, parser);
+    });
     let trace: ParsedTrace | null = null;
     let source: Source | null = null;
     let parser: Source["parser"] = "onikiri";
@@ -636,10 +655,12 @@ function createFileSession(send: (response: Response) => void) {
             Math.max(0, 250 - (performance.now() - publishedAt))
         );
     }
-    async function open(file: core.TraceInput) {
+    async function open(file: core.TraceInput, configuration: Configuration = {}) {
         checkAbort(abort.signal);
         if (started) throw new Error("A trace file is already open.");
         started = true;
+        config = configuration;
+        records = evidence.createEvidenceIndex(config);
         // 固定CoreはKanataの形式不一致だけで2回目のstreamを開いてgem5へ移る。
         // 圧縮を自前で判定し直さず、最初のonTraceにも同じparser名を渡す。
         let attempts = 0;
@@ -650,12 +671,14 @@ function createFileSession(send: (response: Response) => void) {
             stream(signal) {
                 if (++attempts > 2) throw new Error("The parser reopened its input unexpectedly.");
                 parser = attempts === 1 ? "onikiri" : "gem5";
+                if (attempts > 1) records.clear();
                 return file.stream(signal);
             }
         };
         const result = await core.parseTraceFile(
             input,
             {
+                onLine: records.observeLine,
                 onProgress: (value) => {
                     if (!abort.signal.aborted) send({ type: "progress", progress: { phase: "reading", value } });
                 },
@@ -701,7 +724,7 @@ function createFileSession(send: (response: Response) => void) {
             );
             const lastCycle = Math.min(selectedSource.lastCycle, firstCycle + request.span - 1);
             // 表示窓の時刻は保ち、直前のcommit/squash演出と次fetchに必要な文脈を取得する。
-            const contextFirst = Math.max(selectedSource.firstCycle, firstCycle - 6);
+            const contextFirst = Math.max(selectedSource.firstCycle, firstCycle - topDown.limits.history);
             const contextLast = Math.min(selectedSource.lastCycle, lastCycle + 1);
             const blocks = indexer.snapshot(contextFirst, contextLast);
             const previewBlocks = indexer.previewSnapshot(contextLast);
@@ -738,6 +761,58 @@ function createFileSession(send: (response: Response) => void) {
                 profile: profiles.get(request.thread, (id) => trace!.getOpForScan(id), selectedSource)
             };
             const converted = windows.toTraceWindow(selection);
+            const observed = records.windowEvidence(firstCycle, lastCycle, ops, (id) => trace!.getOpForScan(id));
+            if (observed.registers || observed.scheduling)
+                converted.evidence = {
+                    scheduling: observed.scheduling ??
+                        converted.evidence?.scheduling ?? { kind: "unobserved", ops: [] },
+                    registers: observed.registers
+                };
+            if (observed.registers?.kind === "recorded" && converted.structure.registerRead)
+                converted.structure.registerRead.description = "Recorded issue handoff and register read annotations";
+            const byID = new Map(converted.ops.map((op) => [op[0], op]));
+            converted.demo.events = observed.events
+                .filter((event) => byID.has(event.id))
+                .map((event) => {
+                    const op = byID.get(event.id);
+                    return {
+                        ...event,
+                        // 通知の表示期間。キャッシュの応答が記録されていなければ3サイクルの演出に限る。
+                        endCycle:
+                            event.kind === "dcache-miss" && op && !op[4]
+                                ? Math.max(event.cycle + 1, op[9] ?? event.cycle + 3)
+                                : event.cycle + 3
+                    };
+                });
+
+            if (config.machineOrder) converted.machineOrder = config.machineOrder;
+            if (config.robEntries != null) {
+                if (
+                    !Number.isInteger(config.robEntries) ||
+                    config.robEntries < converted.structure.robCapacity ||
+                    config.robEntries > windows.limits.rob
+                )
+                    throw new Error("The configured ROB capacity cannot represent this interval.");
+                converted.structure.robCapacity = config.robEntries;
+            }
+            if (config.allocationWidth != null) {
+                if (
+                    !Number.isInteger(config.allocationWidth) ||
+                    config.allocationWidth < converted.structure.allocationWidth ||
+                    config.allocationWidth > windows.limits.width
+                )
+                    throw new Error("The configured allocation width cannot represent this interval.");
+                converted.structure.allocationWidth = config.allocationWidth;
+            }
+            converted.topDown = topDown.buildTopDownWindow({
+                ops,
+                firstCycle,
+                lastCycle,
+                structure: selection.profile.detected,
+                allocationWidth: converted.structure.allocationWidth,
+                endCycle: (op) => flushCycles.get(op.id) ?? op.retiredCycle,
+                laneNames: selectedSource.laneNames
+            });
             converted.playbackSafeUntil = selectedSource.complete
                 ? selectedSource.lastCycle
                 : selectedSource.settledCycle;
@@ -799,11 +874,37 @@ function createFileSession(send: (response: Response) => void) {
         trace = null;
         indexer.clear();
         profiles.clear();
+        records.clear();
         source = null;
     }
     return { open, window, cancelWindow, search, cancelSearch, close };
 }
+
+// HTTPもFileと同じストリーム入力にする。展開済み全文やBlobをUIスレッドへ持ち込まない。
+function remoteInput(input: RemoteInput): core.TraceInput {
+    const url = new URL(input.url);
+    if (
+        !["https:", "http:"].includes(url.protocol) ||
+        url.username ||
+        url.password ||
+        !Number.isSafeInteger(input.size) ||
+        input.size <= 0
+    )
+        throw new Error("Invalid sample source.");
+    return {
+        name: input.name,
+        size: input.size,
+        type: "application/octet-stream",
+        async stream(signal) {
+            const response = await fetch(url, { signal, redirect: "error" });
+            if (!response.ok) throw new Error(`Could not load the sample. HTTP ${response.status}.`);
+            if (!response.body) throw new Error("The sample response has no body.");
+            return response.body;
+        }
+    };
+}
 namespace traceFile {
+    export type TraceConfiguration = Configuration;
     export type Metadata = Source;
     export type TraceOverview = Overview;
     export type TraceSearchHit = SearchHit;
@@ -811,6 +912,7 @@ namespace traceFile {
     export type WorkerResponse = Response;
 }
 const traceFile = {
+    remoteInput,
     createFileSession,
     createTraceIndex,
     selectOps,

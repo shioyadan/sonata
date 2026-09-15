@@ -1,11 +1,22 @@
 "use strict";
-// 公開カタログの短いデモだけを取得する。手元のFileと再生モデルは別に寿命を持つ。
+// 公開サンプルもFileと同じWorkerで解析し、表示する短い区間だけをキャッシュする。
 import type replay = require("./replay-model.cts");
+import type files = require("./trace-file.cts");
 
 interface CatalogEntry {
     key: string;
     label: string;
     url: string;
+    name: string;
+    size: number;
+    firstCycle: number;
+    lastCycle: number;
+    initialCycle: number;
+    provenance: replay.Trace["demo"]["provenance"];
+    theme: string;
+    bookmarks: replay.Trace["demo"]["bookmarks"];
+    screenshotCycle: number;
+    config?: files.TraceConfiguration;
 }
 
 function createLoader(catalog: readonly CatalogEntry[], pageURL: string) {
@@ -13,11 +24,79 @@ function createLoader(catalog: readonly CatalogEntry[], pageURL: string) {
     const online = page.protocol === "https:" || page.protocol === "http:";
     const cache = new Map<string, replay.Trace>();
     let revision = 0;
-    let controller: AbortController | null = null;
+    let abort: (() => void) | null = null;
     function cancel() {
         revision++;
-        controller?.abort();
-        controller = null;
+        abort?.();
+        abort = null;
+    }
+    function prepare(entry: CatalogEntry): Promise<replay.Trace | null> {
+        return new Promise((resolve, reject) => {
+            const url = URL.createObjectURL(
+                new Blob([globalThis.sonataTraceWorkerSource], { type: "text/javascript" })
+            );
+            let worker: Worker;
+            try {
+                worker = new Worker(url);
+            } finally {
+                URL.revokeObjectURL(url);
+            }
+            let requested = false;
+            let settled = false;
+            function finish(trace: replay.Trace | null, error?: Error) {
+                if (settled) return;
+                settled = true;
+                if (abort === stop) abort = null;
+                const timeout = setTimeout(() => worker.terminate(), 500);
+                worker.onmessage = (event: MessageEvent<files.WorkerResponse>) => {
+                    if (event.data.type !== "closed") return;
+                    clearTimeout(timeout);
+                    worker.terminate();
+                };
+                worker.postMessage({ type: "close" } satisfies files.WorkerRequest);
+                if (error) reject(error);
+                else resolve(trace);
+            }
+            const stop = () => finish(null);
+            abort = stop;
+            worker.onerror = () => finish(null, new Error("The sample reader could not start."));
+            worker.onmessage = (event: MessageEvent<files.WorkerResponse>) => {
+                const response = event.data;
+                if (response.type === "error") finish(null, new Error(response.message));
+                else if (response.type === "loaded" && response.source.complete && !requested) {
+                    if (response.source.firstCycle > entry.firstCycle || response.source.lastCycle < entry.lastCycle) {
+                        finish(null, new Error(`The sample does not contain the selected interval: ${entry.label}.`));
+                        return;
+                    }
+                    requested = true;
+                    worker.postMessage({
+                        type: "window",
+                        request: 1,
+                        cycle: entry.firstCycle,
+                        span: entry.lastCycle - entry.firstCycle + 1,
+                        thread: response.source.threads[0]
+                    } satisfies files.WorkerRequest);
+                } else if (response.type === "window" && response.request === 1) {
+                    const trace = response.trace;
+                    trace.key = entry.key;
+                    trace.label = entry.label;
+                    trace.initialCycle = entry.initialCycle;
+                    trace.demo = {
+                        ...trace.demo,
+                        provenance: structuredClone(entry.provenance),
+                        theme: entry.theme,
+                        bookmarks: structuredClone(entry.bookmarks),
+                        screenshotCycle: entry.screenshotCycle
+                    };
+                    finish(trace);
+                }
+            };
+            worker.postMessage({
+                type: "open",
+                remote: { url: new URL(entry.url, page).href, name: entry.name, size: entry.size },
+                config: entry.config
+            } satisfies files.WorkerRequest);
+        });
     }
     async function load(key: string): Promise<replay.Trace | null> {
         cancel();
@@ -28,8 +107,8 @@ function createLoader(catalog: readonly CatalogEntry[], pageURL: string) {
             throw new Error(
                 "Samples require the online site or a local HTTP server. Open a trace file to use Sonata offline."
             );
-        // URLはビルドが用意した同じディレクトリのJSONだけ。hashを取得先に使わない。
-        if (!/^[a-z0-9-]+$/.test(entry.key) || entry.url !== `samples/${entry.key}.json`)
+        // URLはビルドが用意した同じディレクトリの生トレースだけ。hashを取得先に使わない。
+        if (!/^[a-z0-9-]+$/.test(entry.key) || !/^samples\/[a-z0-9-]+\.log\.gz$/.test(entry.url))
             throw new Error("Invalid sample URL.");
         const cached = cache.get(key);
         if (cached) {
@@ -37,33 +116,11 @@ function createLoader(catalog: readonly CatalogEntry[], pageURL: string) {
             cache.set(key, cached);
             return cached;
         }
-        const next = new AbortController();
-        controller = next;
-        try {
-            const response = await fetch(new URL(entry.url, page), { signal: next.signal, redirect: "error" });
-            if (!response.ok) throw new Error(`Could not load ${entry.label}. HTTP ${response.status}.`);
-            const trace: replay.Trace = await response.json();
-            if (request !== revision) return null;
-            if (
-                trace?.key !== key ||
-                !Array.isArray(trace.ops) ||
-                !trace.structure?.frontNodes?.length ||
-                !Array.isArray(trace.structure.executionNodes) ||
-                !Array.isArray(trace.demo?.bookmarks) ||
-                !trace.demo.provenance ||
-                !Number.isFinite(trace.firstCycle) ||
-                !Number.isFinite(trace.lastCycle)
-            )
-                throw new Error(`Invalid sample data for ${entry.label}.`);
-            cache.set(key, trace);
-            if (cache.size > 5) cache.delete(cache.keys().next().value!);
-            return trace;
-        } catch (error) {
-            if (request !== revision) return null;
-            throw error;
-        } finally {
-            if (controller === next) controller = null;
-        }
+        const trace = await prepare(entry);
+        if (request !== revision || !trace) return null;
+        cache.set(key, trace);
+        if (cache.size > 5) cache.delete(cache.keys().next().value!);
+        return trace;
     }
     return {
         load,

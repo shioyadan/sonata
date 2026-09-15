@@ -231,9 +231,10 @@ app.whenReady()
                 const event=sonata.codeRewind;
                 return feed.length<=48 && new Set(feed.map(row=>row.layer+':'+row.id)).size===feed.length && feed.every(row=>{
                     const source=trace.ops.find(op=>op[0]===row.id);
-                    return source && row.label===source[5] && row.fetch===source[2] && row.position.every(Number.isFinite)
+                    const preview=trace.feedPreview?.find(op=>op.id===row.id);
+                    return (source||preview) && row.label===(source?.[5]??preview.label) && row.fetch===(source?.[2]??preview.fetch) && row.position.every(Number.isFinite)
                         && (row.layer==='fetch'?row.fetch>t:event.time!==null)
-                        && (!row.canceled || source[4]&&(source[11]??source[3])===event.time);
+                        && (!row.canceled || source && source[4]&&(source[11]??source[3])===event.time);
                 });
             });
             const pipes=sonata.executionPipes;
@@ -271,7 +272,8 @@ app.whenReady()
             const pipeAxes=pipes.every(p=>p.outlet[0]>p.inlet[0] && p.outlet[1]===p.inlet[1] && p.outlet[2]===p.inlet[2]);
             const pipeMotion=sonata.executionNodes.every(node=>{
                 const op=sonata.ops.find(o=>o.stages.some(s=>s.node===node.id && s.start>=trace.firstCycle && s.end<=trace.lastCycle && s.end>s.start));
-                if(!op)return false;
+                // ファイル全体の構造には、この表示窓で使われない管路も残る。
+                if(!op)return !sonata.ops.some(o=>o.stages.some(s=>s.node===node.id&&s.start<trace.lastCycle&&s.end>trace.firstCycle));
                 const stage=op.stages.find(s=>s.node===node.id && s.start>=trace.firstCycle && s.end<=trace.lastCycle && s.end>s.start);
                 const lane=pipes.find(p=>p.node===node.id && p.index===(op.pipeLane??op.index)%node.pipeCount);
                 const positions=[.3,.6,.9].map(f=>{
@@ -379,7 +381,7 @@ app.whenReady()
                 true,
                 `${key}: dependency matrix lost a queue entry or invented a dependency`
             );
-            assert.equal(result.topDownMatches, true, `${key}: Top-down display must match the embedded analysis`);
+            assert.equal(result.topDownMatches, true, `${key}: Top-down display must match the window analysis`);
             assert.equal(result.fifoMatches, true, `${key}: circular FIFO view`);
             if (key !== "memory-tide") {
                 assert.match(result.simulator, /gem5 v25\.1\.0\.1/);

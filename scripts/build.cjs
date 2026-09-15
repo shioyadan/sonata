@@ -112,7 +112,14 @@ function build() {
         const css = read(`src/${url}`).replace(/<\/style/gi, "<\\/style");
         return `<style>\n${css}\n</style>`;
     });
-    const workerOnly = ["trace-worker.cts", "trace-file.cts", "trace-window.cts", "trace-structure.cts"];
+    const workerOnly = [
+        "trace-worker.cts",
+        "trace-file.cts",
+        "trace-window.cts",
+        "trace-structure.cts",
+        "trace-evidence.cts",
+        "top-down.cts"
+    ];
     const workerFiles = [...workerOnly, "memory.cts", "replay-model.cts", "geometry.cts"];
     const worker = bundle(root, "src/trace-worker.cts", [
         ...workerFiles.map((file) => path.join(root, "src", file)),

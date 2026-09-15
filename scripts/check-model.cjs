@@ -13,6 +13,7 @@ const {
     measureTransfers,
     createDependencyReplay,
     createRegisterReplay,
+    createReplay,
     findRecoveryBranches
 } = require("../src/replay-model.cts");
 
@@ -116,6 +117,25 @@ const allocationSnapshot = registers.stateAt(4.8);
 registers.stateAt(8);
 assert.deepEqual(registers.stateAt(4.8), allocationSnapshot);
 assert.equal(createRegisterReplay(null).stateAt(4).available, false);
+// 区間の前に値だけ観測したセルも残し、書込み元や論理対応は補わない。
+const observedOnly = createRegisterReplay({
+    rows: [],
+    initial: { mapping: [], owners: [], values: [[7, "0x12"]] },
+    events: [{ type: "observe", cycle: 8, physical: 7, hex: "0x34" }]
+});
+assert.equal(observedOnly.stateAt(9).physical[0].value, "0x34");
+const earlierValue = observedOnly.stateAt(3).physical[0];
+assert.equal(earlierValue.physical, 7);
+assert.equal(earlierValue.value, "0x12");
+assert.equal(earlierValue.writer, null);
+assert.equal(earlierValue.allocation, "unknown");
+assert.deepEqual(earlierValue.mappedTo, []);
+const checkpointOnly = createRegisterReplay({
+    rows: [],
+    initial: { mapping: [], owners: [], values: [[7, "0x12"]] },
+    events: []
+});
+assert.equal(checkpointOnly.stateAt(3).physical[0].value, "0x12");
 
 // 従来の 4 サイクル境界でも、スローモーションから連続的に復帰することを確認する。
 for (const boundary of [-0.8, 0, 2.8, 4, 5.4]) {
@@ -801,6 +821,17 @@ assert.deepEqual(additionalRob.markersAt(2.2), closeRob.markersAt(2.2));
 require("../data/traces.js");
 assert.equal(globalThis.embeddedFlowTraces.length, 5);
 assert.ok(!globalThis.embeddedFlowTraces.some((t) => t.key === "pressure-release"));
+const valuesOnlyTrace = structuredClone(globalThis.embeddedFlowTraces[0]);
+valuesOnlyTrace.evidence.registers = {
+    rows: [],
+    initial: { mapping: [], owners: [], values: [[7, "0x12"]] },
+    events: []
+};
+assert.deepEqual(
+    createReplay({ samples: [] }).loadData(valuesOnlyTrace).registerTags,
+    [7],
+    "Observed-only cells disappeared from the scene layout"
+);
 for (const trace of globalThis.embeddedFlowTraces) {
     if (trace.topDown) {
         for (const row of trace.topDown.slots)

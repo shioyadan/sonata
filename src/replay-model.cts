@@ -914,6 +914,7 @@ function createRegisterReplay(input: RegisterEvidence | null | undefined) {
     const physicalIDs = [
         ...new Set([
             ...data.initial.owners.map(([id]) => id),
+            ...data.initial.values.map(([id]) => id),
             ...data.initial.mapping.map(([, id]) => id),
             ...(data.allocation?.initial ?? []).map(([id]) => id),
             ...(data.allocation?.events ?? []).map((e) => e.physical),
@@ -1328,6 +1329,7 @@ function prepareTrace(trace: TraceData, continuity?: { at: number; replay: Repla
         ? [
               ...new Set([
                   ...regs.initial.owners.map(([p]) => p),
+                  ...regs.initial.values.map(([p]) => p),
                   ...regs.initial.mapping.map(([, p]) => p),
                   ...(regs.allocation?.initial ?? []).map(([p]) => p),
                   ...(regs.allocation?.events ?? []).map((e) => e.physical),

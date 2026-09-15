@@ -170,6 +170,7 @@ module.exports = async function reviewMemory(window, screenshots) {
                         id: op.id,
                         piece: pieces[index],
                         entry: sonata.rob.entries.find((e) => e.id === op.id),
+                        offset: (op.robSlot - sonata.rob.head + sonata.rob.capacity) % sonata.rob.capacity,
                         cell: sonata.instructionLayout.rob[op.robSlot],
                         light: particle && { state: particle.state, brightness: particle.brightness },
                         gpuPositions: batches.map((batch) => [...batch.slice(index * 12, index * 12 + 3)]),
@@ -183,8 +184,8 @@ module.exports = async function reviewMemory(window, screenshots) {
         [4318, 4323, 4328, 4333, 4338, 4343]
     );
     assert.deepEqual(
-        waiting.map((s) => s.entry?.slot),
-        [14, 19, 24, 29, 34, 39]
+        waiting.map((s) => s.offset),
+        [3, 8, 13, 18, 23, 28]
     );
     for (const [index, store] of waiting.entries()) {
         assert.ok(store.piece?.contact, `Waiting STORE #${store.id} is not grounded`);
@@ -267,7 +268,7 @@ module.exports = async function reviewMemory(window, screenshots) {
     );
     for (const state of forward) {
         const entry = state.rob.entries.find((e) => e.id === 4318);
-        assert.equal(entry?.slot, 14, "A retry changed the allocated ROB slot");
+        assert.equal(entry?.slot, waiting[0].entry.slot, "A retry changed the allocated ROB slot");
         assert.equal(entry.ready, state.cycle >= 3986, "A retry anticipated STORE completion");
         assert.equal(state.error, 0);
     }

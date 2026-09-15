@@ -15,7 +15,7 @@
   "scripts": {
     "build": "node scripts/build.cjs",
     "start": "node scripts/serve.cjs",
-    "test": "node --experimental-transform-types scripts/check-memory.cjs && node --import tsx scripts/check-store-evidence.cjs && node --experimental-transform-types scripts/check-model.cjs && node --experimental-transform-types scripts/check-piece-grounding.cjs && node --experimental-transform-types scripts/check-scene.cjs && node scripts/check-bundle.cjs && node scripts/check-browser-test.cjs && node scripts/check-build.cjs && node scripts/check-core.cjs && node --experimental-transform-types scripts/check-trace-file.cjs && node --experimental-transform-types scripts/check-trace-window.cjs",
+    "test": "node --experimental-transform-types scripts/check-memory.cjs && node --import tsx scripts/check-store-evidence.cjs && node --experimental-transform-types scripts/check-model.cjs && node --experimental-transform-types scripts/check-piece-grounding.cjs && node --experimental-transform-types scripts/check-scene.cjs && node scripts/check-bundle.cjs && node scripts/check-browser-test.cjs && node scripts/check-build.cjs && node scripts/check-core.cjs && node --experimental-transform-types scripts/check-trace-file.cjs && node --experimental-transform-types scripts/check-trace-window.cjs && node --import tsx scripts/check-raw-samples.cjs && node --import tsx scripts/check-top-down.cjs && node --experimental-transform-types scripts/check-trace-evidence.cjs",
     "test:server": "node scripts/check-server.cjs",
     "test:render": "electron --no-sandbox scripts/render.cjs",
     "test:smoke": "electron --no-sandbox scripts/render.cjs --smoke",
@@ -23,7 +23,7 @@
     "test:styles": "electron --no-sandbox scripts/render.cjs --styles",
     "test:browser": "electron --no-sandbox scripts/render.cjs --browser",
     "capture:flush": "electron --no-sandbox scripts/capture-flush.cjs",
-    "demos:generate": "node --import tsx scripts/generate-demos.ts",
+    "demos:generate": "node scripts/generate-samples.cjs",
     "demos:select": "node --import tsx scripts/select-traces.ts",
     "typecheck": "tsc --noEmit",
     "format": "prettier --write src scripts",

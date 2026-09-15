@@ -6,7 +6,8 @@ const path = require("node:path");
 const { createHash } = require("node:crypto");
 const { gunzipSync } = require("node:zlib");
 const { File } = require("node:buffer");
-const core = require("../vendor/konata-core/browser.cjs");
+const files = require("../src/trace-file.cts");
+const replay = require("../src/replay-model.cts");
 const root = path.resolve(__dirname, "..");
 const readJSON = (file) => JSON.parse(fs.readFileSync(path.join(root, file), "utf8"));
 const catalog = readJSON("data/sample-catalog.json");
@@ -32,10 +33,26 @@ async function check() {
         assert.equal(bytes.at(-1), 10, "Sample truncated a source line");
         const entries = catalog.filter((entry) => entry.url === `samples/${source.file}`);
         assert.ok(entries.length, `Unreferenced raw sample: ${source.file}`);
-        const Parser = source.file.startsWith("gem5-") ? core.Gem5O3PipeViewParser : core.OnikiriParser;
-        const trace = await new Parser().parse(new core.FileLineReader(new File([compressed], source.file)));
+        let window;
+        const session = files.createFileSession((response) => {
+            if (response.type === "window") window = response.trace;
+        });
         try {
+            await session.open(new File([compressed], entries[0].name), entries[0].config);
             for (const entry of entries) {
+                await session.window({
+                    type: "window",
+                    request: 1,
+                    cycle: entry.firstCycle,
+                    span: entry.lastCycle - entry.firstCycle + 1,
+                    thread: 0
+                });
+                assert.deepEqual([window.firstCycle, window.lastCycle], [entry.firstCycle, entry.lastCycle]);
+                assert.ok(window.topDown?.slots.length, `${entry.key}: missing window analysis`);
+                assert.equal(window.structure.robCapacity, entry.config.robEntries ?? window.structure.robCapacity);
+                const model = replay.createReplay({ samples: [] });
+                model.loadData(window);
+                const ops = new Map(window.ops.map((op) => [op[0], op]));
                 const expected = legacy.find((demo) => demo.key === entry.key);
                 assert.ok(expected, `Missing migration fixture: ${entry.key}`);
                 assert.deepEqual([entry.firstCycle, entry.lastCycle], [expected.firstCycle, expected.lastCycle]);
@@ -48,26 +65,36 @@ async function check() {
                     assert.equal(entry.config.robEntries, entry.provenance.robEntries);
                 assert.deepEqual(entry.bookmarks, expected.demo.bookmarks);
                 for (const recorded of expected.ops) {
-                    const op = trace.getOpForScan(recorded[0]);
-                    assert.ok(op && !op.eof, `${entry.key}: missing complete instruction ${recorded[0]}`);
+                    const op = ops.get(recorded[0]);
+                    assert.ok(op && !op[12], `${entry.key}: missing complete instruction ${recorded[0]}`);
                     assert.deepEqual(
-                        [
-                            op.id,
-                            op.rid,
-                            op.fetchedCycle,
-                            op.retiredCycle,
-                            op.flush ? 1 : 0,
-                            op.labelName || `(g:${op.gid})`
-                        ],
+                        op.slice(0, 6),
                         recorded.slice(0, 6),
                         `${entry.key}: recorded instruction changed: ${recorded[0]}`
                     );
                     compared++;
                 }
+                assert.equal(window.evidence?.registers?.rows.length, 32, `${entry.key}: logical register layout`);
+                const expectedRegisters = expected.evidence.registers;
+                if (expectedRegisters.kind === "configuration") {
+                    assert.deepEqual(window.evidence.registers.initial.mapping, []);
+                    assert.deepEqual(window.evidence.registers.initial.values, []);
+                } else {
+                    assert.equal(window.evidence.registers.events.length, expectedRegisters.events.length);
+                    assert.deepEqual(window.evidence.registers.reads ?? [], expectedRegisters.reads ?? []);
+                }
+                for (const event of expected.demo.events ?? []) {
+                    const actual = window.demo.events.find(
+                        (e) => e.kind === event.kind && e.id === event.id && e.cycle === event.cycle
+                    );
+                    assert.ok(actual, `${entry.key}: lost recorded notice ${event.id}`);
+                    assert.equal(actual.line, event.line);
+                    assert.equal(actual.endCycle, event.endCycle);
+                }
                 console.log(`Raw sample: ${entry.key} · ${expected.ops.length} recorded instructions unchanged`);
             }
         } finally {
-            trace.close();
+            session.close();
         }
     }
     console.log(
