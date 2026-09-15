@@ -8,7 +8,14 @@ module.exports = async function reviewPieceShadows(window) {
         const original={cycle:sonata.cycle,strength:surface.pieceShadow};
         const read=cycle=>{sonata.captureAt(cycle);const pixels=new Uint8Array(gl.drawingBufferWidth*gl.drawingBufferHeight*4);
             gl.readPixels(0,0,gl.drawingBufferWidth,gl.drawingBufferHeight,gl.RGBA,gl.UNSIGNED_BYTE,pixels);return pixels;};
-        const difference=(a,b)=>{let changed=0;for(let i=0;i<a.length;i+=4)if(Math.max(...[0,1,2].map(k=>Math.abs(a[i+k]-b[i+k])))>3)changed++;return changed;};
+        const difference = (a, b) => {
+            let changed = 0;
+            for (let i = 0; i < a.length; i += 4) {
+                const maximum = Math.max(Math.abs(a[i] - b[i]), Math.abs(a[i + 1] - b[i + 1]), Math.abs(a[i + 2] - b[i + 2]));
+                if (maximum > 3) changed++;
+            }
+            return changed;
+        };
         const shadow=cycle=>{
             surface.pieceShadow=0;const plain=read(cycle);surface.pieceShadow=original.strength;const shaded=read(cycle);
             const mask=new Uint8Array(plain.length/4);let darkened=0,brightened=0;

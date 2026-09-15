@@ -8,6 +8,15 @@ module.exports = async function reviewStyles(window, entry, screenshots) {
     const js = (source) => window.webContents.executeJavaScript(source);
     const { evaluate, sampleFrame, settle } = createBrowserTest(window);
     const matteStyles = ["aluminum", "paper"];
+    const timings = [];
+    const timed = async (name, run) => {
+        const started = performance.now();
+        const result = await run();
+        const seconds = Number(((performance.now() - started) / 1000).toFixed(2));
+        timings.push({ name, seconds });
+        console.log(`[styles] ${name}: passed (${seconds}s)`);
+        return result;
+    };
     const waitFor = (source, message, timeout = 10000) =>
         waitUntil(() => js(source), message, {
             timeout,
@@ -81,123 +90,7 @@ module.exports = async function reviewStyles(window, entry, screenshots) {
             // 接地により表示の Y と画面位置は変わる。共通経路と実際の X/Z は照合する。
             particles:sonata.particles.map(({id,position,pathPosition,state})=>({id,pathPosition,xz:[position[0],position[2]],state})),
             effects:['trails','auto-camera','motion-effects','instruction-stream'].map(id=>document.getElementById(id).getAttribute('aria-pressed'))});void 0;`);
-    const scenes = [];
-    let fixedRadius;
-    for (const key of await js("sonataDemoCatalog.map(t=>t.key)")) {
-        const checkpoints = await js(
-            `(async()=>{await sonata.loadTrace(${JSON.stringify(key)});return [sonata.trace.demo.screenshotCycle,...sonata.trace.demo.bookmarks.map(b=>b.cycle+.4)];})()`
-        );
-        const stageLayout = await require("./check-stage-layout.cjs")(window);
-        const stageTransfers = await require("./check-stage-transfers.cjs")(window);
-        const layout = await js("sonata.instructionLayout"),
-            spacing = {};
-        for (const name of ["scheduler", "rob", "rename"]) {
-            let minimum = Infinity;
-            const positions = layout[name];
-            for (let i = 0; i < positions.length; i++)
-                for (let j = i + 1; j < positions.length; j++)
-                    minimum = Math.min(
-                        minimum,
-                        Math.hypot(positions[i][0] - positions[j][0], positions[i][2] - positions[j][2])
-                    );
-            assert.ok(minimum > layout.radius * 2, `${key}: ${name} slots overlap fixed-size instructions`);
-            spacing[name] = minimum;
-        }
-        for (const cycle of checkpoints) {
-            let referenceGeometry;
-            for (const style of matteStyles) {
-                const result = await sampleFrame(() =>
-                    js(`(()=>{
-                        reviewStyle('neon');
-                        sonata.captureAt(${cycle});
-                        const before=reviewState(),trace=sonata.trace;
-                        reviewStyle(${JSON.stringify(style)});
-                        const styled=reviewState(),renderer=sonata.renderer;
-                        const geometry={
-                            pieces:sonata.pieces,
-                            colors:sonata.particles.map(p=>({id:p.id,color:p.color})),
-                            layout:sonata.instructionLayout,
-                            instances:renderer.materialInstances,
-                            pieceInstances:renderer.pieceInstances,
-                            vertices:renderer.pieceVertices
-                        };
-                        const radii=[...new Set(sonata.pieces.map(p=>p.radius))];
-                        reviewStyle('neon');
-                        return {
-                            before,styled,geometry,radii,shape:renderer.instructionShape,after:reviewState(),
-                            sameTrace:trace===sonata.trace,error:sonata.renderer.error,
-                            contextLost:document.getElementById('scene').getContext('webgl2').isContextLost()
-                        };
-                    })()`)
-                );
-                const context = `${key} @ ${cycle} / ${style}`;
-                assert.equal(result.contextLost, false, `${context}: graphics context lost during style switching`);
-                if (fixedRadius === undefined) fixedRadius = result.radii[0];
-                assert.deepEqual(
-                    result.radii,
-                    [fixedRadius],
-                    `${context}: instruction size changed with stage or state`
-                );
-                assert.deepEqual(result.styled, result.before, `${context}: style changed replay or camera state`);
-                assert.deepEqual(result.after, result.before, `${context}: Neon restoration changed state`);
-                assert.ok(result.sameTrace && result.geometry.vertices > 0);
-                assert.equal(result.error, 0);
-                assert.equal(
-                    result.shape,
-                    style === "paper" ? "paper-box" : "metal-puck",
-                    `${context}: instruction shape changed`
-                );
-                for (const piece of result.geometry.pieces)
-                    assert.deepEqual(
-                        piece.rotation,
-                        [0, 0, 0, 1],
-                        `${context}: sliding instruction ${piece.id} rotated`
-                    );
-                if (!referenceGeometry) referenceGeometry = result.geometry;
-                else {
-                    // 紙箱と金属パックは接地と固定姿勢が異なる。正立と、支持面への実接地をそれぞれ検査する。
-                    const comparable = (geometry) => ({
-                        ...geometry,
-                        pieces: geometry.pieces.map(({ position, contact, rotation, ...pose }) => ({
-                            ...pose,
-                            position: [position[0], position[2]]
-                        }))
-                    });
-                    assert.deepEqual(
-                        comparable(result.geometry),
-                        comparable(referenceGeometry),
-                        `${context}: style changed shared poses, instruction colors or instance counts`
-                    );
-                }
-            }
-        }
-        await js(
-            `sonata.captureAt(sonata.trace.demo.screenshotCycle);document.querySelector('.telemetry').scrollTop=0`
-        );
-        const neon = await capture(`${key}-neon`);
-        const appearances = {};
-        let referencePixels;
-        for (const style of matteStyles) {
-            await js(`reviewStyle(${JSON.stringify(style)})`);
-            const frame = await capture(`${key}-${style}`, referencePixels);
-            assert.ok(
-                frame.metrics.background.reduce((s, v) => s + v, 0) >
-                    neon.metrics.background.reduce((s, v) => s + v, 0) + 300,
-                `${style}: style did not change the rendered canvas`
-            );
-            appearances[style] = frame.metrics;
-            if (!referencePixels) referencePixels = frame.pixels;
-        }
-        scenes.push({
-            key,
-            checkpoints: checkpoints.length,
-            neon: neon.metrics,
-            ...appearances,
-            spacing,
-            stageLayout,
-            stageTransfers
-        });
-    }
+    const { scenes, fixedRadius } = await timed("scenes", () => require("./check-style-scenes.cjs")(window, capture));
     // 実入力で駒をピン留めし、カメラの補間途中でも同期的な切り替えが状態を変えないことを確認。
     await js(
         "(async()=>{await sonata.loadTrace('rename-rush');return sonata.captureAt(sonata.trace.demo.screenshotCycle);})()"
@@ -299,9 +192,9 @@ module.exports = async function reviewStyles(window, entry, screenshots) {
             `${style}: paused pieces changed with the decorative clock`
         );
         if (style !== "aluminum") await capture(`${style}-materials`);
-        const pieceShadows = await require("./check-piece-shadows.cjs")(window);
+        const pieceShadows = await timed(`${style} shadows`, () => require("./check-piece-shadows.cjs")(window));
         await settle();
-        const grounding = await require("./check-grounded-pieces.cjs")(window);
+        const grounding = await timed(`${style} grounding`, () => require("./check-grounded-pieces.cjs")(window));
         // 同時刻でMotion effectsを切り替え、紙箱と金属パックの姿勢と描画が変わらないことを検査する。
         const posePixels = await js(`(()=>{
             const read=()=>{
@@ -334,7 +227,7 @@ module.exports = async function reviewStyles(window, entry, screenshots) {
         assert.deepEqual(posePixels.errors, [0, 0, 0]);
         materialChecks[style] = { pieceShadows, grounding, posePixels };
     }
-    const opacity = await require("./load-test.cjs")("check-browser.cts").pieceOpacity(window);
+    const opacity = await timed("opacity", () => require("./load-test.cjs")("check-browser.cts").pieceOpacity(window));
     for (const frame of opacity) materialChecks[frame.style].opacity = frame;
     await js("sonata.setCamera('orbit');for(let i=0;i<30;i++)document.getElementById('zoom-in').click()");
     await waitFor(
@@ -378,11 +271,7 @@ module.exports = async function reviewStyles(window, entry, screenshots) {
         true,
         "Neon lost the user's bloom setting"
     );
-    const mobile = {};
-    for (const style of matteStyles) {
-        mobile[style] = await require("./check-mobile.cjs")(window, screenshots, style);
-        assert.equal(await js("sonata.visualStyle"), style, "Mobile layout restoration reset the style");
-    }
+    const mobile = await timed("mobile materials", () => require("./check-style-mobile.cjs")(window, capture));
     await js("reviewStyle('neon')");
     assert.equal(await js("sonata.renderer.pieceShadows.size"), 0, "Neon retained the instruction shadow target");
     return {
@@ -392,6 +281,7 @@ module.exports = async function reviewStyles(window, entry, screenshots) {
         sliding: { ...sliding, paused: true },
         selectionPreserved: true,
         playingPreserved: true,
-        mobile
+        mobile,
+        timings
     };
 };

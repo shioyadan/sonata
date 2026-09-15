@@ -4,6 +4,8 @@ const fs = require("node:fs");
 const path = require("node:path");
 const { createBrowserTest, waitFor: waitUntil, delay } = require("./load-test.cjs")("browser-test.cts");
 
+const styleChoices = ["neon", "aluminum", "paper"];
+
 module.exports = async function reviewMobile(window, screenshots, visualStyle = "neon") {
     const js = (source) => window.webContents.executeJavaScript(source);
     const debuggerAPI = window.webContents.debugger;
@@ -16,7 +18,6 @@ module.exports = async function reviewMobile(window, screenshots, visualStyle = 
         );
     const { settle } = createBrowserTest(window);
     const layouts = [];
-    const styleChoices = ["neon", "aluminum", "paper"];
     const styleSequence = [...styleChoices.filter((style) => style !== visualStyle), visualStyle];
     let result;
     try {
@@ -35,50 +36,7 @@ module.exports = async function reviewMobile(window, screenshots, visualStyle = 
             await command("Emulation.setDeviceMetricsOverride", { width, height, deviceScaleFactor: 2, mobile: true });
             await delay(850);
             await settle();
-            const layout = await js(`(()=>{
-                const rect=id=>document.getElementById(id).getBoundingClientRect();
-                const w=rect('world'),b=rect('bound-scene'),transport=document.querySelector('.transport').getBoundingClientRect();
-                const fits=r=>r.left>=0&&r.right<=innerWidth+.1&&r.top>=0&&r.bottom<=innerHeight+.1;
-                const ids=[
-                    'play','previous','next','reset','speed','timeline','next-flush','mobile-details',
-                    ...${JSON.stringify(styleChoices.map((style) => `style-${style}`))},'zoom-in','zoom-fit','zoom-out'
-                ];
-                return {width:innerWidth,height:innerHeight,scrollWidth:document.documentElement.scrollWidth,scrollHeight:document.documentElement.scrollHeight,
-                    controls:ids.map(id=>{const r=rect(id);return {id,left:r.left,right:r.right,top:r.top,bottom:r.bottom,width:r.width,height:r.height,visible:fits(r),reachable:document.getElementById(id).contains(document.elementFromPoint(r.x+r.width/2,r.y+r.height/2))};}),
-                    styleBelowView:[...document.querySelectorAll('[data-style-choice]')].every(el=>
-                        el.getBoundingClientRect().top>=document.querySelector('.view-controls').getBoundingClientRect().bottom),
-                    compact:sonata.camera.compact,transportVisible:fits(transport),error:sonata.renderer.error,
-                    boundVisible:b.width>0&&b.left>=w.left&&b.right<=w.right&&b.top>=w.top&&b.bottom<=w.bottom,
-                    telemetryInPanel:document.getElementById('mobile-panel').contains(document.querySelector('.telemetry'))};
-            })()`);
-            assert.ok(layout.scrollWidth <= width, `Horizontal overflow at ${width} px`);
-            assert.ok(layout.scrollHeight <= height, `Playback requires scrolling at ${width} px`);
-            assert.ok(layout.compact && layout.telemetryInPanel && layout.transportVisible && layout.boundVisible);
-            assert.ok(
-                layout.controls.every((c) => c.visible && c.reachable && c.width >= 44 && c.height >= 44),
-                JSON.stringify(layout.controls)
-            );
-            assert.ok(layout.styleBelowView, "Appearance controls did not fit below the view controls");
-            // 3つのスタイルを同じ行に並べ、ボタン同士や再生・ズーム操作との重なりも検出する。
-            const styles = layout.controls.filter((control) => control.id.startsWith("style-"));
-            assert.deepEqual(
-                styles.map((control) => control.id),
-                styleChoices.map((style) => `style-${style}`)
-            );
-            assert.ok(
-                styles.every((control) => control.top === styles[0].top),
-                "Style controls wrapped across rows"
-            );
-            for (const button of layout.controls.filter((control) => control.id.startsWith("style-"))) {
-                const collision = layout.controls.find(
-                    (other) =>
-                        other.id !== button.id &&
-                        Math.min(button.right, other.right) - Math.max(button.left, other.left) > 0.1 &&
-                        Math.min(button.bottom, other.bottom) - Math.max(button.top, other.top) > 0.1
-                );
-                assert.equal(collision, undefined, `${button.id} overlaps ${collision?.id} at ${width} px`);
-            }
-            assert.equal(layout.error, 0);
+            const layout = await reviewLayout(window, width, height);
             layouts.push(layout);
             await capture(name);
             // 実際のタッチで全スタイルを選び、再生時刻を保ったまま選択表示が切り替わる。
@@ -292,3 +250,54 @@ module.exports = async function reviewMobile(window, screenshots, visualStyle = 
     );
     return { ...result, desktopRestore: desktop };
 };
+
+// スタイル固有の画面検査も、同じ操作領域・重なり・配置の条件を使う。
+async function reviewLayout(window, width, height) {
+    const js = (source) => window.webContents.executeJavaScript(source);
+    const layout = await js(`(()=>{
+        const rect=id=>document.getElementById(id).getBoundingClientRect();
+        const w=rect('world'),b=rect('bound-scene'),transport=document.querySelector('.transport').getBoundingClientRect();
+        const fits=r=>r.left>=0&&r.right<=innerWidth+.1&&r.top>=0&&r.bottom<=innerHeight+.1;
+        const ids=[
+            'play','previous','next','reset','speed','timeline','next-flush','mobile-details',
+            ...${JSON.stringify(styleChoices.map((style) => `style-${style}`))},'zoom-in','zoom-fit','zoom-out'
+        ];
+        return {width:innerWidth,height:innerHeight,scrollWidth:document.documentElement.scrollWidth,scrollHeight:document.documentElement.scrollHeight,
+            controls:ids.map(id=>{const r=rect(id);return {id,left:r.left,right:r.right,top:r.top,bottom:r.bottom,width:r.width,height:r.height,visible:fits(r),reachable:document.getElementById(id).contains(document.elementFromPoint(r.x+r.width/2,r.y+r.height/2))};}),
+            styleBelowView:[...document.querySelectorAll('[data-style-choice]')].every(el=>
+                el.getBoundingClientRect().top>=document.querySelector('.view-controls').getBoundingClientRect().bottom),
+            compact:sonata.camera.compact,transportVisible:fits(transport),error:sonata.renderer.error,
+            boundVisible:b.width>0&&b.left>=w.left&&b.right<=w.right&&b.top>=w.top&&b.bottom<=w.bottom,
+            telemetryInPanel:document.getElementById('mobile-panel').contains(document.querySelector('.telemetry'))};
+    })()`);
+    assert.ok(layout.scrollWidth <= width, `Horizontal overflow at ${width} px`);
+    assert.ok(layout.scrollHeight <= height, `Playback requires scrolling at ${width} px`);
+    assert.ok(layout.compact && layout.telemetryInPanel && layout.transportVisible && layout.boundVisible);
+    assert.ok(
+        layout.controls.every((c) => c.visible && c.reachable && c.width >= 44 && c.height >= 44),
+        JSON.stringify(layout.controls)
+    );
+    assert.ok(layout.styleBelowView, "Appearance controls did not fit below the view controls");
+    // 3つのスタイルを同じ行に並べ、ボタン同士や再生・ズーム操作との重なりも検出する。
+    const styles = layout.controls.filter((control) => control.id.startsWith("style-"));
+    assert.deepEqual(
+        styles.map((control) => control.id),
+        styleChoices.map((style) => `style-${style}`)
+    );
+    assert.ok(
+        styles.every((control) => control.top === styles[0].top),
+        "Style controls wrapped across rows"
+    );
+    for (const button of layout.controls.filter((control) => control.id.startsWith("style-"))) {
+        const collision = layout.controls.find(
+            (other) =>
+                other.id !== button.id &&
+                Math.min(button.right, other.right) - Math.max(button.left, other.left) > 0.1 &&
+                Math.min(button.bottom, other.bottom) - Math.max(button.top, other.top) > 0.1
+        );
+        assert.equal(collision, undefined, `${button.id} overlaps ${collision?.id} at ${width} px`);
+    }
+    assert.equal(layout.error, 0);
+    return layout;
+}
+module.exports.layout = reviewLayout;

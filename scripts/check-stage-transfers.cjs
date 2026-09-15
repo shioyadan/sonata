@@ -1,8 +1,9 @@
 "use strict";
 const assert = require("node:assert/strict");
-const { createBrowserTest } = require("./load-test.cjs")("browser-test.cts");
+const { createBrowserTest, waitFor } = require("./load-test.cjs")("browser-test.cts");
 
 module.exports = async function reviewStageTransfers(window) {
+    const started = performance.now();
     const { evaluate, sampleFrame } = createBrowserTest(window);
     const setup = await evaluate(({ sonata }) => {
         const saved = { style: sonata.visualStyle, cycle: sonata.cycle };
@@ -104,7 +105,8 @@ module.exports = async function reviewStageTransfers(window) {
             return error;
         }, setup.saved)
     );
-    const result = { trace: setup.trace, transfers, error };
+    const seconds = Number(((performance.now() - started) / 1000).toFixed(2));
+    const result = { trace: setup.trace, transfers, error, seconds };
     assert.ok(result.transfers.length >= 5, `${result.trace}: too few stage transitions exercised`);
     assert.ok(
         result.transfers.some((t) => t.airborne > 0),
@@ -125,5 +127,55 @@ module.exports = async function reviewStageTransfers(window) {
         );
     }
     assert.equal(result.error, 0);
+    console.log(`[transfers] ${setup.trace}: passed (${seconds}s)`);
     return result;
+};
+
+// 経路の座標検査は材質の画素比較から独立して実行できる。
+// desktop の配置を保った小さな描画面で全9時刻を描き、終了後は元の表示サイズへ戻す。
+module.exports.all = async function reviewAllTransfers(window) {
+    const { evaluate, sampleFrame } = createBrowserTest(window);
+    const [width, height] = window.getContentSize();
+    const traces = [];
+    const viewport = { width: 1001, height: 620 };
+    const restored = () =>
+        evaluate(({ sonata }) => ({ width: innerWidth, height: innerHeight, compact: sonata.camera.compact }));
+    const waitSize = async (width, height) => {
+        let actual;
+        await waitFor(
+            async () => {
+                actual = await restored();
+                return actual.width === width && actual.height === height && !actual.compact;
+            },
+            "Stage transfer viewport did not settle",
+            { timeout: 5000, diagnostics: () => actual }
+        );
+    };
+    try {
+        window.setContentSize(viewport.width, viewport.height);
+        await waitSize(viewport.width, viewport.height);
+        await sampleFrame(() =>
+            evaluate(({ sonata, $ }) => {
+                sonata.setPlaying(false);
+                if ($("auto-camera").getAttribute("aria-pressed") === "true") $("auto-camera").click();
+                $("style-aluminum").click();
+            })
+        );
+        const keys = await evaluate(() => sonataDemoCatalog.map((trace) => trace.key));
+        for (const key of keys) {
+            await sampleFrame(() =>
+                evaluate(async ({ sonata }, key) => {
+                    await sonata.loadTrace(key);
+                    sonata.captureAt(sonata.trace.demo.screenshotCycle);
+                }, key)
+            );
+            traces.push(await module.exports(window));
+        }
+        await sampleFrame(() => evaluate(({ $ }) => $("style-neon").click()));
+    } finally {
+        window.setContentSize(width, height);
+    }
+    // 本体が失敗した場合は復帰のassertで元の原因を置き換えない。
+    await waitSize(width, height);
+    return { viewport, traces, restored: await restored() };
 };
