@@ -125,13 +125,34 @@ npm run typecheck
 
 `npm test` は再生モデルの整合性、紙箱・金属パックの接地と正立した滑走、ビルドの独立性を検査します。ビルド検査は、必要なソースだけを別の一時ディレクトリにコピーし、`node_modules` や Konata のチェックアウトなしで同一 HTML とgzip生トレースを作れることを確認します。旧 `data/traces.js` / `demo-manifest.json` を削除した隔離先でもビルドし、通常の配布がCPU回帰fixtureに依存しないことを確認します。gzipの完全一致、HTMLへの命令埋込みの不在、UTF-8、外部スクリプトの不在、vendor のハッシュも確認します。`scripts/check-raw-samples.cjs` は配布gzipをCoreで解析し、旧5デモ計2,857命令のID・RID・fetch・retire・flush・命令文字列と、表示範囲・出典・見どころを照合します。
 
+作業中は変更に関係する検査だけを選び、最終確認で変更範囲に必要な全検査を実行します。CPUは `scripts/test.cjs` が各suiteを独立プロセスで順番に実行し、名前・経過時間・失敗したsuiteを表示します。`npm test -- --list` で一覧、`npm test -- model playback` で対象を指定できます。引数なしの `npm test` は全範囲を保ちます。
+
+描画は `scripts/render.cjs` が準備・通信制限・実行・後始末を担当し、検査本体を選べます。`node scripts/render.cjs --list` で一覧を確認してください。指定した検査は新しいページから開始し、直前の検査の再生速度・選択・表示幅に依存しません。次の例は画面のある環境向けで、ヘッドレスLinuxでは先頭へ `xvfb-run -a -s '-screen 0 1600x1100x24'` を付けます。
+
+| 作業中に確認したい内容 | コマンド |
+| --- | --- |
+| CPUの状態・早送り計算 | `npm test -- model playback` |
+| 索引・逐次File・Worker要求 | `npm test -- trace-index trace-file trace-worker` |
+| 起動・代表画面・基本File形式 | `npm run test:smoke` |
+| キー・カメラ・WebGL障害 | `npm run test:browser` |
+| 材質・接地・影・スタイル切替 | `npm run test:styles` |
+| 全デモのステージ間移動・接地経路 | `npm run test:render -- --sections=transfers` |
+| 通知・レジスタ・Top-downの描画 | `npm run test:render -- --sections=evidence` |
+| 読込み中の操作・古い応答の競合 | `npm run test:render -- --sections=import-streaming` |
+| 全体位置・検索・履歴の操作 | `npm run test:render -- --sections=import-navigation` |
+| 区間の連続再生・空白・待機早送り | `npm run test:render -- --sections=import-playback` |
+| LOAD / STORE描画とFileの端末別配置 | `npm run test:render -- --sections=memory,import-layout` |
+| 全描画検査 | `npm run test:render` |
+
+未知の名前・重複した描画範囲は実行前に拒否し、誤記を全検査として扱いません。`test:browser`、`test:mobile`、`test:styles` は対象だけを実行します。サンプル取得の競合は `demos`、File読込みの全範囲は `test:import` で個別に確認できます。`import` と、その一部である `import-*` は重複指定できません。描画の選択範囲・結果・各経過時間・失敗診断は `artifacts/render-results.json` に保存します。次の実行で上書きされるので、比較時は別名へ保存してください。コンソールには開始・終了・経過時間と失敗を表示します。
+
 `scripts/check-scene.cjs` は全5デモの配置と命令経路を DOM / GPU なしで準備し、別のインスタンスへの状態混入と元データの変更を検出します。未読込み・空の一覧・読込み失敗時の状態保持と、再読込み後も配置が同じ参照を使えることも確認します。`scripts/check-bundle.cjs` は独立した JavaScript 環境で相対パス、変数スコープ、一度だけの実行、循環参照、不正な参照の拒否を確認します。`scripts/check-browser-test.cjs` はページ内関数の引数・Promise・例外の受け渡しと、フレーム待機・期限超過時の診断を別のJavaScript実行環境で確認します。条件・診断・描画の無応答、期限後の結果と例外、期限タイマーの回収も検査します。いずれも `npm test` に含まれます。
 
 Node の推奨バージョンは `.nvmrc` に固定し、セキュリティ修正版へ更新します。`npm run test:server` はローカルでサーバーを起動し、本体・全サンプルのGET / HEAD、ソースと一覧外のファイルの非公開、未対応メソッドと不正な URL の拒否、異常なリクエスト後も配信が継続することを確認します。
 
 `THIRD_PARTY_NOTICES.md` と `licenses/` の原文は、配布 HTML の **Licenses** パネルへ埋め込みます。デモの元プログラムやライセンスが変わった場合はこれらも更新し、`npm test` で全文の保持を確認してください。
 
-`npm run test:smoke` は、単一HTMLの起動と再生・操作、全5デモの代表時刻、3スタイルの描画、モバイル1サイズからデスクトップへの復帰、ライセンス表示を短く確認します。全描画検査と同じHTML単体のFile読込み、HTTPサンプル取得・取消し・失敗時の保持、一時プロファイルを使います。
+`npm run test:smoke` は、単一HTMLの起動と再生・操作、全5デモの代表時刻、3スタイルの描画、モバイル1サイズからデスクトップへの復帰、ライセンス表示を短く確認します。全描画検査と同じHTML単体のFile読込み、HTTPサンプル取得・取消し・失敗時の保持、一時プロファイルを使います。FileのKanata / gem5・gzip / zstd、区間・スレッド移動、EOF、エラー・取消は基本範囲に含めます。詳細な探索、入力を保留した競合、連続再生・早送り、Fileの複数画面サイズは全検査と個別の `import-*` で実行します。
 
 `npm run test:render` は、本体HTMLだけを一時ディレクトリへコピーし、ネットワーク要求なしでFileを開けることを確認します。別の隔離ディレクトリへ本体とサンプルをコピーしてローカルHTTPで配信し、起動時の未取得、`#demo=`、キャッシュ、失敗・再試行・取消しとFile切替えの競合も検査します。通信先はその本体とサンプルだけに限定し、全5デモの FIFO、ステージ、pipe と接続線、依存行列、レジスタ、フラッシュ、Top-down、操作を検査します。OS の動きを減らす設定でも再生・演出が自動で始まること、手動で演出を OFF / ON にできること、再読込み時は再び ON になることも確認します。
 
@@ -148,7 +169,7 @@ Node の推奨バージョンは `.nvmrc` に固定し、セキュリティ修�
 - Neon / Aluminum / Paper それぞれで実際の WebGL context loss / restore を発生させ、案内、再生時計の停止、復旧後の再生と描画画素を確認します。Aluminum / Paper の材質テクスチャと投影影を復旧後にも生成できることを含め、単なるフラグの変化だけで復旧成功とは判定しません。
 - MSAA を使えない環境を注入し、Paper の不透明な小さな折り箱と Aluminum の金属パックが、描画画素を出して WebGL エラーなく動作することを確認します。材質拡大のカメラ収束は、Fit・最大拡大と同じく最大30秒待ち、許容誤差は変えません。
 
-スタイルの比較検査は `scripts/check-styles.cjs` にまとめ、`npm run test:styles` で個別実行できます。全5デモで3スタイルの切り替え前後の再生状態・水平座標・選択を照合し、再生の継続、スタイルごとの命令形状の固定、命令選択と描画画素の変化、Aluminum / Paper のモバイル4画面とタッチ操作も確認します。スタイルボタンと視点ボタンの見た目を照合し、モバイルでは44px以上の操作領域、ヒット判定、実タッチ・Spaceでのスタイル切り替え、再生ショートカットとの分離も検査します。これらは全体の `npm run test:render` に含まれます。[外観の仕様](visual-styles.md)に画像の出力先と設計判断を記載しています。
+スタイルの比較検査は `scripts/check-styles.cjs` にまとめ、`npm run test:styles` で個別実行できます。全5デモで3スタイルの切り替え前後の再生状態・水平座標・選択を照合し、再生の継続、スタイルごとの命令形状の固定、命令選択と描画画素の変化、Aluminum / Paper のDPR 2・モバイル4画面の配置と画素、デスクトップ復帰も確認します。スタイルボタンと視点ボタンの見た目を照合します。44px以上の操作領域とヒット判定は材質ごとに確認し、実タッチ・Spaceでの全スタイル切替、再生ショートカットとの分離、ピンチ・移動・全デモ切替は `test:mobile` で一度だけ検査します。これらは全体の `npm run test:render` に含まれます。[外観の仕様](visual-styles.md)に画像の出力先と設計判断を記載しています。
 
 実トレースで移動・待機・停止・シーク・デモ再読込み後の姿勢を検査し、紙の折り箱と金属パックが Motion effects の OFF / ON でも同じ向きと駒の画素を保つことを確認します。画像の比較は canvas 自体から読み取り、図に重なる操作ボタンの文字を画素差に含めません。
 
@@ -156,7 +177,7 @@ Node の推奨バージョンは `.nvmrc` に固定し、セキュリティ修�
 
 `scripts/check-stage-layout.cjs` は、スケジューラの横線・縦線が表示容量と一致し、実際のGPU描画に各1本ずつ含まれることを照合します。Rnは元トレースの全滞在区間で配置先の重複を検査し、再生範囲内の混雑する時刻で全命令の表示、間隔、シークでの復元も確認します。この検査は `test:styles` と全 `test:render` に含まれます。
 
-ステージ間の移動は `scripts/check-stage-transfers.cjs` で、全5デモの異なるステージ間とROB→COMMIT・退場を細かくシークし、両端より土台まで落ちること、急な高さの跳び、水平経路やシーク順によるずれを検出します。
+ステージ間の移動は材質検査から独立した `transfers` 範囲（`scripts/check-stage-transfers.cjs`）で、全5デモの異なるステージ間とROB→COMMIT・退場を細かくシークし、両端より土台まで落ちること、急な高さの跳び、水平経路やシーク順によるずれを検出します。 この検査では全経路の9時刻を描画し、画面上の画素数に依存しないworld座標を照合します。描画面だけを1001 × 620のデスクトップ配置へ縮め、終了後に元の大きさへ戻します。材質・影・不透明度の画素比較は `styles` の通常解像度で維持します。
 
 接地は `scripts/check-piece-grounding.cjs` で、紙の折り箱と金属パックの寸法、角と面取り、傾斜面、台の縁、シーク順からの独立性と、障害物判定用の外接球を検査します。描画検査の `scripts/check-grounded-pieces.cjs` はユニット上の接触点、ステージ間の非接地、実際の GPU バッファの座標・半径を照合します。スタイル間で Y 座標が変わるため、共通の水平経路と再生状態を比較し、命令選択は接地後の画面座標に実入力を送ります。
 

@@ -102,6 +102,8 @@ xvfb-run -a -s '-screen 0 1600x1100x24' npm run test:render
 xvfb-run -a -s '-screen 0 1600x1100x24' npm run test:mobile
 ```
 
+作業中は `npm test -- model playback` や `npm run test:render -- --sections=import-streaming` のように対象を絞れます。検査範囲の一覧・使い分けは[開発ガイドの検証](docs/development.md#検証)を参照してください。描画結果と経過時間は `artifacts/render-results.json` に保存します。
+
 検証画像は `artifacts/screenshots/` に出力します。描画検査は、HTML単体のオフラインFile読込みと、ローカルHTTPでのサンプル取得・描画を確認します。検査用の本体とサンプル以外への通信は禁止します。通常のCIはモデル・ビルド・型検査と、`npm run test:smoke` による基本的な描画・操作の確認を行います。全描画検査はローカル、またはGitHub Actionsの手動実行で `full_render` を選んで行います。詳細は [開発ガイド](docs/development.md) にまとめています。
 
 `npm run format` でソースと自作スクリプトを整形できます。README とソースコードの説明コメントは日本語で記述します。作業上の指針は [AGENTS.md](AGENTS.md)、継続して維持する判断と確認事項は [保守の資料](docs/maintenance.md) を参照してください。

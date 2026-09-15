@@ -80,6 +80,8 @@ GPU の描画先は初期化前には `null` です。残る非 null assertion �
 - `npm test`: 再生・演出計算、独立したシーン間の状態分離、モジュールの解決・キャッシュ・スコープ・循環参照、本体HTMLとgzip生トレースの再現可能なビルド、生ログと旧fixtureの命令記録の一致。
 - `npm run test:render`: 全5デモ、3スタイル、選択・接地・滑走・影、キーボード・タッチ、モバイル復帰、WebGL の障害と復旧。
 
+CPU検査の実行一覧は `scripts/test.cjs`、描画検査の範囲選択は `scripts/render-plan.cjs` に置きます。`render.cjs` は隔離配信とElectronの寿命、時間・結果記録を担当し、デスクトップ操作は `check-desktop.cjs`、記録表示は `check-evidence-render.cjs`、動きの設定は `check-motion.cjs` へ分けます。File検査は基本入力・探索・逐次競合・再生・端末配置を明示的に選べます。[対象を絞るコマンド](development.md#検証)を参照してください。
+
 構造の変更でも、診断値だけで描画の同一性を判断しません。比較時は同じ時刻・カメラ・演出用時計を与え、canvas の画素も照合します。通常再生と実入力は既存の描画検査で別に確認します。検証環境と実行手順は [開発ガイド](development.md) を参照してください。
 
 FileとHTTPの生トレースは、同じWorker・Konata core・`trace-window.cts`を通します。デモだけの解析済みJSON経路はありません。サンプル解析後は表示区間から導出したTraceだけを最大5件キャッシュし、解析Workerと全体storeを解放します。Fileの全体は操作を続けるためWorkerのKonata storeへ保持し、選択区間だけを描画へ渡します。未観測値、圧縮、生成済みCoreの扱いは[ローカルトレースの読込み](trace-import.md)を参照してください。

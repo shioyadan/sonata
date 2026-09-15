@@ -119,14 +119,14 @@ npm run test:styles
 xvfb-run -a -s '-screen 0 1600x1100x24' npm run test:styles
 ```
 
-単一HTMLを一時フォルダへコピーして外部アクセスを禁止し、全5デモのスクリーンショットと見どころの時刻で3スタイルの状態を比較します。Aluminum / Paperの水平経路・色・半径・インスタンス数を照合し、全命令の向きが固定されていることを確認します。高さと接点は金属パック・紙箱の実際の面とGPUへ送った座標から検査します。
+本体と生トレースを隔離したHTTP配信先へコピーし、それ以外の通信を禁止して、全5デモのスクリーンショットと見どころの時刻で3スタイルの状態を比較します。Aluminum / Paperの水平経路・色・半径・インスタンス数を照合し、全命令の向きが固定されていることを確認します。高さと接点は金属パック・紙箱の実際の面とGPUへ送った座標から検査します。
 
-時計・カメラ・命令選択・ROB・レジスタ・依存行列・Top-down・ポートと配線の座標、再生の継続、Bloom設定の復帰、描画画素を確認します。スタイルボタンが3種類だけで指定順の1行に並び、視点ボタンと文字・余白・枠・選択表示が一致することを検査します。モバイル4サイズでは44px以上の操作領域、ヒット判定、実タッチ・Spaceによる切り替え、再生ショートカットとの分離を検査します。ピンチと移動、設定パネル、デスクトップへの復帰も含みます。
+時計・カメラ・命令選択・ROB・レジスタ・依存行列・Top-down・ポートと配線の座標、再生の継続、Bloom設定の復帰、描画画素を確認します。スタイルボタンが3種類だけで指定順の1行に並び、視点ボタンと文字・余白・枠・選択表示が一致することを検査します。材質ごとのモバイル4サイズではDPR 2の描画画素・44px以上の操作領域・ヒット判定と、設定パネルを開いた状態からのデスクトップ復帰を検査します。共通の実タッチ・Spaceによる切替、再生ショートカットとの分離、ピンチと移動は `test:mobile` で一度だけ確認し、全 `test:render` にも含めます。
 
 実トレースの移動・長い待機・一時停止・巻き戻し・デモ再読込み・commit / squash後の姿勢を検査し、Motion effects切替時に駒の向きと中心の描画画素が変わらないことを照合します。接地は紙箱・金属パック・障害物判定用の外接球で傾斜面・段差・辺を検査します。動く命令の影は同じフレームから影だけを除いた画素と比較し、移動・停止・シークでの復元と再利用を確認します。
 
-比較画像は `artifacts/screenshots/sonata-style-<demo>-neon.png`、`sonata-style-<demo>-aluminum.png`、`sonata-style-<demo>-paper.png` です。画素差はUIを除いたキャンバスから読み取ります。中間の拡大は `sonata-style-<style>-materials.png`、最大拡大は `sonata-style-<style>-detail.png`、モバイルは `sonata-mobile-<style>*.png` に保存します。診断値は `sonata.visualStyle`、`sonata.pieces`、`sonata.selectedID`、`sonata.renderer` から確認できます。
+比較画像は `artifacts/screenshots/sonata-style-<demo>-neon.png`、`sonata-style-<demo>-aluminum.png`、`sonata-style-<demo>-paper.png` です。画素差はUIを除いたキャンバスから読み取ります。中間の拡大は `sonata-style-<style>-materials.png`、最大拡大は `sonata-style-<style>-detail.png`、モバイルは `sonata-style-<style>-mobile-<width>.png` に保存します。診断値は `sonata.visualStyle`、`sonata.pieces`、`sonata.selectedID`、`sonata.renderer` から確認できます。
 
 ブラウザ検査では全3スタイルでWebGL context loss / restoreを発生させ、再生と材質・影・描画画素の復旧を確認します。MSAAを使えない環境も注入し、両実体の画素・WebGLエラーを確認します。命令描画直前の下地を黒・白へ差し替えても駒の中心画素が変わらないことを検査し、命令を除いた対照フレームで下地の差が現れることも確認します。拡大画像は `sonata-style-aluminum-no-msaa.png` / `sonata-style-paper-no-msaa.png` に残します。
 
-この検査は `npm run test:render` とCIにも含みます。Electron / SwiftShaderでの検証であり、実機Safari / Chromeの見た目やGPUの速度は別途確認が必要です。描画パスや分岐の削減だけで高速化を断定せず、通常再生と同じ条件で負荷を比較します。
+この検査は `npm run test:render` と手動の全描画CIに含みます。Electron / SwiftShaderでの検証であり、実機Safari / Chromeの見た目やGPUの速度は別途確認が必要です。描画パスや分岐の削減だけで高速化を断定せず、通常再生と同じ条件で負荷を比較します。

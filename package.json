@@ -15,7 +15,7 @@
   "scripts": {
     "build": "node scripts/build.cjs",
     "start": "node scripts/serve.cjs",
-    "test": "node --experimental-transform-types scripts/check-memory.cjs && node --import tsx scripts/check-store-evidence.cjs && node --experimental-transform-types scripts/check-model.cjs && node --experimental-transform-types scripts/check-piece-grounding.cjs && node --experimental-transform-types scripts/check-scene.cjs && node scripts/check-bundle.cjs && node scripts/check-browser-test.cjs && node scripts/check-build.cjs && node scripts/check-core.cjs && node --experimental-transform-types scripts/check-trace-file.cjs && node --experimental-transform-types scripts/check-trace-window.cjs && node --import tsx scripts/check-raw-samples.cjs && node --import tsx scripts/check-top-down.cjs && node --experimental-transform-types scripts/check-trace-evidence.cjs",
+    "test": "node scripts/test.cjs",
     "test:server": "node scripts/check-server.cjs",
     "test:render": "electron --no-sandbox scripts/render.cjs",
     "test:smoke": "electron --no-sandbox scripts/render.cjs --smoke",
