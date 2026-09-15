@@ -62,7 +62,8 @@
       "machineOrder": "out-of-order",
       "robEntries": 192,
       "allocationWidth": 8,
-      "wordBits": 64
+      "wordBits": 64,
+      "integerRegisters": 256
     }
   },
   {
@@ -103,7 +104,8 @@
       "machineOrder": "out-of-order",
       "robEntries": 192,
       "allocationWidth": 8,
-      "wordBits": 64
+      "wordBits": 64,
+      "integerRegisters": 256
     }
   },
   {
