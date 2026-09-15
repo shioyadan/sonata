@@ -12,6 +12,8 @@ type Options = {
     firstCycle: number;
     lastCycle: number;
     structure: Structure | null;
+    // 疎な構造標本より広い実窓の観測幅、または確認済みの設定値。
+    allocationWidth?: number;
     endCycle?: (op: Readonly<Op>) => number;
     recovery?: Recovery | null;
     laneNames?: readonly string[];
@@ -163,7 +165,7 @@ function buildTopDownWindow(options: Options) {
     )
         throw new Error(`Top-down requires a window of at most ${limits.cycles} integer cycles`);
     if (!structure || !boundedOps(options.ops)) return null;
-    const width = structure.allocationStage.width;
+    const width = options.allocationWidth ?? structure.allocationStage.width;
     if (!Number.isSafeInteger(width) || width < 1 || width > limits.width) return null;
     const first = Math.max(0, firstCycle - limits.history);
     const ops = [...options.ops].sort((a, b) => a.id - b.id);

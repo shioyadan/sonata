@@ -178,6 +178,56 @@ async function main() {
         recovery
     });
     assert.equal(farMaximum.slots.length, limits.cycles + limits.history);
+    // 構造検出用の疎な標本が幅1でも、実窓で同時に割り当てられた8命令を捨てない。
+    const burst = Array.from({ length: 8 }, (_, id) =>
+        operation(id, [
+            ["F", 0, 1],
+            ["Sc", 1, 2],
+            ["X", 2, 3],
+            ["Rw", 3, 4],
+            ["Cm", 4, 5]
+        ])
+    );
+    const narrowStructure = {
+        allocationStage: { ...structure.allocationStage, width: 1 },
+        executionStage: structure.executionStage,
+        transitionCoverage: structure.transitionCoverage,
+        observe: (op) => structure.observe(op)
+    };
+    const burstWindow = buildTopDownWindow({
+        ops: burst,
+        firstCycle: 0,
+        lastCycle: 20,
+        structure: narrowStructure,
+        allocationWidth: 8
+    });
+    assert.equal(burstWindow.allocationWidth, 8);
+    assert.deepEqual(burstWindow.slots[1], [8, 0, 0, 0, 0, 0]);
+    assert.equal(burstWindow.observationTimes.outcomes.length, 8);
+    assert.deepEqual(sampleTopDown(burstWindow, 1.5).counts, [0, 0, 0, 8, 0, 0, 4]);
+    assert.deepEqual(sampleTopDown(burstWindow, 5).counts, [8, 0, 0, 32, 0, 0, 0]);
+    assert.ok(burstWindow.slots.every((row) => row.reduce((sum, count) => sum + count, 0) === 8));
+    // 観測幅を維持しつつ設定幅だけ広げた場合、空きスロットはfrontendのまま残る。
+    const configuredWindow = buildTopDownWindow({
+        ops: burst,
+        firstCycle: 0,
+        lastCycle: 20,
+        structure: narrowStructure,
+        allocationWidth: 12
+    });
+    assert.deepEqual(configuredWindow.slots[1], [8, 0, 0, 4, 0, 0]);
+    assert.equal(configuredWindow.observationTimes.outcomes.length, 8);
+    for (const allocationWidth of [0, 1.5, NaN, limits.width + 1])
+        assert.equal(
+            buildTopDownWindow({
+                ops: burst,
+                firstCycle: 0,
+                lastCycle: 20,
+                structure: narrowStructure,
+                allocationWidth
+            }),
+            null
+        );
     const fragmented = ops.filter((op) => op.id % 6 !== 4);
     assert.equal(recoveryModel(fragmented, structure), null, "Noncontiguous context invented branch recovery");
     const unknown = buildTopDownWindow({ ops, firstCycle: 0, lastCycle: 10, structure: null });
