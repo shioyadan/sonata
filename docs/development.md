@@ -94,17 +94,19 @@ npm run format:check
 
 ## ビルド
 
-`npm run build` は Node の標準ライブラリだけで、`src/index.html` にスタイル・スクリプト・解析器・ライセンスと小さなデモ一覧を埋め込みます。本体は `dist/sonata.html`、5本のデモは `dist/samples/<key>.json` へ出力します。JSONは `data/traces.js` の各Traceをそのまま保存し、記録値や出典を変えません。HTML単体で手元のFileを開けます。
+`npm run build` は Node の標準ライブラリだけで、`src/index.html` にスタイル・スクリプト・解析器・ライセンスと小さなデモ一覧を埋め込みます。本体は `dist/sonata.html`、5デモが使う4本の生トレースは `dist/samples/*.log.gz` へ出力します。`data/samples/` のgzipをバイト単位でコピーし、`data/sample-sources.json` のサイズ・ハッシュを照合します。`data/sample-catalog.json` の名前・表示範囲・見どころ・出典・確認済みCPU設定だけをHTMLへ含め、命令やレジスタeventの配列は含めません。HTML単体で手元のFileを開けます。
 
 ブラウザ用の相対 CommonJS は `scripts/bundle.cjs` で結合します。`.cts` の型と CommonJS 用の import/export 構文は Node 標準の `stripTypeScriptTypes` の `transform` モードで変換します。新しいモジュールは拡張子付きの相対パスで参照し、実行時に別のスクリプトやスタイルを取得しません。ソースを直接開かず、ビルドした HTML または `npm start` で確認します。
 
-`npm start` はビルドした HTML とカタログに載るサンプルJSONだけを配信します。ソースディレクトリや元ログを公開するサーバーではありません。環境変数 `SONATA_HOST` / `SONATA_PORT` で待ち受け先を変更できます。スマートフォンから同じネットワーク経由で確認する場合の例:
+`npm start` はビルドした HTML とカタログに載るgzip生トレースだけを配信します。サンプルは `application/gzip` として、Content-Encodingを付けずに配信し、圧縮されたバイト列を共通の読込み処理へ渡します。ソースディレクトリや抜粋前の大きな元ログは配信しません。環境変数 `SONATA_HOST` / `SONATA_PORT` で待ち受け先を変更できます。スマートフォンから同じネットワーク経由で確認する場合の例:
 
 ```sh
 SONATA_HOST=0.0.0.0 npm start
 ```
 
 端末のブラウザで開発マシンの IP アドレスとポート4173を開きます。
+
+生トレースの再生成は `npm run demos:generate`（`scripts/generate-samples.cjs`）で行います。元ログの配置とprefixの保持方法は [データの再生成](../data/README.md#再生成) を参照してください。通常ビルド・表示だけの変更に元ログは不要です。
 
 ## 型検査
 
@@ -121,7 +123,7 @@ npm run typecheck
 
 ## 検証
 
-`npm test` は再生モデルの整合性、紙箱・金属パックの接地と正立した滑走、ビルドの独立性を検査します。ビルド検査は、必要なソースだけを別の一時ディレクトリにコピーし、`node_modules` や Konata のチェックアウトなしで同一 HTML とサンプルJSONを作れることを確認します。全デモとの完全一致、HTMLへのデータ埋込みの不在、UTF-8、外部スクリプトの不在、vendor のハッシュも確認します。
+`npm test` は再生モデルの整合性、紙箱・金属パックの接地と正立した滑走、ビルドの独立性を検査します。ビルド検査は、必要なソースだけを別の一時ディレクトリにコピーし、`node_modules` や Konata のチェックアウトなしで同一 HTML とgzip生トレースを作れることを確認します。旧 `data/traces.js` / `demo-manifest.json` を削除した隔離先でもビルドし、通常の配布がCPU回帰fixtureに依存しないことを確認します。gzipの完全一致、HTMLへの命令埋込みの不在、UTF-8、外部スクリプトの不在、vendor のハッシュも確認します。`scripts/check-raw-samples.cjs` は配布gzipをCoreで解析し、旧5デモ計2,857命令のID・RID・fetch・retire・flush・命令文字列と、表示範囲・出典・見どころを照合します。
 
 `scripts/check-scene.cjs` は全5デモの配置と命令経路を DOM / GPU なしで準備し、別のインスタンスへの状態混入と元データの変更を検出します。未読込み・空の一覧・読込み失敗時の状態保持と、再読込み後も配置が同じ参照を使えることも確認します。`scripts/check-bundle.cjs` は独立した JavaScript 環境で相対パス、変数スコープ、一度だけの実行、循環参照、不正な参照の拒否を確認します。`scripts/check-browser-test.cjs` はページ内関数の引数・Promise・例外の受け渡しと、フレーム待機・期限超過時の診断を別のJavaScript実行環境で確認します。条件・診断・描画の無応答、期限後の結果と例外、期限タイマーの回収も検査します。いずれも `npm test` に含まれます。
 
@@ -185,17 +187,17 @@ GitHub Actionsで全描画検査を行う場合は **Verify and publish Sonata �
 
 ## Git に含めるもの
 
-ソース、デモの生成元データ、ロックファイル、解析器の出典、文書を管理します。README 用の代表画像だけは `docs/images/overview.png` に置きます。日々のスクリーンショットやレポートは `artifacts/`、配布用 HTML は `dist/`、元ログは `inputs/` に分離し、これらは `.gitignore` で除外します。
+ソース、`data/samples/` のgzip生トレース4本、小さなデモ一覧・出典、CPU回帰fixture、ロックファイル、解析器の出典、文書を管理します。README 用の代表画像だけは `docs/images/overview.png` に置きます。日々のスクリーンショットやレポートは `artifacts/`、配布用 HTML は `dist/`、元ログは `inputs/` に分離し、これらは `.gitignore` で除外します。
 
-Konata の解析コードを更新する場合は [vendor の手順](../vendor/konata-core/README.md) に従い、デモの再生成と描画検査を実行してください。ブラウザ側の演出を変えるだけなら、元ログや解析器の再生成は不要です。
+Konata の解析コードを更新する場合は [vendor の手順](../vendor/konata-core/README.md) に従い、同じ生トレースで解析結果と描画を検査してください。生ログの再生成は抽出範囲や配布元を変える場合だけ行います。ブラウザ側の演出を変えるだけなら、元ログや解析器の再生成は不要です。
 
 ## ライブデモの公開
 
 公開先は https://shioyadan.github.io/sonata/ です。初回公開前に GitHub リポジトリの **Settings → Pages → Build and deployment → Source** を **GitHub Actions** に設定してください。
 
-`.github/workflows/ci.yml` は `main` への push または手動実行でモデル・ビルド・サーバーと、選択された範囲の描画を検証し、成功した同じコミットから `dist/sonata.html` を生成して、Pages の `index.html` として、`dist/samples/` を隣の `samples/` として公開します。pull request は検証だけを行います。通常は基本描画検査、手動で `full_render` を選んだ場合は全描画検査が公開条件です。Pagesジョブの上限は5分です。依存パッケージやソース、元ログを公開用ディレクトリへコピーしません。
+`.github/workflows/ci.yml` は `main` への push または手動実行でモデル・ビルド・サーバーと、選択された範囲の描画を検証し、成功した同じコミットから `dist/sonata.html` を生成して、Pages の `index.html` として、`dist/samples/` を隣の `samples/` として公開します。pull request は検証だけを行います。通常は基本描画検査、手動で `full_render` を選んだ場合は全描画検査が公開条件です。Pagesジョブの上限は5分です。公開するデータは検証済みのgzip4本に限定し、依存パッケージやソース、抜粋前の大きな元ログを公開用ディレクトリへコピーしません。
 
-README 冒頭の **ライブデモ** はこの公開先へリンクします。push 後は GitHub Actions で対象コミットの `verify` と `pages` が成功したことを確認し、公開 URL の応答と生成 HTML の内容を確認します。`verify` が失敗した場合は `pages` がスキップされ、初回は未公開、既存サイトがある場合は前の公開内容が維持されます。
+README 冒頭の **ライブデモ** はこの公開先へリンクします。push 後は GitHub Actions で対象コミットの `verify` と `pages` が成功したことを確認し、公開 URL の応答、生成 HTML の内容、カタログにあるgzip4本のサイズ・ハッシュを確認します。`verify` が失敗した場合は `pages` がスキップされ、初回は未公開、既存サイトがある場合は前の公開内容が維持されます。
 
 ## 任意トレースとCoreの更新
 

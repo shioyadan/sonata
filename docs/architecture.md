@@ -1,17 +1,19 @@
 # ソースの構造
 
-編集用の `src/` は責務に沿って分け、アプリ本体は配布時に `dist/sonata.html` 一つへ結合します。サンプルのデータは `dist/samples/` へ分離します。画面の配置・記録値・再生時刻と、外観の材質・照明・合成を分けることで、Neon / Aluminum / Paper を同じ再生内容で比較できます。
+編集用の `src/` は責務に沿って分け、アプリ本体は配布時に `dist/sonata.html` 一つへ結合します。5デモが使う4本のgzip生トレースは `dist/samples/` へ分離します。画面の配置・記録値・再生時刻と、外観の材質・照明・合成を分けることで、Neon / Aluminum / Paper を同じ再生内容で比較できます。
 
 ## 境界と編集先
 
 | ファイル | 責務 |
 | --- | --- |
-| `src/trace-import.cts` / `src/trace-worker.cts` | File操作・区間先読みとWorkerの入口 |
+| `src/trace-import.cts` / `src/trace-worker.cts` | File操作・区間先読みとFile/HTTP共通のWorker入口 |
 | `src/trace-navigation.cts` | 全体時間軸、検索結果、履歴・ブックマークと探索操作 |
-| `src/trace-file.cts` | Konata解析・圧縮store・全体索引と寿命 |
-| `src/trace-window.cts` | 選択区間を観測値に沿って再生データへ変換 |
+| `src/trace-file.cts` | File/HTTPの入力、Konata解析・圧縮store・全体索引と寿命 |
+| `src/trace-window.cts` | Fileとサンプルの選択区間を観測値に沿って再生データへ変換 |
+| `src/trace-evidence.cts` | 詳細注釈の逐次索引、レジスタeventと区間開始時点の観測状態 |
+| `src/top-down.cts` | 有界な命令集合によるTop-down集計と分岐回復の判定 |
 | `src/trace-structure.cts` | スレッド別に構造とメモリ基準の観測を蓄積し、Core検出用の標本を保持 |
-| `src/demo-loader.cts` | サンプルの固定一覧、非同期取得・取消し・キャッシュ、未選択時の内部データ |
+| `src/demo-loader.cts` | 固定一覧、サンプル解析Workerの寿命・取消し、導出済みTrace最大5件のキャッシュ |
 | `src/sonata.cts` | 起動、再生時計、共通操作、DOM 表示、検証用 API |
 | `src/camera.cts` | カメラの状態・補間・投影、マウスとタッチの操作 |
 | `src/replay-model.cts` | デモの準備、記録時刻に対応する FIFO・依存・レジスタ・Top-down の状態 |
@@ -72,12 +74,16 @@ GPU の描画先は初期化前には `null` です。残る非 null assertion �
 
 `scripts/bundle.cjs` は Node 標準の `stripTypeScriptTypes` の `transform` モードで `.cts` を変換し、関数単位のモジュールとして包み、`sonata.cts` から実行するスクリプトを生成します。各モジュールは必要になったときに一度だけ実行されます。文字列の単純連結による変数共有や `eval` は使いません。
 
-`scripts/build.cjs` は CSS、結合済みコード、解析器、ライセンスとデモ一覧を HTML に埋め込みます。デモJSONは選択時に取得し、HTTP(S)でのみ利用します。Node 標準機能だけでビルドでき、File読込みに外部資源は不要です。開発時も `npm start` で生成物を開きます。`src/index.html` を直接開く用途は想定していません。
+`scripts/build.cjs` は CSS、結合済みコード、解析器、ライセンスとデモ一覧を HTML に埋め込みます。カタログは `data/sample-catalog.json`、生データは `data/samples/*.log.gz` を使います。選択したサンプルだけをHTTP(S)で取得し、命令やレジスタeventをHTMLに含めません。旧 `data/traces.js` はCPU回帰fixtureに限定し、通常ビルド・配信から参照しません。Node 標準機能だけでビルドでき、File読込みに外部資源は不要です。開発時も `npm start` で生成物を開きます。`src/index.html` を直接開く用途は想定していません。
 
 - `npm run typecheck`: ブラウザ用コードと型付きの画面検査を `strict` で検査。型境界の不正な入力・null の扱い・GPU 資源の前提も検査。
-- `npm test`: 再生・演出計算、独立したシーン間の状態分離、モジュールの解決・キャッシュ・スコープ・循環参照、本体HTMLとサンプルJSONの再現可能なビルド。
+- `npm test`: 再生・演出計算、独立したシーン間の状態分離、モジュールの解決・キャッシュ・スコープ・循環参照、本体HTMLとgzip生トレースの再現可能なビルド、生ログと旧fixtureの命令記録の一致。
 - `npm run test:render`: 全5デモ、3スタイル、選択・接地・滑走・影、キーボード・タッチ、モバイル復帰、WebGL の障害と復旧。
 
 構造の変更でも、診断値だけで描画の同一性を判断しません。比較時は同じ時刻・カメラ・演出用時計を与え、canvas の画素も照合します。通常再生と実入力は既存の描画検査で別に確認します。検証環境と実行手順は [開発ガイド](development.md) を参照してください。
 
-任意トレースは全体をWorkerのKonata storeへ保持し、選択区間だけを描画へ渡します。未観測値、圧縮、生成済みCoreの扱いは[ローカルトレースの読込み](trace-import.md)を参照してください。
+FileとHTTPの生トレースは、同じWorker・Konata core・`trace-window.cts`を通します。デモだけの解析済みJSON経路はありません。サンプル解析後は表示区間から導出したTraceだけを最大5件キャッシュし、解析Workerと全体storeを解放します。Fileの全体は操作を続けるためWorkerのKonata storeへ保持し、選択区間だけを描画へ渡します。未観測値、圧縮、生成済みCoreの扱いは[ローカルトレースの読込み](trace-import.md)を参照してください。
+
+詳細なレジスタ注釈とRSDのイベントは、`trace-evidence.cts` が入力行から逐次索引を作ります。全文や全Opの複製を作らず、コンパクトなeventページとチェックポイントから選択区間の初期状態・eventを復元します。単一時刻や表示区間のevent数にも上限を設け、保持した記録量と作業用配列の大きさを区別します。デモのカタログで指定するISA・物理レジスタ数・語長・ROB容量・allocation幅は出典で確認した値だけです。ISAや総容量が未観測のFileへ別のデモの設定を適用せず、記録された番号・値・対応だけを表示します。容量256が設定で分かっても、256個の値が観測されたとは扱いません。
+
+Top-downは `top-down.cts` で表示区間と有界な標本から計算し、絶対サイクル番号やファイル全体の長さに比例する配列を作りません。構造や分岐回復の支持例が不足するときは原因を断定しません。旧抽出器の広い範囲で得た分類と一致させるために、抜粋外の未観測情報や事前計算済み配列を混ぜないでください。記録上のcommit/squashを観測する時刻は分類の表示にも保持します。
