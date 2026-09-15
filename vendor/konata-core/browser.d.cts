@@ -24,6 +24,7 @@ declare namespace core {
     interface ParseCallbacks {
         readonly onProgress?: (progress: number) => void;
         readonly onTrace?: (trace: ParsedTrace) => void;
+        readonly onLine?: (line: string) => void;
     }
     interface ParseResult {
         readonly trace: ParsedTrace;

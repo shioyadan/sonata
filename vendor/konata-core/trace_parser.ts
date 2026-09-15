@@ -15,6 +15,8 @@ import { PagedOpStore } from "./paged_op_store";
 export interface TraceParseCallbacks {
     readonly onProgress?: (progress: number) => void;
     readonly onTrace?: (trace: ParsedTrace) => void;
+    // 展開・行分割後の記録をParserより先に観測する。形式再判定では先頭から再通知する。
+    readonly onLine?: (line: string) => void;
 }
 
 export interface TraceParseResult {
@@ -28,6 +30,18 @@ export async function parseTraceFile(
     callbacks: TraceParseCallbacks = {},
     signal?: AbortSignal,
 ): Promise<TraceParseResult | null> {
+    const createReader = () => {
+        const reader = new FileLineReader(file);
+        const observe = callbacks.onLine;
+        if (observe !== undefined) {
+            const readLines = reader.readLines.bind(reader);
+            reader.readLines = (onLine, onProgress, readSignal) => readLines((line) => {
+                observe(line);
+                onLine(line);
+            }, onProgress, readSignal);
+        }
+        return reader;
+    };
     let unpublishedStore: PagedOpStore | null = null;
     const closeUnpublishedStore = () => {
         unpublishedStore?.close();
@@ -52,7 +66,7 @@ export async function parseTraceFile(
             unpublishedStore = await PagedOpStore.createZstd();
             parsingStartedAt = performance.now();
             trace = await new OnikiriParser(unpublishedStore).parse(
-                new FileLineReader(file),
+                createReader(),
                 callbacks.onProgress,
                 updateTrace,
                 signal,
@@ -69,7 +83,7 @@ export async function parseTraceFile(
             parsingStartedAt = performance.now();
             trace = await new Gem5O3PipeViewParser(unpublishedStore).parse(
                 // Kanata判定で読んだstreamは再利用せず、先頭から読むReaderを作り直す。
-                new FileLineReader(file),
+                createReader(),
                 callbacks.onProgress,
                 updateTrace,
                 signal,

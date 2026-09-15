@@ -2783,6 +2783,18 @@ const file_line_reader_1 = require("./file_line_reader");
 const onikiri_parser_1 = require("./onikiri_parser");
 const paged_op_store_1 = require("./paged_op_store");
 async function parseTraceFile(file, callbacks = {}, signal) {
+    const createReader = () => {
+        const reader = new file_line_reader_1.FileLineReader(file);
+        const observe = callbacks.onLine;
+        if (observe !== undefined) {
+            const readLines = reader.readLines.bind(reader);
+            reader.readLines = (onLine, onProgress, readSignal) => readLines((line) => {
+                observe(line);
+                onLine(line);
+            }, onProgress, readSignal);
+        }
+        return reader;
+    };
     let unpublishedStore = null;
     const closeUnpublishedStore = () => {
         unpublishedStore?.close();
@@ -2804,7 +2816,7 @@ async function parseTraceFile(file, callbacks = {}, signal) {
         try {
             unpublishedStore = await paged_op_store_1.PagedOpStore.createZstd();
             parsingStartedAt = performance.now();
-            trace = await new onikiri_parser_1.OnikiriParser(unpublishedStore).parse(new file_line_reader_1.FileLineReader(file), callbacks.onProgress, updateTrace, signal);
+            trace = await new onikiri_parser_1.OnikiriParser(unpublishedStore).parse(createReader(), callbacks.onProgress, updateTrace, signal);
         }
         catch (error) {
             if (!(error instanceof Error) || error.message !== "The selected file is not a Kanata trace.") {
@@ -2814,7 +2826,7 @@ async function parseTraceFile(file, callbacks = {}, signal) {
             unpublishedStore = await paged_op_store_1.PagedOpStore.createZstd();
             parserName = "Gem5O3PipeViewParser";
             parsingStartedAt = performance.now();
-            trace = await new gem5_o3_pipe_view_parser_1.Gem5O3PipeViewParser(unpublishedStore).parse(new file_line_reader_1.FileLineReader(file), callbacks.onProgress, updateTrace, signal);
+            trace = await new gem5_o3_pipe_view_parser_1.Gem5O3PipeViewParser(unpublishedStore).parse(createReader(), callbacks.onProgress, updateTrace, signal);
         }
         if (signal?.aborted) {
             trace.close();

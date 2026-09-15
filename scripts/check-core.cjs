@@ -115,12 +115,14 @@ function checkTypes() {
     const importSource = (name) => path.join(root, `vendor/konata-core/${name}.ts`).replaceAll(path.sep, "/");
     const fixtures = {
         "dom.cts": `import core = require(${JSON.stringify(declaration)});
-            const result = core.parseTraceFile(new File(['Kanata\\t0004'], 'trace.log'), {onProgress(value){const number:number=value;},onTrace(trace){trace.getOp(0);}});
+            const result = core.parseTraceFile(new File(['Kanata\\t0004'], 'trace.log'), {onProgress(value){const number:number=value;},onTrace(trace){trace.getOp(0);},onLine(line){const text:string=line;}});
             const store = core.PagedOpStore.createZstd({maxDecodedPages:2});
             // @ts-expect-error File相当のstream入力が必要。
             core.parseTraceFile('trace.log');
             // @ts-expect-error 進捗はnumber。
             core.parseTraceFile(new File([], 'trace.log'), {onProgress(value:string){}});
+            // @ts-expect-error 行観測はstring。
+            core.parseTraceFile(new File([], 'trace.log'), {onLine(value:number){}});
             // @ts-expect-error storeの上限はnumber。
             core.PagedOpStore.createZstd({maxCachedOps:'all'});`,
         "source.cts": `import core = require(${JSON.stringify(declaration)});
@@ -169,10 +171,18 @@ async function checkParsers(zstd) {
         ["trace.gz", gzipSync(encoded)],
         ["trace.zst", zstd.compress(encoded)]
     ]) {
-        const progress = [];
+        const progress = [],
+            observed = [];
         const result = await core.parseTraceFile(new File([bytes], name), {
-            onProgress: (value) => progress.push(value)
+            onProgress: (value) => progress.push(value),
+            onLine: (line) => observed.push(line),
+            onTrace: () => assert.ok(observed.length > 0, "Parser published before source lines were observed")
         });
+        assert.deepEqual(
+            observed,
+            text.trimEnd().split("\n"),
+            `${name}: line observation changed or duplicated decompressed records`
+        );
         assert.equal(result.parserName, "OnikiriParser");
         assert.equal(result.trace.opCount, 3);
         const ops = Array.from({ length: 3 }, (_, id) => result.trace.getOp(id));
@@ -188,21 +198,34 @@ async function checkParsers(zstd) {
     const gem5 =
         "O3PipeView:fetch:1000:0x10:0:10: add r1, r2\nO3PipeView:decode:2000\nO3PipeView:rename:3000\nO3PipeView:dispatch:4000\nO3PipeView:issue:5000\nO3PipeView:complete:6000\nO3PipeView:retire:7000\n";
     let streams = 0;
+    const passes = [];
     const input = {
         name: "gem5.zst",
         size: 0,
         type: "",
         stream() {
             streams++;
+            passes.push([]);
             return new Blob([zstd.compress(new TextEncoder().encode(gem5))]).stream();
         }
     };
-    const result = await core.parseTraceFile(input);
+    const result = await core.parseTraceFile(input, { onLine: (line) => passes.at(-1).push(line) });
+    assert.deepEqual(passes[1], gem5.trimEnd().split("\n"));
+    assert.deepEqual(passes[0], [gem5.split("\n")[0]], "Format probing hid or duplicated source lines");
     assert.equal(streams, 2, "Format fallback did not reopen the stream");
     assert.equal(result.parserName, "Gem5O3PipeViewParser");
     assert.equal(result.trace.getOp(0).retiredCycle, 7);
     result.trace.close();
     await assert.rejects(core.parseTraceFile(new File(["unrecognized\n"], "unknown.log")), /not a gem5/);
+    const observerFailure = new Error("line observation failed");
+    await assert.rejects(
+        core.parseTraceFile(new File([text], "observer.log"), {
+            onLine: () => {
+                throw observerFailure;
+            }
+        }),
+        (error) => error === observerFailure
+    );
     await assert.rejects(core.parseTraceFile(new File([], "empty.log")), /empty/);
     const compressed = zstd.compress(encoded);
     await assert.rejects(

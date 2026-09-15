@@ -4,7 +4,8 @@
   "revision": "e714a3c967b3499d948016afa1158575142da5ce",
   "sourceDirectory": "src/core",
   "localChanges": [
-    "model.ts / onikiri_parser.ts: expose a conservative settled-cycle boundary for incremental Kanata playback; disable it after warnings or decreasing cycles."
+    "model.ts / onikiri_parser.ts: expose a conservative settled-cycle boundary for incremental Kanata playback; disable it after warnings or decreasing cycles.",
+    "trace_parser.ts: expose optional synchronous onLine observations after decompression and before parsing; format fallback replays source lines from a new stream."
   ],
   "files": {
     "cycle_activity_analysis.ts": "07334e17c978720fd08e1e784970a2ffee003735feea58e941e827784604246a",
@@ -16,7 +17,7 @@
     "paged_op_store.ts": "02f4690a229c76913613c9a28561d4b157257cbf4450e36f7af93b8648455f98",
     "stage_structure_detector.ts": "78e33fcc8e81fffab6b7a1d9218d144e31613fee4108bc086c6760a21d1b8f27",
     "trace_navigator_analysis.ts": "e87f1c70bc5be48e405b3b2da7f7a709f89fa4d203a8feeaddceac43ca30c87f",
-    "trace_parser.ts": "50d47478484dcce417849b6cad5a82dceed5fa17a9a559977de6650ba2a8da34",
+    "trace_parser.ts": "8e1598c49a7770a92c2fad1e28d628cd9a9d467035d14728535016231891c0b0",
     "zstd_stream.ts": "bac0aac079dfeac0d3aabd0103a5baea9949679d6536ee424eafdb4a5eba28dd",
     "zstd_stream_worker.ts": "87701a96b1464b1238b691a531e0d8cb99558e183ac317202e250f15ff05dd9e"
   },
@@ -26,7 +27,7 @@
     "typescriptSha256": "3ae902c92cc44dace175c0e69e13a4b0899f6983c6121d76b9ab8dd5795e7675",
     "dependencies": {
       "scripts/generate-core.cjs": "72bbe430a3843c600c57dad0f9f1fedc487ad1ef7140b2e3231b5a0994dfb6be",
-      "vendor/konata-core/browser.d.cts": "96c91caf414ab7e7e8773c94d78d0544630778daf51f7887b98642a3625c5db2",
+      "vendor/konata-core/browser.d.cts": "49378c8809059db83567f4ca9a49fd5bf66ff48ed4798e34afedc3dc9d30ec86",
       "vendor/konata-core/file_line_reader.ts": "47f875f03217a9c58cf0be593fd8ce62beb325cf1932e8921155e3e1b3cb003c",
       "vendor/konata-core/gem5_o3_pipe_view_parser.ts": "54f0d53431f51c84c6ba61bcf6674ee1fa23bfbddad475b36a712088774d474a",
       "vendor/konata-core/model.ts": "da9fcb8158c31ed3df73d69fff9d29f08662b82049af8c515685cf456d0e1be6",
@@ -34,13 +35,13 @@
       "vendor/konata-core/op_store.ts": "49989006b5cc7a5162e52f1b2d78a6bbc960d150da198e60d883d1ca244bb283",
       "vendor/konata-core/paged_op_store.ts": "02f4690a229c76913613c9a28561d4b157257cbf4450e36f7af93b8648455f98",
       "vendor/konata-core/stage_structure_detector.ts": "78e33fcc8e81fffab6b7a1d9218d144e31613fee4108bc086c6760a21d1b8f27",
-      "vendor/konata-core/trace_parser.ts": "50d47478484dcce417849b6cad5a82dceed5fa17a9a559977de6650ba2a8da34",
+      "vendor/konata-core/trace_parser.ts": "8e1598c49a7770a92c2fad1e28d628cd9a9d467035d14728535016231891c0b0",
       "vendor/konata-core/zstd_stream_worker.ts": "87701a96b1464b1238b691a531e0d8cb99558e183ac317202e250f15ff05dd9e",
       "vendor/konata-core/zstd_stream.ts": "bac0aac079dfeac0d3aabd0103a5baea9949679d6536ee424eafdb4a5eba28dd",
       "vendor/wasm-zstd/index.js": "3992956e0c164a0568b358e5de65bfd781b64a5a22f89b7fa1ea522f4fbe19ac"
     },
     "files": {
-      "browser.cjs": "041d7aff0ea6117703f3b0899a8d85d5d289366fd3b67c637932edbcfd449f8d"
+      "browser.cjs": "68caa3957f7f8c6b7e71402062e25859cc28cb2a1d047431faaee48fc1b4c092"
     }
   }
 }
