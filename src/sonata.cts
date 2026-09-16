@@ -579,7 +579,7 @@ function start(gl: WebGL2RenderingContext) {
         for (const n of scene.nodes.values()) {
             const memoryPipe = n.id === "exec-load" || n.id === "exec-store";
             const side = n.id.startsWith("exec") && !memoryPipe,
-                below = n.id.startsWith("issue") && (n.d > 6 || (n.id === "issue" && replay.schedulers.length > 1));
+                below = n.id === "issue" && n.d > 6;
             const p = camera.project(
                 below
                     ? [n.x, n.h, n.z + n.d * 0.7]
@@ -676,11 +676,13 @@ function start(gl: WebGL2RenderingContext) {
         feedLabel.style.transform = `translate(${feedAnchor[0] + (camera.cameraMode === "plan" ? 135 : 0)}px,${feedAnchor[1] + (camera.cameraMode === "plan" ? -28 : 24)}px) translateX(-50%)`;
         activity.updateTopDownUI(dt > 0 && !session.reducedMotion);
         // 任意ログのpipe数・長さでもLOAD/STORE/WAITの説明を重ねない。
-        // FP分離時は前段・ROBを含めて測り、増えた筐体の説明が重ならないようにする。
+        // FP実行ユニットがある場合は前段・ROBを含め、筐体の説明が重ならないようにする。
         if (!camera.compactMedia.matches) {
             const labels = [...scene.nodes.values()]
                 .filter(
-                    (n) => replay.schedulers.length > 1 || ["exec-load", "exec-store", "memory-wait"].includes(n.id)
+                    (n) =>
+                        replay.memory.executionNodes.some((node) => node.kind === "fp") ||
+                        ["exec-load", "exec-store", "memory-wait"].includes(n.id)
                 )
                 .map((n) => ({ element: n.element!, rect: n.element!.getBoundingClientRect() }))
                 .filter(({ rect }) => rect.width > 0)
@@ -703,7 +705,7 @@ function start(gl: WebGL2RenderingContext) {
                 ...document.querySelectorAll(".view-controls,.mobile-run,.mobile-cycle,.touch-camera,.bound-scene")
             ].map((el) => el.getBoundingClientRect());
             const priority = (n: sceneModel.Node) =>
-                (({ issue: 0, "issue-fp": 0, "register-read": 1, rob: 2 }) as Record<string, number>)[n.id] ?? 3;
+                (({ issue: 0, "register-read": 1, rob: 2 }) as Record<string, number>)[n.id] ?? 3;
             const candidates = [...scene.nodes.values()]
                 .sort((a, b) => priority(a) - priority(b))
                 .map((n) => ({ el: n.element!, rect: n.element!.getBoundingClientRect() }));
@@ -836,16 +838,7 @@ function start(gl: WebGL2RenderingContext) {
                 : `${activity.activeNotifications.length} completions → scheduler`;
         $("ipc-value").title = "Committed instructions / elapsed cycle over the previous 16 cycles in this excerpt";
         for (const [name, count, capacity] of [
-            ...replay.schedulers.map(
-                (bank) =>
-                    [
-                        bank.id,
-                        activity.frame.stats.issued.filter((op) =>
-                            bank.id === "issue-fp" ? op.kind === "fp" : op.kind !== "fp"
-                        ).length,
-                        bank.capacity
-                    ] as const
-            ),
+            ["issue", activity.frame.stats.issued.length, replay.trace.structure.queueCapacity],
             ["rob", activity.frame.stats.rob.length, replay.trace.structure.robCapacity]
         ] as const) {
             $(`${name}-count`).textContent = `${count} / ${capacity}`;
@@ -948,7 +941,7 @@ function start(gl: WebGL2RenderingContext) {
                   ? "MATRIX · UNOBSERVED"
                   : "MATRIX · RAW ESTIMATE";
         $("matrix-source").title =
-            `${replay.trace.evidence?.scheduling.label ?? "Dependency information unavailable"}. ${replay.schedulers.length > 1 ? "Rows belong to each scheduler; producer columns span both schedulers. FP / SIMD grouping and row counts are for display, not recorded hardware capacities." : "Rows and columns are the same scheduler entries."} Dependencies on issued instructions remain on the external wake-up bus. Cell colors follow the consumer row; brightness marks dependency release. Register map / values: ${replay.trace.evidence?.registers ? "recorded RSD annotations" : "not recorded in this trace"}.`;
+            `${replay.trace.evidence?.scheduling.label ?? "Dependency information unavailable"}. Rows and columns are the same unified scheduler entries. Dependencies on issued instructions remain on the external wake-up bus. Cell colors follow the consumer row; brightness marks dependency release. Register map / values: ${replay.trace.evidence?.registers ? "recorded RSD annotations" : "not recorded in this trace"}.`;
         $("run-file").textContent = replay.trace.fileName;
         $("run-excerpt").textContent =
             `${replay.ops.length.toLocaleString()} excerpt ops · cycles ${replay.trace.firstCycle.toLocaleString()}–${replay.trace.lastCycle.toLocaleString()}`;
@@ -960,14 +953,8 @@ function start(gl: WebGL2RenderingContext) {
             .join("\n");
         $("architecture").textContent = replay.trace.machineOrder.toUpperCase();
         $("width-value").textContent = `${replay.trace.fetchWidth}-WIDE FETCH`;
-        const splitSchedulers = replay.schedulers.length > 1;
-        $("queue-label").textContent = splitSchedulers
-            ? "INT / MEM / BR scheduler"
-            : replay.trace.machineOrder === "in-order"
-              ? "Schedule queue"
-              : "Scheduler";
-        for (const id of ["fp-queue", "issue-fp-meter", "fp-legend"]) $(id).hidden = !splitSchedulers;
-        $("queue-label").title = splitSchedulers ? "Display rows; hardware queue capacities are unobserved" : "";
+        $("queue-label").textContent = replay.trace.machineOrder === "in-order" ? "Schedule queue" : "Scheduler";
+        $("fp-legend").hidden = !replay.memory.executionNodes.some((node) => node.kind === "fp");
         $("rob-label").textContent = replay.trace.machineOrder === "in-order" ? "Completion buffer" : "Reorder buffer";
         const flushEvents = windowFlushEvents();
         $("next-flush").disabled = flushEvents.length === 0;
@@ -977,7 +964,7 @@ function start(gl: WebGL2RenderingContext) {
         $("range-label").textContent = `${replay.trace.lastCycle - replay.trace.firstCycle + 1} CYCLES`;
         $("first-cycle").textContent = replay.trace.firstCycle.toLocaleString();
         $("last-cycle").textContent = replay.trace.lastCycle.toLocaleString();
-        for (const id of ["issue-meter", "issue-fp-meter", "rob-meter"]) {
+        for (const id of ["issue-meter", "rob-meter"]) {
             $(id).replaceChildren(...Array.from({ length: 24 }, () => document.createElement("i")));
         }
         const markers = flushEvents.map((t) => {

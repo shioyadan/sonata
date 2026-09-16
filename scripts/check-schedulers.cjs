@@ -184,6 +184,22 @@ assert.deepEqual(
 assert.equal(replay.ops[0].execution, "exec-integer");
 assert.deepEqual(branchOnly, originalBranch);
 
+// 分岐回復は表示先ではなく命令種別で判定し、共通ユニットの整数命令を候補にしない。
+const recovery = fixture([operation(0, "b.eq 0x100", 2, 8), operation(1, "add x1, x2, x3", 2, 8)], false);
+recovery.parser = "gem5";
+recovery.ops[1][3] = 10;
+recovery.ops[1][4] = 1;
+recovery.ops[1][11] = 10;
+source.loadData(recovery);
+assert.equal(replay.ops[0].execution, "exec-integer");
+assert.deepEqual(
+    replay.branchRecoveries.map(({ id, cycle, inferred }) => ({ id, cycle, inferred })),
+    [{ id: 0, cycle: 10, inferred: true }]
+);
+recovery.ops[0][5] = "add x1, x2, x3";
+source.loadData(recovery);
+assert.equal(replay.branchRecoveries.length, 0, "Integer instruction inferred as a recovery branch");
+
 // 再実行待ちと退出補間を予約し、後から入ったFP命令を重ねない。
 const retry = operation(0, "fadd.d f1, f2, f3", 2, 4, 15);
 retry[6] = [

@@ -24,7 +24,8 @@ async function reviewLayout(
             { name: "str w0, [x4]", complete: 6000 },
             { name: "add x0, x1, x2", issue: 9000, complete: 10000 },
             { name: "fadd d0, d1, d2", issue: 10000, complete: 12000 },
-            { name: "add v0.4s, v1.4s, v2.4s", issue: 11000, complete: 13000 }
+            { name: "add v0.4s, v1.4s, v2.4s", issue: 11000, complete: 13000 },
+            { name: "b.ne 0x1020", issue: 9000, complete: 10000 }
         ]
             .map(
                 ({ name, issue = 5000, complete }, id) =>
@@ -40,7 +41,7 @@ async function reviewLayout(
             )
             .join("");
         await importFile("mixed-fp.o3", mixedFile);
-        assert.equal(await evaluate(({ sonata }) => sonata.schedulers.length), 2);
+        assert.equal(await evaluate(({ sonata }) => sonata.schedulers.length), 1);
         assert.equal(await evaluate(({ sonata }) => sonata.ops.filter((op) => op.kind === "fp").length), 2);
         assert.ok(await evaluate(({ sonata }) => sonata.executionNodes.some((node) => node.id === "exec-fp")));
         for (const style of ["neon", "aluminum", "paper"]) {
@@ -58,7 +59,7 @@ async function reviewLayout(
                     columns: banks.map((bank) => bank.grid!.columns.length),
                     total: sonata.dependencyMatrix.columnCount,
                     placements: waiting.map((op) => {
-                        const bank = banks.find((bank) => bank.id === (op.kind === "fp" ? "issue-fp" : "issue"))!;
+                        const bank = banks[0];
                         const particle = particles.find((particle) => particle.id === op.id)!;
                         const p = particle?.pathPosition;
                         return Boolean(
@@ -67,16 +68,16 @@ async function reviewLayout(
                                 Math.abs(p[2] - bank.bounds.z) < bank.bounds.d / 2
                         );
                     }),
-                    fpCount: document.getElementById("issue-fp-count")!.textContent,
-                    fpVisible: !document.getElementById("fp-queue")!.hidden,
+                    queueCount: document.getElementById("issue-count")!.textContent,
+                    fpVisible: !document.getElementById("fp-legend")!.hidden,
                     unknownRegisters: !sonata.trace.evidence?.registers
                 };
             });
             assert.deepEqual(bankCheck.rows, bankCheck.capacities);
             assert.ok(bankCheck.columns.every((count) => count === bankCheck.total));
-            assert.equal(bankCheck.placements.length, 3);
+            assert.equal(bankCheck.placements.length, 4);
             assert.ok(bankCheck.placements.every(Boolean), `Waiting instructions escaped their scheduler in ${style}`);
-            assert.ok(bankCheck.fpVisible && bankCheck.fpCount!.startsWith("2 /"));
+            assert.ok(bankCheck.fpVisible && bankCheck.queueCount!.startsWith("4 /"));
             assert.ok(bankCheck.unknownRegisters, "FP display invented register evidence");
             const labels = await evaluate(() =>
                 [...document.querySelectorAll(".stage-label")].map((element) => {
@@ -89,7 +90,36 @@ async function reviewLayout(
                 3,
                 "Imported memory stages did not produce LOAD / STORE / WAIT labels"
             );
-            assert.ok(labels.some((label) => label.text!.includes("FP / SIMD SCHEDULER")));
+            assert.equal(labels.filter((label) => label.text!.includes("SCHEDULER")).length, 1);
+            assert.ok(labels.some((label) => label.text!.includes("INT / BR")));
+            assert.ok(labels.some((label) => label.text!.includes("FP / SIMD")));
+            await evaluate(({ sonata }) => sonata.captureAt(9.5));
+            const arithmetic = await evaluate(({ sonata }) => {
+                const ops = sonata.ops.filter((op) => op.kind === "integer" || op.kind === "branch");
+                return {
+                    units: sonata.executionNodes.filter((node) => node.kind === "integer" || node.kind === "branch"),
+                    targets: ops.map((op) => op.execution),
+                    particles: ops.map((op) => sonata.particles.find((particle) => particle.id === op.id))
+                };
+            });
+            assert.equal(arithmetic.units.length, 1);
+            assert.equal(arithmetic.units[0].id, "exec-integer");
+            assert.equal(arithmetic.units[0].pipeCount, 2);
+            assert.deepEqual(arithmetic.targets, ["exec-integer", "exec-integer"]);
+            assert.ok(
+                arithmetic.particles.every((particle) => particle && particle.pathPosition.every(Number.isFinite))
+            );
+            assert.notEqual(
+                arithmetic.particles[0]!.pathPosition[2],
+                arithmetic.particles[1]!.pathPosition[2],
+                "Simultaneous INT / BR instructions overlap"
+            );
+            assert.notDeepEqual(
+                arithmetic.particles[0]!.color,
+                arithmetic.particles[1]!.color,
+                "Branch color was lost in the combined unit"
+            );
+            await evaluate(({ sonata }) => sonata.captureAt(5.5));
             for (let i = 0; i < labels.length; i++)
                 for (let j = i + 1; j < labels.length; j++) {
                     const a = labels[i],
@@ -103,7 +133,7 @@ async function reviewLayout(
 
         await test.settle();
         fs.writeFileSync(
-            path.join(screenshots, "import-fp-schedulers.png"),
+            path.join(screenshots, "import-unified-scheduler.png"),
             (await window.webContents.capturePage()).toPNG()
         );
         await evaluate(({ sonata }) => sonata.captureAt(10.5));
@@ -128,7 +158,7 @@ async function reviewLayout(
             "O3PipeView:fetch:1000:0x1000:0:1: add r1, r2\nO3PipeView:decode:2000\nO3PipeView:rename:3000\nO3PipeView:dispatch:4000\nO3PipeView:issue:5000\nO3PipeView:complete:6000\nO3PipeView:retire:7000\nO3PipeView:fetch:11000:0x1004:0:2: add r1, r2\nO3PipeView:decode:12000\nO3PipeView:rename:13000\nO3PipeView:dispatch:14000\nO3PipeView:issue:15000\n"
         );
         assert.equal(await evaluate(({ sonata }) => sonata.schedulers.length), 1);
-        assert.ok(await evaluate(() => document.getElementById("fp-queue")!.hidden));
+        assert.ok(await evaluate(() => document.getElementById("fp-legend")!.hidden));
         await evaluate(({ sonata }) => sonata.captureAt(sonata.trace.lastCycle));
         for (const [width, height] of [
             [320, 568],

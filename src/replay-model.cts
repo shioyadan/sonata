@@ -781,7 +781,7 @@ function sampleTopDown(data: TopDownData | null | undefined, time: number) {
         dominantShare: ranked[0][1]
     };
 }
-function findRecoveryBranches<T extends Pick<Instruction, "id" | "flush" | "end" | "execution" | "completion">>(
+function findRecoveryBranches<T extends Pick<Instruction, "id" | "flush" | "end" | "kind" | "completion">>(
     ops: readonly T[],
     events: readonly DemoEvent[] | undefined,
     flushes: readonly number[],
@@ -810,7 +810,7 @@ function findRecoveryBranches<T extends Pick<Instruction, "id" | "flush" | "end"
                 (o) =>
                     o.id === first - 1 &&
                     !o.flush &&
-                    o.execution === "exec-branch" &&
+                    o.kind === "branch" &&
                     o.completion !== null &&
                     o.completion <= time &&
                     o.completion >= time - 8 &&

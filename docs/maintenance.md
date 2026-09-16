@@ -20,7 +20,7 @@
 
 ISA・物理レジスタ数・語長・ROB容量などは、元configで確認したデモ設定と任意Fileの観測を区別します。既知の256物理レジスタを表示しても、その値やrename対応が未記録なら未知のままです。Top-downの分岐回復は支持例が足りない区間では断定せず、旧事前解析と集計値を揃えるために未観測の分類を持ち込まないでください。
 
-FP／SIMDの表示分離では、分類器・累積構造profile・区間変換・再生モデルのkindを揃えます。現在区間の命令だけから筐体の有無を決めると、巨大ログの区間移動で構造が消えるため、全体で観測済みのFP種別を保持します。表示スロットの分割によって元のissue時刻・ready・依存関係を変更せず、既存のINTレジスタ観測からFPの値を作らないでください。回帰は `npm test -- schedulers memory trace-file trace-window scene`、実File入力と3スタイルの表示は `npm run test:render -- --sections=import-layout` で確認できます。
+FP／SIMDは分類器・累積構造profile・区間変換・再生モデルのkindを揃え、全体で観測済みの実行ユニットを区間移動で消さないようにします。待機列は全種類共通です。整数・分岐は表示先だけを統合し、branchのkind・色・回復分岐としての意味を維持します。管路は元の整数・分岐の本数を合算した表示用経路であり、実機の共有ポート構成の推定ではありません。変更時は同時発行・再試行・区間交換の位置、依存・issue/ready時刻を確認し、未観測FPレジスタを補わないでください。回帰は `npm test -- schedulers memory trace-file trace-window scene`、実File入力と3スタイルの表示は `npm run test:render -- --sections=import-layout` で確認できます。
 
 ## 記録・推定・演出の区別
 

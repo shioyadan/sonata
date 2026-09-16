@@ -166,6 +166,7 @@ for (const trace of globalThis.embeddedFlowTraces) {
         end: o[4] ? (o[11] ?? o[3]) : o[3],
         flush: !!o[4],
         execution: o[10],
+        kind: o[10].slice("exec-".length),
         stages: o[6].map((s) => ({ node: s[1], start: s[2], end: s[3] }))
     }));
     const flushes = [
@@ -174,6 +175,13 @@ for (const trace of globalThis.embeddedFlowTraces) {
         )
     ];
     const branches = findRecoveryBranches(ops, trace.demo.events, flushes, trace.parser.startsWith("gem5"));
+    assert.deepEqual(
+        createReplay({ samples: [] })
+            .loadData(trace)
+            .branchRecoveries.map(({ id, cycle, inferred }) => ({ id, cycle, inferred })),
+        branches.map(({ id, cycle, inferred }) => ({ id, cycle, inferred })),
+        `${trace.key}: display routing changed recovery branches`
+    );
     for (const b of branches) {
         assert.equal(b.op.flush, false);
         assert.ok(b.until > b.cycle);

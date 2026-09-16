@@ -12,6 +12,7 @@ interface PathStage {
     end: number;
     displaySlot?: number;
     entryCycles?: number;
+    pipeLane?: number;
 }
 interface PathOperation {
     id: number;
@@ -51,7 +52,7 @@ interface PathScene {
     nodes: Map<string, PathNode>;
     connections: { from: string; to: string; lanes: { target: Vec3 }[] }[];
     matrixPosition(index: number): Vec3;
-    registerReadPort(op: PathOperation): Vec3;
+    registerReadPort(op: PathOperation, time?: number): Vec3;
     memoryWaitPosition(slot: number): Vec3;
     robCell(index: number, height: number): Vec3;
     executionLane(node: PathNode, index: number): Lane;
@@ -450,7 +451,7 @@ function createPaths<T extends PathOperation>({
         if (n.id === "issue") {
             return scene.matrixPosition(op.issueSlot ?? 0);
         } else if (n.id === "register-read") {
-            const p = scene.registerReadPort(op),
+            const p = scene.registerReadPort(op, stage.start),
                 arrival = stageTransition(stage),
                 progress = smooth((t - stage.start - arrival) / Math.max(0.001, stage.end - stage.start - arrival));
             return [mix(n.x - n.w * 0.44, p[0], progress), p[1], p[2]];
@@ -459,7 +460,7 @@ function createPaths<T extends PathOperation>({
         } else if (n.id === "memory-wait") {
             return scene.memoryWaitPosition(stage.displaySlot ?? 0);
         } else if (n.id.startsWith("exec")) {
-            const lane = scene.executionLane(n, (op.pipeLane ?? op.index) % n.pipeCount!),
+            const lane = scene.executionLane(n, (stage.pipeLane ?? op.pipeLane ?? op.index) % n.pipeCount!),
                 arrival = stageTransition(stage);
             const travel = stage.entryCycles != null ? (n.latency ?? 1) * 0.78 : stage.end - stage.start - arrival;
             const progress = clamp((t - stage.start - arrival) / Math.max(0.001, travel));
@@ -516,7 +517,7 @@ function createPaths<T extends PathOperation>({
             const exit = scene.issueRowExit(op.issueSlot ?? 0),
                 port =
                     scene.nodes.has("register-read") && stage.node.startsWith("exec")
-                        ? scene.registerReadPort(op)
+                        ? scene.registerReadPort(op, stage.start)
                         : target;
             if (progress < 0.48) return source.map((v, i) => mix(v, exit[i], smooth(progress / 0.48))) as Vec3;
             if (port === target) return route(exit, target, smooth((progress - 0.48) / 0.52));
@@ -525,7 +526,7 @@ function createPaths<T extends PathOperation>({
                 : route(port, target, smooth((progress - 0.8) / 0.2));
         }
         if (scene.nodes.has("register-read") && stage.node.startsWith("exec") && previous?.node !== "register-read") {
-            const port = scene.registerReadPort(op);
+            const port = scene.registerReadPort(op, stage.start);
             return progress < 0.65
                 ? route(source, port, smooth(progress / 0.65))
                 : route(port, target, smooth((progress - 0.65) / 0.35));
@@ -533,7 +534,8 @@ function createPaths<T extends PathOperation>({
         if (stage.node === "rob" && previous) {
             const connection = scene.connections.find((c) => c.from === previous.node && c.to === "rob");
             if (connection) {
-                const port = connection.lanes[op.index % connection.lanes.length].target;
+                const lane = previous.pipeLane ?? op.pipeLane ?? op.index;
+                const port = connection.lanes[lane % connection.lanes.length].target;
                 return progress < 0.7
                     ? route(source, port, smooth(progress / 0.7))
                     : route(port, target, smooth((progress - 0.7) / 0.3));

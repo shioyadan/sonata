@@ -399,10 +399,14 @@ function createScene({ gpu, replay, session }: SceneOptions) {
         ];
     }
 
-    function registerReadPort(op: Pick<sonataReplay.Operation, "execution" | "index" | "pipeLane">): Vector {
+    function registerReadPort(
+        op: Pick<geometry.Operation, "execution" | "index" | "pipeLane" | "stages">,
+        time = -Infinity
+    ): Vector {
         const n = scene.nodes.get("register-read")!,
             execution = scene.nodes.get(op.execution)!,
-            lane = executionLane(execution, (op.pipeLane ?? op.index) % execution.pipeCount!);
+            stage = op.stages.find((stage) => stage.node === op.execution && stage.end > time),
+            lane = executionLane(execution, (stage?.pipeLane ?? op.pipeLane ?? op.index) % execution.pipeCount!);
         return [n.x + n.w * 0.5 + 0.03, lane.inlet[1], lane.inlet[2]];
     }
 

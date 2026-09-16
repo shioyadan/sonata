@@ -70,14 +70,12 @@ module.exports = async function reviewDesktop(window, screenshots) {
                     return port[1]===pipe.inlet[1]&&port[2]===pipe.inlet[2];
                 });
             }))&&links.filter(l=>l.from==='rob'&&l.to==='commit'||l.to==='output').every(l=>l.lineCount===trace.retireWidth)
-                &&links.filter(l=>l.to.startsWith('issue')).every(l=>l.lineCount===trace.structure.allocationWidth);
-            const schedulerOutputs=links.filter(l=>l.from.startsWith('issue')).reduce((sum,l)=>sum+l.lineCount,0);
+                &&links.filter(l=>l.to==='issue').every(l=>l.lineCount===trace.structure.allocationWidth);
+            const schedulerOutputs=links.filter(l=>l.from==='issue').reduce((sum,l)=>sum+l.lineCount,0);
             if(schedulerOutputs!==pipes.length)throw new Error('Scheduler outputs must equal total execution pipes for '+trace.key);
-            for(const bank of sonata.schedulers){
-                const expected=pipes.filter(pipe=>(pipe.node==='exec-fp')===(bank.id==='issue-fp')).length;
-                const actual=links.filter(link=>link.from===bank.id).reduce((sum,link)=>sum+link.lineCount,0);
-                if(actual!==expected)throw new Error(bank.id+' must connect only to its execution pipes');
-            }
+            if(sonata.schedulers.length!==1 || sonata.schedulers[0].id!=='issue')throw new Error('All instruction kinds must share one scheduler');
+            if(sonata.executionNodes.some(node=>node.id==='exec-branch'))throw new Error('INT and BR must share one execution unit');
+            if(sonata.ops.some(op=>op.kind==='branch'&&op.execution!=='exec-integer'))throw new Error('Branch bypassed the combined INT / BR unit');
             const robTargets=links.filter(l=>l.to==='rob').flatMap(l=>l.lanes.map(p=>JSON.stringify(p.target)));
             if(new Set(robTargets).size!==robTargets.length)throw new Error('Execution pipes merged at a shared ROB input');
             const retireCounts=new Map();for(const op of trace.ops)if(!op[4]&&op[3]>=trace.firstCycle&&op[3]<trace.lastCycle+1){
@@ -102,7 +100,7 @@ module.exports = async function reviewDesktop(window, screenshots) {
                 // ファイル全体の構造には、この表示窓で使われない管路も残る。
                 if(!op)return !sonata.ops.some(o=>o.stages.some(s=>s.node===node.id&&s.start<trace.lastCycle&&s.end>trace.firstCycle));
                 const stage=op.stages.find(s=>s.node===node.id && s.start>=trace.firstCycle && s.end<=trace.lastCycle && s.end>s.start);
-                const lane=pipes.find(p=>p.node===node.id && p.index===(op.pipeLane??op.index)%node.pipeCount);
+                const lane=pipes.find(p=>p.node===node.id && p.index===(stage.pipeLane??op.pipeLane??op.index)%node.pipeCount);
                 const positions=[.3,.6,.9].map(f=>{
                     sonata.captureAt(stage.start+(stage.end-stage.start)*f);
                     const particle=sonata.particles.find(p=>p.id===op.id);
@@ -112,14 +110,14 @@ module.exports = async function reviewDesktop(window, screenshots) {
                     && Math.abs(p[1]-lane.inlet[1])<1e-6 && Math.abs(p[2]-lane.inlet[2])<1e-6)
                     && positions[0][0]<positions[1][0] && positions[1][0]<positions[2][0];
             });
-            const lightContrast=['issue','issue-fp','memory-wait','rob'].every(node=>{
+            const lightContrast=['issue','memory-wait','rob'].every(node=>{
                 const matches=(s,o)=>s.node===node && (node!=='rob'||o.completion===null||s.end<=o.completion) && s.start>=trace.firstCycle && s.end<=trace.lastCycle && s.end>s.start;
                 const op=sonata.ops.find(o=>o.stages.some(s=>matches(s,o)));
                 if(!op)return true;
                 const stage=op.stages.find(s=>matches(s,op));
                 sonata.captureAt((stage.start+stage.end)/2);
                 const particle=sonata.particles.find(p=>p.id===op.id);
-                return particle?.state==='waiting' && (node.startsWith('issue')?particle.brightness>=.4&&particle.brightness<=.6:particle.brightness<.35);
+                return particle?.state==='waiting' && (node==='issue'?particle.brightness>=.4&&particle.brightness<=.6:particle.brightness<.35);
             });
             const sequenceColors=['integer','memory','branch','fp'].every(kind=>{
                 const op=sonata.ops.find(o=>o.kind===kind&&o.fetch>trace.firstCycle&&o.end< trace.lastCycle&&o.end>o.fetch+3);
@@ -236,12 +234,19 @@ module.exports = async function reviewDesktop(window, screenshots) {
     assert.deepEqual(await js("sonata.instructionFeed"), feedBefore, "Instruction stream did not return when enabled");
     await settle();
     fs.writeFileSync(path.join(screenshots, "sonata.png"), (await window.webContents.capturePage()).toPNG());
+    // 配置変更で特定時刻の命令が密集しても、隣接命令との距離を保った対象でクリックを検査する。
     const pick = await js(`(() => {
-        const particles=sonata.particles;
-        const p=particles.find(p=>particles.every(other=>other.id===p.id||Math.hypot(other.screen[0]-p.screen[0],other.screen[1]-p.screen[1])>18));
         const r=document.getElementById('scene').getBoundingClientRect();
-        return {id:p.id,x:Math.round(r.left+p.screen[0]),y:Math.round(r.top+p.screen[1])};
+        for(const t of [sonata.trace.demo.screenshotCycle,...[20,40,60].map(offset=>sonata.trace.firstCycle+offset)]){
+            sonata.captureAt(t);
+            const particles=sonata.particles;
+            const p=particles.find(p=>p.screen[0]>22&&p.screen[0]<r.width-22&&p.screen[1]>22&&p.screen[1]<r.height-22
+                &&particles.every(other=>other.id===p.id||Math.hypot(other.screen[0]-p.screen[0],other.screen[1]-p.screen[1])>18));
+            if(p)return {id:p.id,x:Math.round(r.left+p.screen[0]),y:Math.round(r.top+p.screen[1])};
+        }
+        return null;
     })()`);
+    assert.ok(pick, "No isolated instruction was available for the particle picking test");
     window.webContents.sendInputEvent({ type: "mouseDown", x: pick.x, y: pick.y, button: "left", clickCount: 1 });
     window.webContents.sendInputEvent({ type: "mouseUp", x: pick.x, y: pick.y, button: "left", clickCount: 1 });
     await waitFor(

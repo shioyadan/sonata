@@ -93,7 +93,7 @@ module.exports = async function reviewEvidence(window, screenshots) {
         assert.equal(b.canceled, false);
         assert.match(
             b.marker,
-            b.time < 4067 ? /MISPREDICT #4454.*BRANCH.*PRESERVED/ : /MISPREDICT #4454.*ROB.*PRESERVED/
+            b.time < 4067 ? /MISPREDICT #4454.*INT \/ BR.*PRESERVED/ : /MISPREDICT #4454.*ROB.*PRESERVED/
         );
     }
     await settle();

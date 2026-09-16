@@ -443,3 +443,72 @@ for (const registerRead of [false, true]) {
     }
 }
 console.log("Unified scene: shared scheduler, INT / BR unit, FP/SIMD routes and wake-up positions passed");
+
+// 再実行で別の管路を使っても、読み出し・接続・実行位置を同じ段の割当へ揃える。
+const retryTrace = {
+    ...denseTrace,
+    lastCycle: 25,
+    structure: {
+        ...denseTrace.structure,
+        queueCapacity: 16,
+        robCapacity: 32,
+        registerRead: { id: "register-read", names: ["Rr"], description: "Recorded read" },
+        executionNodes: [
+            { id: "exec-integer", kind: "integer", names: ["X"], pipeCount: 1 },
+            { id: "exec-branch", kind: "branch", names: ["B"], pipeCount: 1 }
+        ]
+    },
+    ops: [5, 7, 9, 10].map((start, id) => [
+        id,
+        id,
+        0,
+        25,
+        0,
+        id === 3 ? "b.eq 0x100" : "add x0, x1, x2",
+        [
+            ["F", "front-0", 0, 1],
+            ["Q", "issue", 1, start - 1],
+            ["Rr", "register-read", start - 1, start],
+            ["X", "exec-integer", start, start + 1],
+            ...(id === 0
+                ? [
+                      ["Q", "issue", 6, 9],
+                      ["Rr", "register-read", 9, 10],
+                      ["X", "exec-integer", 10, 11]
+                  ]
+                : []),
+            ["W", "rob", id === 0 ? 11 : start + 1, 25]
+        ],
+        1,
+        start,
+        id === 0 ? 11 : start + 1,
+        "exec-integer"
+    ])
+};
+const retryReplay = createReplay({ samples: [] }).loadData(retryTrace);
+const repeated = retryReplay.ops[0];
+const retryStage = repeated.stages.find((stage) => stage.node === "exec-integer" && stage.start === 10);
+assert.notEqual(retryStage.pipeLane, repeated.pipeLane, "Retry fixture did not exercise another pipe");
+for (const style of Object.values(styles)) {
+    const session = { style },
+        scene = createScene({ replay: retryReplay, session });
+    scene.buildLayout();
+    const paths = createPaths({ scene, replay: retryReplay, session });
+    const lane = scene.executionLane(scene.nodes.get("exec-integer"), retryStage.pipeLane);
+    assert.equal(paths.positionAt(repeated, 9.9)[2], lane.inlet[2], "Read selected the first attempt's lane");
+    assert.equal(paths.positionAt(repeated, 10.5)[2], lane.inlet[2], "Retry selected the first attempt's lane");
+    assert.equal(scene.registerReadPort(repeated, 9.5)[2], lane.inlet[2]);
+    assert.notEqual(paths.positionAt(repeated, 10.5)[2], paths.positionAt(retryReplay.ops[3], 10.5)[2]);
+    const robPort = scene.connections.find(({ from, to }) => from === "exec-integer" && to === "rob").lanes[
+        retryStage.pipeLane
+    ].target;
+    const passedPort = paths.positionAt(repeated, 11 + 0.82 * 0.7);
+    assert.ok(
+        Math.hypot(...passedPort.map((value, axis) => value - robPort[axis])) < 1e-9,
+        "Retry entered ROB through another pipe's port"
+    );
+    for (const time of [9, 9.5, 9.99, 10, 10.05, 10.2, 10.5, 11, 11.1]) {
+        assert.ok(paths.positionAt(repeated, time).every(Number.isFinite), "Retry transfer is invalid");
+    }
+}
+console.log("INT / BR retries: stage lanes, read ports and paths passed in all styles");

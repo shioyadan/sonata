@@ -166,7 +166,7 @@ function createActivity({ camera, clock, scene, gpu, paths, replay, session }: A
             activeNodes.set(s.node, (activeNodes.get(s.node) || 0) + 1);
             const n = scene.nodes.get(s.node)!;
             if (n?.pipeCount) {
-                const key = `${n.id}:${(op.pipeLane ?? op.index) % n.pipeCount}`;
+                const key = `${n.id}:${(s.pipeLane ?? op.pipeLane ?? op.index) % n.pipeCount}`;
                 activeLanes.set(key, (activeLanes.get(key) || 0) + 1);
             }
         }
@@ -777,7 +777,7 @@ function createActivity({ camera, clock, scene, gpu, paths, replay, session }: A
                 );
         }
         for (const read of activity.registerReads) {
-            const port = scene.registerReadPort(read.op),
+            const port = scene.registerReadPort(read.op, session.cycle),
                 color = session.style.palette[read.op.kind];
             for (const source of read.sources) {
                 if (!replay.registerTags.includes(source.physical)) continue;
