@@ -492,11 +492,7 @@ function createWaitPlayback(
         if (time != null && Number.isFinite(time)) busy.push([time, time + after - 2]);
     };
     const stationary = (node: string) =>
-        node.startsWith("front-") ||
-        node === "issue" ||
-        node === "issue-fp" ||
-        node === "rob" ||
-        node === "memory-wait";
+        node.startsWith("front-") || node === "issue" || node === "rob" || node === "memory-wait";
     for (const op of trace.ops) {
         const fetch = op[2],
             end = op[4] ? (op[11] ?? op[3]) : op[3];
@@ -612,18 +608,14 @@ function measureTransfers(
         edge.cycles.get(cycle)!.add(id);
     }
     for (const op of ops) {
-        const scheduler =
-            op.kind === "fp" || op.stages.some((stage) => stage.node === "issue-fp" || stage.node === "exec-fp")
-                ? "issue-fp"
-                : "issue";
         if (frontNodes.length) record("input", frontNodes[0].id, op.fetch, op.id);
         // スケジューラ滞在が 0 サイクルだとステージ区間に現れない場合がある。
         // その場合も allocation と実行開始から入口・出口の通過を数える。
         if (lastFront && op.allocation != null && op.allocation < op.end)
-            record(lastFront, scheduler, op.allocation, op.id);
+            record(lastFront, "issue", op.allocation, op.id);
         const admission = op.stages.find((stage) => stage.node === "register-read" || stage.node.startsWith("exec"));
         if (admission && op.allocation != null && op.allocation <= admission.start && admission.start < op.end)
-            record(scheduler, admission.node, admission.start, op.id);
+            record("issue", admission.node, admission.start, op.id);
         let previous;
         for (const stage of op.stages) {
             if (stage.start < op.end) {
@@ -1091,11 +1083,10 @@ function prepareTrace(trace: TraceData, continuity?: { at: number; replay: Repla
     function allocateSlots(
         start: (op: Instruction) => number | null | undefined,
         end: (op: Instruction) => number | undefined,
-        field: "issueSlot",
-        selected: Instruction[]
+        field: "issueSlot"
     ) {
         const ends: (number | undefined)[] = [];
-        for (const op of [...selected]
+        for (const op of [...ops]
             .filter((o) => start(o) != null)
             .sort((a, b) => start(a)! - start(b)! || a.id - b.id)) {
             let slot = ends.findIndex((e) => e! <= start(op)!);
@@ -1146,15 +1137,14 @@ function prepareTrace(trace: TraceData, continuity?: { at: number; replay: Repla
         const end = unfinished ? Infinity : flush ? (flushCycle ?? retired) : retired;
         const type = memoryModel.instructionType(label);
         const kind = type === "load" || type === "store" || type === "atomic" ? "memory" : type;
-        const displayExecution = type === "atomic" ? "exec-memory" : `exec-${type}`;
+        const displayExecution =
+            type === "atomic" ? "exec-memory" : type === "branch" ? "exec-integer" : `exec-${type}`;
         const stages: StageRange[] = [];
         for (const [name, sourceNode, start, finish] of source) {
             const node =
                 sourceNode.startsWith("exec") || (sourceNode === "memory-wait" && type !== "load" && type !== "store")
                     ? displayExecution
-                    : sourceNode === "issue" && kind === "fp"
-                      ? "issue-fp"
-                      : sourceNode;
+                    : sourceNode;
             if (stages.at(-1)?.node === node) {
                 stages.at(-1)!.end = Math.max(finish, stages.at(-1)!.end);
                 stages.at(-1)!.names.push(name);
@@ -1228,61 +1218,41 @@ function prepareTrace(trace: TraceData, continuity?: { at: number; replay: Repla
     });
     const previous = new Map(continuity?.replay.ops.map((op) => [op.id, op]));
     const at = continuity?.at ?? trace.firstCycle;
-    const splitSchedulers =
-        trace.structure.executionNodes.some((node) => node.kind === "fp") || ops.some((op) => op.kind === "fp");
-    const schedulerIDs: SchedulerLayout["id"][] = splitSchedulers ? ["issue", "issue-fp"] : ["issue"];
-    const schedulers: SchedulerLayout[] = [];
-    let offset = 0;
-    for (const id of schedulerIDs) {
-        const selected = ops.filter((op) => (op.kind === "fp" ? "issue-fp" : "issue") === id);
-        const previousBank = continuity?.replay.schedulers.find((bank) => bank.id === id);
-        const allocated = allocateSlots(
-            (op) => op.allocation,
-            (op) => op.issue ?? op.completion ?? op.end,
-            "issueSlot",
-            selected
-        );
-        let capacity = splitSchedulers
-            ? Math.max(1, allocated, previousBank?.capacity ?? 0)
-            : trace.structure.queueCapacity;
-        if (continuity || trace.key === "local-file") {
-            const uses: SlotUse[] = selected
-                .filter((op) => op.allocation != null)
-                .map((op) => {
-                    const intervals = [
-                        { start: op.allocation!, end: Math.min(op.end, op.issue ?? op.completion ?? op.end) }
-                    ];
-                    for (const [index, stage] of op.stages.entries()) {
-                        if (stage.node !== id) continue;
-                        const next = op.stages[index + 1];
-                        const end = Math.min(op.end, next ? next.start + stageTransition(next) : stage.end);
-                        const last = intervals.at(-1)!;
-                        if (stage.start <= last.end) last.end = Math.max(last.end, end);
-                        else intervals.push({ start: stage.start, end });
+    allocateSlots(
+        (op) => op.allocation,
+        (op) => op.issue ?? op.completion ?? op.end,
+        "issueSlot"
+    );
+    let queueCapacity = trace.structure.queueCapacity;
+    if (continuity || trace.key === "local-file") {
+        const uses: SlotUse[] = ops
+            .filter((op) => op.allocation != null)
+            .map((op) => {
+                const intervals = [
+                    { start: op.allocation!, end: Math.min(op.end, op.issue ?? op.completion ?? op.end) }
+                ];
+                for (const [index, stage] of op.stages.entries()) {
+                    if (stage.node !== "issue") continue;
+                    const next = op.stages[index + 1];
+                    const end = Math.min(op.end, next ? next.start + stageTransition(next) : stage.end);
+                    const last = intervals.at(-1)!;
+                    if (stage.start <= last.end) last.end = Math.max(last.end, end);
+                    else intervals.push({ start: stage.start, end });
+                }
+                return {
+                    intervals,
+                    preferred: previous.get(op.id)?.issueSlot,
+                    assign: (slot) => {
+                        op.issueSlot = slot;
                     }
-                    const old = previous.get(op.id);
-                    return {
-                        intervals,
-                        preferred:
-                            old?.issueSlot !== undefined && previousBank && old.kind === op.kind
-                                ? old.issueSlot - previousBank.offset
-                                : undefined,
-                        assign: (slot) => {
-                            op.issueSlot = slot;
-                        }
-                    };
-                });
-            // 補間と再試行の位置を予約する。上限超過時は通常割当を維持する。
-            capacity = Math.max(capacity, preserveSlots(uses, at, 256) ?? 0);
-        }
-        // 行は各待機列で独立に確保し、依存モデルには連続した全体番号を渡す。
-        // 分離時の行数は表示上の必要数であり、実機のFP/整数キュー容量ではない。
-        schedulers.push({ id, offset, capacity });
-        for (const op of selected) if (op.issueSlot !== undefined) op.issueSlot += offset;
-        offset += capacity;
+                };
+            });
+        // 種別によらず同じ待機列で補間と再試行の位置を予約する。
+        queueCapacity = Math.max(queueCapacity, preserveSlots(uses, at, 256) ?? 0);
     }
-    if (offset !== trace.structure.queueCapacity)
-        trace = { ...trace, structure: { ...trace.structure, queueCapacity: offset } };
+    if (queueCapacity !== trace.structure.queueCapacity)
+        trace = { ...trace, structure: { ...trace.structure, queueCapacity } };
+    const schedulers: SchedulerLayout[] = [{ id: "issue", offset: 0, capacity: queueCapacity }];
     if (continuity || trace.key === "local-file") {
         const displayNodes = [
             ...trace.structure.frontNodes
@@ -1313,7 +1283,7 @@ function prepareTrace(trace: TraceData, continuity?: { at: number; replay: Repla
             const count = preserveSlots(uses, at, node.startsWith("front-") ? 4096 : 512);
             if (node === "memory-wait" && count !== null) memory.waitSlots.load = count;
         }
-        for (const node of memory.executionNodes.filter((node) => node.kind === "memory")) {
+        for (const node of memory.executionNodes.filter((node) => node.kind === "memory" || node.kind === "integer")) {
             const groups = new Map<number, Instruction[]>();
             for (const op of ops.filter((op) => op.execution === node.id)) {
                 const start = op.stages.find((stage) => stage.node === node.id)?.start ?? Infinity;
@@ -1419,7 +1389,7 @@ function prepareTrace(trace: TraceData, continuity?: { at: number; replay: Repla
 }
 
 interface SchedulerLayout {
-    id: "issue" | "issue-fp";
+    id: "issue";
     offset: number;
     capacity: number;
 }
