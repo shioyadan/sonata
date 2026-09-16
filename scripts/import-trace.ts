@@ -37,7 +37,7 @@ interface StageRange {
     readonly endCycle: number;
 }
 
-type InstructionKind = "integer" | "memory" | "branch";
+type InstructionKind = "integer" | "fp" | "memory" | "branch";
 
 const memoryMissWaitCycles = 6;
 
@@ -228,7 +228,7 @@ function getStageRanges(op: Readonly<Op>, laneID: number): StageRange[] {
 
 export function instructionKind(label: string): InstructionKind {
     const type = memoryModel.instructionType(label);
-    return type === "integer" || type === "branch" ? type : "memory";
+    return type === "load" || type === "store" || type === "atomic" ? "memory" : type;
 }
 
 function selectWindow(
@@ -593,7 +593,7 @@ export async function buildSample(source: TraceSource) {
             executionNamesByKind.set(kind, names);
         }
     }
-    const executionNodes = (["integer", "memory", "branch"] as const)
+    const executionNodes = (["integer", "fp", "memory", "branch"] as const)
         .filter((kind) => startsByKind.has(kind))
         .map((kind) => ({
             id: `exec-${kind}`,

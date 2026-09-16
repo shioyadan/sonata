@@ -70,6 +70,32 @@ const original = JSON.stringify(instructions),
 assert.equal(JSON.stringify(instructions), original, "Conversion changed the parser's operations");
 assert.equal(trace.machineOrder, "out-of-order");
 assert.equal(trace.key, "local-file");
+const mixedKinds = [
+    ["add x0, x1, x2", "exec-integer"],
+    ["20000838 r122 = FADD.d(r121, r118)", "exec-fp"],
+    ["vaddps ymm0, ymm1, ymm2", "exec-fp"],
+    ["ldr q0, [x1]", "exec-memory"]
+].map(([labelName, execution], id) => ({ op: { ...instructions[id], labelName }, execution }));
+const mixedOriginal = JSON.stringify(mixedKinds);
+const mixedTrace = convert(mixedKinds.map(({ op }) => op));
+assert.equal(JSON.stringify(mixedKinds), mixedOriginal, "FP detection changed recorded operations");
+assert.deepEqual(
+    mixedTrace.structure.executionNodes.map((node) => node.kind),
+    ["integer", "fp", "memory"]
+);
+for (const { op, execution } of mixedKinds) {
+    const converted = mixedTrace.ops.find((item) => item[0] === op.id);
+    const original = trace.ops.find((item) => item[0] === op.id);
+    assert.equal(converted[10], execution);
+    assert.deepEqual(converted.slice(0, 5), original.slice(0, 5), "FP detection changed IDs or lifetime");
+    assert.deepEqual(converted.slice(7, 10), original.slice(7, 10), "FP detection changed issue/completion cycles");
+    assert.deepEqual(
+        converted[6].map(([name, node, start, end]) => [name, start, end]),
+        original[6].map(([name, node, start, end]) => [name, start, end]),
+        "FP detection changed raw stages"
+    );
+    assert.ok(converted[6].some((stage) => stage[1] === execution));
+}
 assert.deepEqual(
     trace.ops.map((op) => op[7]),
     [1, 2, 3, 4]

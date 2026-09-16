@@ -101,6 +101,76 @@ for (const [label, kind] of [
     assert.equal(instructionType(label), kind, `Incorrect classification of ${label}`);
 assert.equal(instructionType("bic x0, x1, x2"), "integer");
 assert.equal(instructionType("stxr w0, x1, [x2]"), "atomic");
+// 命令種別は時刻や依存に触れず、既知名と明示的なSIMDオペランドから決める。
+for (const label of [
+    "fadd d0, d1, d2",
+    "0x100: FMUL s0, s1, s2",
+    "fcvtzs x0, d0",
+    "scvtf d0, x0",
+    "fmov d0, x0",
+    "fadd.d fa0, fa1, fa2",
+    "fcvt.w.d a0, fa0",
+    "fmv.x.w a0, fa0",
+    "fnmadd.s f0, f1, f2, f3",
+    "20000820 r116 = FCVT.d.64(r103)",
+    "20000828 r118 = FMUL.d(r117, r116)",
+    "20000838 r122 = FADD.d(r121, r118)",
+    "add v0.4s, v1.4s, v2.4s",
+    "eor v0.16b, v1.16b, v2.16b",
+    "dup v0.4s, w0",
+    "add z0.d, z1.d, z2.d",
+    "vadd.f32 q0, q1, q2",
+    "vadd.vv v0, v1, v2",
+    "vfadd.vf v0, v1, fa0",
+    "vfcvt.x.f.v v0, v1",
+    "addsd xmm0, xmm1",
+    "vaddps ymm0, ymm1, ymm2",
+    "vfmadd231pd zmm0, zmm1, zmm2",
+    "cvttsd2si rax, xmm0",
+    "movaps xmm0, xmm1",
+    "pxor %xmm0, %xmm1",
+    "vpaddd ymm0, ymm1, ymm2",
+    "ADDSD_XMM_XMM : addfp xmm0, xmm1",
+    "fsqrt",
+    "fld1"
+])
+    assert.equal(instructionType(label), "fp", `FP/SIMD instruction was not recognized: ${label}`);
+for (const [label, expected] of [
+    ["ldr q0, [x0]", "load"],
+    ["str d0, [x0]", "store"],
+    ["ld1 {v0.4s}, [x0]", "load"],
+    ["st1 {v0.4s}, [x0]", "store"],
+    ["fld fa0, 0(a0)", "load"],
+    ["fsd fa0, 0(a0)", "store"],
+    ["vldr d0, [r0]", "load"],
+    ["vstr d0, [r0]", "store"],
+    ["vle32.v v0, (a0)", "load"],
+    ["vse32.v v0, (a0)", "store"],
+    ["vlseg2e32.v v0, (a0)", "load"],
+    ["vsseg2e32.v v0, (a0)", "store"],
+    ["movaps xmm0, [rax]", "load"],
+    ["movaps [rax], xmm0", "store"],
+    ["vmovsd (%rax), %xmm0", "load"],
+    ["vmovsd %xmm0, (%rax)", "store"],
+    ["amoadd.d a0, a1, (a2)", "atomic"],
+    ["b.eq 0x100", "branch"]
+])
+    assert.equal(instructionType(label), expected, `FP classification overrode ${label}`);
+for (const label of [
+    "fence.i",
+    "fetch x0",
+    "vunknown v0, v1",
+    "unknown xmm0, xmm1",
+    "add x0, x1, x2",
+    "mov rax, rbx",
+    "movq rax, rbx",
+    "movsd",
+    "vmcall",
+    "add r0, r1 ; xmm0 was printed in a note",
+    "note fadd d0, d1, d2",
+    "20000820 note = FADD.d(r0, r1)"
+])
+    assert.equal(instructionType(label), "integer", `Unrecognized instruction was inferred as FP: ${label}`);
 const op = (id) => replay.ops.find((o) => o.id === id);
 const exec = (id) => op(id).stages.find((s) => s.node.startsWith("exec"));
 function velocity(id) {

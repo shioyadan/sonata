@@ -1,33 +1,88 @@
 "use strict";
-// ロード／ストアの分類と、観測したアクセス時間を表示区間へ分ける。
+// 命令種別の分類と、観測したメモリアクセス時間を表示区間へ分ける。
 import type replayModel = require("./replay-model.cts");
 type Operation = replayModel.Operation;
 type Stage = replayModel.Stage;
 type AccessKind = "load" | "store";
 
-function instructionType(label: string): "integer" | "branch" | AccessKind | "atomic" {
+function instructionType(label: string): "integer" | "fp" | "branch" | AccessKind | "atomic" {
     // OnikiriのPC・出力レジスタ付き表記だけを剥がし、任意の説明文を命令へ読み替えない。
     const onikiri = label
         .trim()
         .match(/^(?:0x)?[0-9a-f]+\s+(?:(?:r\d+|\(r\d+(?:,\s*r\d+)*\))\s*=\s*)?([a-z][a-z0-9_.]*)\([^()]*\)$/i);
-    const mnemonic = (
-        onikiri?.[1] ??
-        label
-            .replace(/^(?:0x)?[0-9a-f]+:\s*/i, "")
-            .trim()
-            .replace(/^[A-Z0-9_]+\s*:\s*/, "")
-            .split(/\s+/)[0]
-    ).toLowerCase();
+    const assembly = label
+        .replace(/^(?:0x)?[0-9a-f]+:\s*/i, "")
+        .trim()
+        .replace(/^[A-Z0-9_]+\s*:\s*/, "");
+    const mnemonic = (onikiri?.[1] ?? assembly.split(/\s+/)[0]).toLowerCase();
+    const operands = onikiri
+        ? ""
+        : assembly
+              .slice(mnemonic.length)
+              .replace(/;.*$|\/\/.*$/, "")
+              .trim()
+              .toLowerCase();
     if (/^(?:amo|cas|swp|ldadd|ldclr|ldeor|ldset|ldsmax|ldsmin|ldumax|ldumin)/.test(mnemonic)) return "atomic";
     if (/^(?:stxr|stlxr|sc\.)/.test(mnemonic)) return "atomic";
-    if (/^(?:ld|load)/.test(mnemonic) || /^(?:lb|lbu|lh|lhu|lw|lwu|flw|fld)$/.test(mnemonic)) return "load";
-    if (/^(?:st|store)/.test(mnemonic) || /^(?:sb|sh|sw|sd|fsw|fsd)$/.test(mnemonic)) return "store";
+    if (
+        /^(?:ld|load)/.test(mnemonic) ||
+        /^(?:lb|lbu|lh|lhu|lw|lwu|flh|flw|fld|flq|fld[stl]|fild[slq]?|vldr|vld[1-4](?:\.[a-z0-9]+)?)$/.test(mnemonic) ||
+        /^vl(?:e\d+|se\d+|[ou]xei\d+|seg\d+e\d+|sseg\d+e\d+|[ou]xseg\d+ei\d+)\.v$/.test(mnemonic)
+    )
+        return "load";
+    if (
+        /^(?:st|store)/.test(mnemonic) ||
+        /^(?:sb|sh|sw|sd|fsh|fsw|fsd|fsq|fstp?[stl]?|fistp?[slq]?|vstr|vst[1-4](?:\.[a-z0-9]+)?)$/.test(mnemonic) ||
+        /^vs(?:e\d+|se\d+|[ou]xei\d+|seg\d+e\d+|sseg\d+e\d+|[ou]xseg\d+ei\d+)\.v$/.test(mnemonic)
+    )
+        return "store";
     if (
         /^(?:b(?:\.[a-z]+|eqz?|nez?|gez?|ltz?|gtz?|lez?|ltu|geu)?|bl|blr|blx|br|bx|cbz|cbnz|tbz|tbnz|j|jal|jalr|jr|call|tail|ret|wripi?)$/.test(
             mnemonic
         )
     )
         return "branch";
+
+    const vectorOperand =
+        /(?:^|[\s,({])%?(?:[xyz]mm\d+|mm\d+|[vqd]\d+(?:\.[0-9]*[bhsd])?|z\d+(?:\.[bhsd])?)(?=$|[\s,.)}\[])/.test(
+            operands
+        );
+    // FP/SIMDもメモリアクセスは同じ管路へ置く。x86のmoveは記載されたオペランド順を使う。
+    const vectorMove =
+        /^(?:v?mov(?:ap[sd]|up[sd]|[hl]p[sd]|s[sd]|dq[au](?:8|16|32|64)?|[dq])|v?lddqu)$/.test(mnemonic) &&
+        (!/^(?:movsd|movq|movd)$/.test(mnemonic) || vectorOperand);
+    if (vectorMove && /\[|\(%/.test(operands)) {
+        const att = operands.includes("%");
+        const firstIsRegister = /^%?(?:[xyz]mm\d+|mm\d+|[er]?[abcd]x|r\d+[dwb]?)(?:\s|,|$)/.test(operands);
+        return firstIsRegister === att ? "store" : "load";
+    }
+
+    // 既知の命令名だけを判定する。fenceや未知のv接頭辞からISA・演算種別を推測しない。
+    if (
+        /^(?:f(?:add|sub|mul|mulx|div|sqrt|madd|msub|nmadd|nmsub|abs|neg|mov|mv|sgnj[nx]?|min(?:nm)?|max(?:nm)?|cmp[e]?|cm(?:eq|ge|gt|le|lt)|ccmp[e]?|csel|class|eq|lt|le|recpe|recps|rsqrte|rsqrts|cvt(?:[amnpz][su]|l2?|n2?)?|rint[ainpmxz]?|round(?:nx)?)|[su]cvtf)(?:\.[a-z0-9]+)*$/.test(
+            mnemonic
+        ) ||
+        /^(?:f(?:addp|subp|subr|subrp|mulp|divp|divr|divrp|chs|ld1|ldz|ldpi|ldl2e|ldl2t|ldlg2|ldln2|com|comp|compp|comi|comip|ucom|ucomp|ucompp|ucomi|ucomip|xch|sin|cos|sincos|ptan|patan|yl2x|yl2xp1|2xm1|scale|prem|prem1|rndint)|(?:add|sub|mul|div|sqrt|cmp|cvt|mov)fp)$/.test(
+            mnemonic
+        ) ||
+        /^(?:v?f(?:madd|msub|nmadd|nmsub|maddsub|msubadd)(?:132|213|231)?[ps][sd]|v?(?:add|sub|mul|div|min|max|sqrt|rsqrt|rcp|hadd|hsub|addsub|and|andn|or|xor|cmp|comi|ucomi|round)[ps][sd]|v?cvt(?:t)?(?:[ps][sd]|[su]?dq|[su]?qq|si)2(?:[ps][sd]|[su]?dq|[su]?qq|si))$/.test(
+            mnemonic
+        ) ||
+        vectorMove ||
+        /^v(?:f?(?:add|sub|rsub|mul|div|rdiv|sqrt|min|max|madd|msub|nmadd|nmsub|macc|msac|nmacc|nmsac|sgnj[nx]?)|mla|mls|neg|abs|mov|mvn|and|orr|or|eor|xor|not|dup|ext|zip|uzp|trn|rev|shl|shr|sra|sll|srl|cvt|fcvt|fwcvt|fncvt|merge|fmerge)(?:\.[a-z0-9]+)+$/.test(
+            mnemonic
+        )
+    )
+        return "fp";
+
+    // 整数と共通のNEON/SVE演算名やx86 packed演算は、明示されたvectorレジスタで確認する。
+    if (
+        vectorOperand &&
+        /^(?:add|sub|mul|mla|mls|madd|msub|neg|abs|and|orr|eor|bic|bif|bit|bsl|not|mov|movi|mvni|dup|ins|ext|tbl|tbx|rev(?:16|32|64)?|zip[12]?|uzp[12]?|trn[12]?|[su]?(?:shl|shr|sra|shll|shrn|qadd|qsub|qxtn|xtl|mull|mlal|mlsl|dot)[2]?|[su]?max[pv]?|[su]?min[pv]?|add[vp]|cm(?:eq|ge|gt|hi|hs|le|lt)|v?(?:p(?:add|sub|mul|madd|and|andn|or|xor|shuf|sll|srl|sra|cmp|unpck|ack|mov|blend|erm)[a-z0-9]*|blend[a-z0-9]*|broadcast[a-z0-9]*|perm[a-z0-9]*|shuf[ps][sd]))$/.test(
+            mnemonic
+        )
+    )
+        return "fp";
     return "integer";
 }
 
