@@ -10,7 +10,7 @@ type Color = readonly number[];
 type BoundKey = sonataReplay.Bound | "retiring" | "inFlight";
 interface StyleBase {
     label: string;
-    palette: Record<"integer" | "memory" | "branch" | "red" | "blue" | "floor", Vector>;
+    palette: Record<"integer" | "memory" | "branch" | "fp" | "red" | "blue" | "floor", Vector>;
     background: Vector;
     bounds: Record<BoundKey, string>;
     timeline: string[];
@@ -78,6 +78,7 @@ interface SceneOptions {
 const solidColors: Pick<StyleBase, "palette" | "background" | "bounds" | "timeline"> = {
     palette: {
         integer: [0.16, 0.72, 0.48],
+        fp: [0.22, 0.61, 0.86],
         memory: [0.95, 0.64, 0.28],
         branch: [0.69, 0.51, 0.93],
         red: [0.94, 0.28, 0.34],
@@ -105,6 +106,7 @@ const styles: Record<"neon" | "aluminum" | "paper", SceneStyle> = {
         matte: false,
         palette: {
             integer: [0.29, 1, 0.81],
+            fp: [0.3, 0.7, 1],
             memory: [1, 0.6, 0.22],
             branch: [0.62, 0.43, 1],
             red: [1, 0.19, 0.36],

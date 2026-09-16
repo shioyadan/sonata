@@ -30,7 +30,7 @@ interface Instruction {
     issue: number | null;
     completion: number | null;
     execution: string;
-    kind: "integer" | "memory" | "branch";
+    kind: "integer" | "memory" | "branch" | "fp";
     memoryKind?: "load" | "store" | "atomic";
     reads: ReadInterval[];
     sourceRegisters: RegisterSource[];
@@ -1365,6 +1365,7 @@ function prepareTrace(trace: TraceData, continuity?: { at: number; replay: Repla
     return {
         trace,
         ops,
+        schedulers: [{ id: "issue", offset: 0, capacity: trace.structure.queueCapacity }],
         memory,
         commitGroups,
         feedOps,
@@ -1381,7 +1382,14 @@ function prepareTrace(trace: TraceData, continuity?: { at: number; replay: Repla
     };
 }
 
+interface SchedulerLayout {
+    id: "issue" | "issue-fp";
+    offset: number;
+    capacity: number;
+}
+
 interface ReplayState {
+    schedulers: SchedulerLayout[];
     trace: TraceData;
     ops: Instruction[];
     memory: ReturnType<typeof memoryModel.prepareMemory>;
@@ -1404,6 +1412,7 @@ namespace replayModel {
     export type Stage = StageRange;
     export type Trace = TraceData;
     export type Replay = ReplayState;
+    export type Scheduler = SchedulerLayout;
     export type Registers = RegisterEvidence;
     export type Scheduling = SchedulingEvidence;
     export type TopDown = TopDownData;
