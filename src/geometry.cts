@@ -447,7 +447,7 @@ function createPaths<T extends PathOperation>({
         let x = n.x,
             y = n.h + 0.34,
             z = n.z;
-        if (n.id === "issue" || n.id === "issue-fp") {
+        if (n.id === "issue") {
             return scene.matrixPosition(op.issueSlot ?? 0);
         } else if (n.id === "register-read") {
             const p = scene.registerReadPort(op),
@@ -512,7 +512,7 @@ function createPaths<T extends PathOperation>({
         const index = op.stages.indexOf(stage),
             previous = op.stages[index - 1];
         const source: Vec3 = previous ? location(op, previous, previous.end - 0.001) : [-15.5, 0.8, target[2]];
-        if (previous?.node === "issue" || previous?.node === "issue-fp") {
+        if (previous?.node === "issue") {
             const exit = scene.issueRowExit(op.issueSlot ?? 0),
                 port =
                     scene.nodes.has("register-read") && stage.node.startsWith("exec")
@@ -563,7 +563,7 @@ function createPaths<T extends PathOperation>({
         const stage = stageAt(op, t),
             node = stage?.node;
         if (node === "register-read") return { state: "reading", brightness: 1.05, size: 25 };
-        if (node === "issue" || node === "issue-fp") return { state: "waiting", brightness: 0.48, size: 20 };
+        if (node === "issue") return { state: "waiting", brightness: 0.48, size: 20 };
         if (node === "memory-wait") return { state: "waiting", brightness: 0.22, size: 14 };
         if (node === "rob" || node === "commit") {
             const ready = op.completion != null && t >= op.completion;

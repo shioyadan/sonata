@@ -4,7 +4,7 @@ const assert = require("node:assert/strict"),
     fs = require("node:fs"),
     path = require("node:path"),
     vm = require("node:vm");
-const { createReplay, createDependencyReplay } = require("../src/replay-model.cts"),
+const { createReplay } = require("../src/replay-model.cts"),
     { createPaths } = require("../src/geometry.cts");
 const { createScene, styles } = require("../src/scene.cts");
 const data = {};
@@ -330,9 +330,9 @@ assert.equal(
 assert.equal(nopPaths.occupancy(20).issued.length, 0, "Scheduler occupancy ignored an observed completion");
 assert.equal(nopReplay.robReplay.stateAt(20).entries.length, 1, "The committable operation disappeared from ROB");
 
-// FP/SIMDは別の待機筐体へ置き、依存列の番号は全schedulerで共有する。
-// モデルから受け取る配置契約だけを差し替え、分類器と独立に経路を検査する。
+// 全種類を同じ待機列へ置き、INT / BR 共有ユニットと FP 専用ユニットへ流す。
 for (const registerRead of [false, true]) {
+    const labels = ["add x0, x1, x2", "b.eq 0x1000", "fadd d0, d1, d2", "vaddps ymm0, ymm1, ymm2"];
     const trace = {
         ...denseTrace,
         structure: {
@@ -344,105 +344,102 @@ for (const registerRead of [false, true]) {
                 : undefined,
             executionNodes: [
                 { id: "exec-integer", kind: "integer", names: ["X"], pipeCount: 2 },
+                { id: "exec-branch", kind: "branch", names: ["X"], pipeCount: 1 },
                 { id: "exec-fp", kind: "fp", names: ["X"], pipeCount: 2 }
             ]
         },
-        ops: denseTrace.ops.slice(0, 4)
+        ops: denseTrace.ops.slice(0, labels.length).map((op, index) => {
+            const copy = structuredClone(op);
+            copy[5] = labels[index];
+            return copy;
+        })
     };
     const replay = createReplay({ samples: [trace] }).loadTrace("local-file");
-    replay.schedulers = [
-        { id: "issue", offset: 0, capacity: 8 },
-        { id: "issue-fp", offset: 8, capacity: 4 }
-    ];
-    for (const [index, op] of replay.ops.entries()) {
-        op.issueSlot = index < 2 ? index : index + 6;
-        if (index < 2) continue;
-        op.kind = "fp";
-        op.execution = "exec-fp";
-        for (const stage of op.stages) {
-            if (stage.node === "issue") stage.node = "issue-fp";
-            if (stage.node === "exec-integer") stage.node = "exec-fp";
-        }
-    }
-    replay.trace = { ...replay.trace, structure: { ...replay.trace.structure, queueCapacity: 12 } };
-    replay.dependencyReplay = createDependencyReplay(replay.ops, undefined, 12);
+    assert.deepEqual(
+        replay.ops.map((op) => op.kind),
+        ["integer", "branch", "fp", "fp"]
+    );
+    assert.equal(new Set(replay.ops.map((op) => op.issueSlot)).size, 4, "Mixed instructions shared a waiting slot");
     for (const style of Object.values(styles)) {
         const session = { style },
             scene = createScene({ replay, session });
         scene.buildLayout();
         const paths = createPaths({ scene, replay, session }),
-            integer = scene.nodes.get("issue"),
-            fp = scene.nodes.get("issue-fp");
-        assert.ok(fp.z + fp.d / 2 + 0.5 < integer.z - integer.d / 2, "FP scheduler overlapped the integer bank");
-        assert.match(fp.detail, /INFERRED PARTITION/, "The display partition was presented as recorded capacity");
-        for (const scheduler of replay.schedulers) {
-            const node = scene.nodes.get(scheduler.id);
-            checkSpacing(
-                Array.from({ length: scheduler.capacity }, (_, row) => scene.matrixPosition(scheduler.offset + row)),
-                node,
-                `${scheduler.id} seats`
+            scheduler = scene.nodes.get("issue"),
+            integer = scene.nodes.get("exec-integer"),
+            fp = scene.nodes.get("exec-fp");
+        assert.equal(scene.nodes.has("issue-fp"), false, "FP retained a separate scheduler");
+        assert.equal(scene.nodes.has("exec-branch"), false, "Branch retained a separate execution unit");
+        assert.equal(scheduler.label, "SCHEDULER");
+        assert.equal(integer.label, "INT / BR");
+        assert.equal(integer.pipeCount, 3, "The shared INT / BR unit lost branch bandwidth");
+        assert.equal(fp.pipeCount, 2);
+        checkSpacing(
+            Array.from({ length: 12 }, (_, row) => scene.matrixPosition(row)),
+            scheduler,
+            "unified scheduler seats"
+        );
+        for (const row of [0, 11]) {
+            assert.ok(
+                scene.crossesDependencyGrid(scene.matrixPosition(row, 0)),
+                "The scheduler grid was not protected"
             );
-            for (const row of [scheduler.offset, scheduler.offset + scheduler.capacity - 1]) {
-                assert.equal(scene.schedulerForRow(row).id, scheduler.id);
-                assert.ok(
-                    scene.crossesDependencyGrid(scene.matrixPosition(row, 0)),
-                    "A scheduler grid was not protected"
-                );
-                for (const column of [0, 11]) {
-                    const position = scene.matrixPosition(row, column);
-                    assert.ok(Math.abs(position[0] - node.x) < node.w / 2);
-                    assert.ok(Math.abs(position[2] - node.z) < node.d / 2);
-                }
-                assert.ok(scene.issueRowExit(row)[0] > node.x + node.w / 2);
-                assert.ok(scene.wakeBusEntry(row)[2] < node.z - node.d / 2);
-                assert.ok(scene.wakeColumnHead(11, row)[2] < node.z - node.d / 2);
+            for (const column of [0, 11]) {
+                const position = scene.matrixPosition(row, column);
+                assert.ok(Math.abs(position[0] - scheduler.x) < scheduler.w / 2);
+                assert.ok(Math.abs(position[2] - scheduler.z) < scheduler.d / 2);
             }
+            assert.ok(scene.issueRowExit(row)[0] > scheduler.x + scheduler.w / 2);
         }
+        assert.ok(scene.wakeBusEntry()[2] < scheduler.z - scheduler.d / 2);
+        assert.ok(scene.wakeColumnHead(11)[2] < scheduler.z - scheduler.d / 2);
         for (const op of replay.ops) {
-            const stage = op.stages.find((stage) => stage.node.startsWith("issue")),
+            const stage = op.stages.find((stage) => stage.node === "issue"),
                 time = stage.end - 0.001;
             assert.deepEqual(paths.positionAt(op, time), scene.matrixPosition(op.issueSlot));
             assert.equal(paths.instructionLight(op, time).state, "waiting");
+            assert.equal(op.execution, op.kind === "fp" ? "exec-fp" : "exec-integer");
             const issue = scene.issuePath({ id: op.id, slot: op.issueSlot, column: op.issueSlot });
             assert.deepEqual(issue.origin, scene.matrixPosition(op.issueSlot));
             assert.deepEqual(issue.exit, scene.issueRowExit(op.issueSlot));
-            const scheduler = scene.schedulerForRow(op.issueSlot);
-            assert.deepEqual(issue.signal.at(-1), scene.matrixPosition(scheduler.offset, op.issueSlot));
+            assert.deepEqual(issue.signal.at(-1), scene.matrixPosition(0, op.issueSlot));
+            const unit = scene.nodes.get(op.execution),
+                lane = scene.executionLane(unit, (op.pipeLane ?? op.index) % unit.pipeCount);
+            assert.equal(issue.port[2], lane.inlet[2], "An issue selected another execution lane");
             for (const time of [op.issue - 0.001, op.issue, op.issue + 0.1, op.issue + 0.2, op.issue + 0.4])
                 assert.ok(
                     paths.positionAt(op, time).every(Number.isFinite),
-                    "An FP transfer produced invalid coordinates"
+                    "A mixed transfer produced invalid coordinates"
                 );
         }
-        assert.ok(scene.connections.some(({ from, to }) => from === "front-1" && to === "issue-fp"));
-        assert.ok(
-            scene.connections.some(
-                ({ from, to }) => from === "issue-fp" && to === (registerRead ? "register-read" : "exec-fp")
-            )
+        assert.deepEqual(
+            scene.connections.filter(({ from }) => from === "front-1").map(({ to }) => to),
+            ["issue"]
         );
-        assert.ok(scene.connections.some(({ from, to }) => from === "exec-fp" && to === "rob"));
-        const units = [...scene.nodes.values()].filter((node) => node.pipeCount);
-        for (const [index, node] of units.entries())
-            for (const other of units.slice(index + 1))
-                assert.ok(
-                    Math.abs(node.z - other.z) > (node.d + other.d) / 2,
-                    "FP and integer execution units overlapped"
-                );
+        for (const unit of [integer, fp]) {
+            assert.ok(
+                scene.connections.some(
+                    ({ from, to }) => from === (registerRead ? "register-read" : "issue") && to === unit.id
+                )
+            );
+            assert.ok(scene.connections.some(({ from, to }) => from === unit.id && to === "rob"));
+        }
+        assert.ok(
+            Math.abs(integer.z + integer.d / 2 + 0.4 - (fp.z - fp.d / 2)) < 1e-9,
+            "The former BR unit left an empty gap"
+        );
+        assert.ok(Math.abs(integer.z - integer.d / 2 + fp.z + fp.d / 2) < 1e-9, "Execution units were not centered");
         if (registerRead) {
-            const fpPorts = scene.connections.find(
-                ({ from, to }) => from === "issue-fp" && to === "register-read"
-            ).lanes;
-            assert.equal(fpPorts.length, 2, "FP scheduler connected to unrelated integer lanes");
-            const fpUnit = scene.nodes.get("exec-fp"),
-                lanePositions = Array.from(
-                    { length: fpUnit.pipeCount },
-                    (_, lane) => scene.executionLane(fpUnit, lane).inlet[2]
-                );
+            const ports = scene.connections.find(({ from, to }) => from === "issue" && to === "register-read").lanes;
+            assert.equal(ports.length, 5, "The unified scheduler lost execution lanes");
+            const lanePositions = [integer, fp].flatMap((unit) =>
+                Array.from({ length: unit.pipeCount }, (_, lane) => scene.executionLane(unit, lane).inlet[2])
+            );
             assert.deepEqual(
-                fpPorts.map(({ target }) => target[2]),
+                ports.map(({ target }) => target[2]),
                 lanePositions
             );
         }
     }
 }
-console.log("FP/SIMD scene: separate schedulers, cross-bank dependency columns and execution routes passed");
+console.log("Unified scene: shared scheduler, INT / BR unit, FP/SIMD routes and wake-up positions passed");
