@@ -132,8 +132,10 @@
                 </div>
                 <div class="world-bottom">
                     <div class="legend">
-                        <span><i class="integer"></i>Integer</span><span><i class="memory"></i>Memory</span
-                        ><span><i class="branch"></i>Branch</span><span><i class="squash"></i>Squashed</span
+                        <span><i class="integer"></i>Integer</span
+                        ><span id="fp-legend" hidden><i class="fp"></i>FP / SIMD</span
+                        ><span><i class="memory"></i>Memory</span><span><i class="branch"></i>Branch</span
+                        ><span><i class="squash"></i>Squashed</span
                         ><span
                             class="link-key"
                             title="Link lines match the displayed module widths: N pipes at both execution ports, fetch / allocation width at the frontend, and commit width at the output. Widths are inferred from the source trace."
@@ -236,6 +238,10 @@
                 <div class="occupancy">
                     <div><span id="queue-label">Scheduler</span><span id="issue-count">0 / 16</span></div>
                     <div class="cell-meter" id="issue-meter"></div>
+                    <div id="fp-queue" hidden title="Display rows; hardware queue capacity is unobserved">
+                        <span>FP / SIMD scheduler</span><span id="issue-fp-count">0 / 0</span>
+                    </div>
+                    <div class="cell-meter" id="issue-fp-meter" hidden></div>
                     <div><span id="rob-label">Reorder buffer</span><span id="rob-count">0 / 48</span></div>
                     <div class="cell-meter" id="rob-meter"></div>
                 </div>

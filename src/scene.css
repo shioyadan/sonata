@@ -208,6 +208,11 @@ h1 > span {
     color: var(--cyan);
 }
 
+.fp {
+    background: var(--fp);
+    color: var(--fp);
+}
+
 .memory {
     background: var(--amber);
     color: var(--amber);

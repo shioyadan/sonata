@@ -3,7 +3,8 @@ const assert = require("node:assert/strict");
 
 module.exports = async function reviewStageLayout(window) {
     const result = await window.webContents.executeJavaScript(`(()=>{
-        const original=sonata.cycle,trace=sonata.trace,grid=sonata.schedulerGrid,layout=sonata.instructionLayout;
+        const original=sonata.cycle,trace=sonata.trace,banks=sonata.schedulers,layout=sonata.instructionLayout;
+        const grid={rows:banks.flatMap(bank=>bank.grid.rows),columns:banks.flatMap(bank=>bank.grid.columns)};
         const entries=trace.ops.flatMap(op=>op[6].filter(s=>s[0]==='Rn').map(s=>({id:op[0],start:s[2],end:Math.min(s[3],op[4]?(op[11]??op[3]):op[3])}))).filter(e=>e.start<e.end);
         // 入場の補間が終わった時点から、実トレースで最も多くの命令が滞在する場面を選ぶ。
         const candidates=entries.map(e=>Math.max(trace.firstCycle,e.start+.9)).filter(cycle=>cycle<=trace.lastCycle)
@@ -38,13 +39,17 @@ module.exports = async function reviewStageLayout(window) {
                 const a=positions[i],b=positions[j];
                 if(Math.max(a.start,b.start)<Math.min(a.end,b.end)&&Math.hypot(a.position[0]-b.position[0],a.position[2]-b.position[2])<=layout.radius*2)overlaps++;
             }
-            return {key:trace.key,rows:grid.rows.length,columns:grid.columns.length,capacity:trace.structure.queueCapacity,
+            return {key:trace.key,rows:grid.rows.length,columns:grid.columns.length,capacity:trace.structure.queueCapacity,banks:banks.length,
                 rowAligned:grid.rows.every((line,row)=>line[0][0]===layout.scheduler[row][0]&&line[0][2]===layout.scheduler[row][2]),
                 gpuMatches:[...grid.rows,...grid.columns].map(matches),rename:{cycle:peak.cycle,expected:peak.entries.length,rendered:pieces.length,slots:layout.rename.length,minimum,overlaps,returned},error:gl.getError()};
         }finally{gl.drawArrays=draw;sonata.captureAt(original);}
     })()`);
     assert.equal(result.rows, result.capacity, `${result.key}: scheduler row lines do not match capacity`);
-    assert.equal(result.columns, result.capacity, `${result.key}: scheduler column lines do not match capacity`);
+    assert.equal(
+        result.columns,
+        result.capacity * result.banks,
+        `${result.key}: scheduler column lines do not match capacity`
+    );
     assert.ok(result.rowAligned, `${result.key}: scheduler lines miss waiting entries`);
     assert.ok(
         result.gpuMatches.every((count) => count === 1),

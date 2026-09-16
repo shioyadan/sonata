@@ -10,6 +10,7 @@ const suites = {
     playback: "types",
     "sample-model": "types",
     continuity: "types",
+    schedulers: "types",
     "piece-grounding": "types",
     scene: "types",
     bundle: "node",

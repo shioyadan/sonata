@@ -4,7 +4,7 @@ const assert = require("node:assert/strict"),
     fs = require("node:fs"),
     path = require("node:path"),
     vm = require("node:vm");
-const { createReplay } = require("../src/replay-model.cts"),
+const { createReplay, createDependencyReplay } = require("../src/replay-model.cts"),
     { createPaths } = require("../src/geometry.cts");
 const { createScene, styles } = require("../src/scene.cts");
 const data = {};
@@ -364,6 +364,8 @@ for (const registerRead of [false, true]) {
             if (stage.node === "exec-integer") stage.node = "exec-fp";
         }
     }
+    replay.trace = { ...replay.trace, structure: { ...replay.trace.structure, queueCapacity: 12 } };
+    replay.dependencyReplay = createDependencyReplay(replay.ops, undefined, 12);
     for (const style of Object.values(styles)) {
         const session = { style },
             scene = createScene({ replay, session });

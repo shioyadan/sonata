@@ -70,9 +70,14 @@ module.exports = async function reviewDesktop(window, screenshots) {
                     return port[1]===pipe.inlet[1]&&port[2]===pipe.inlet[2];
                 });
             }))&&links.filter(l=>l.from==='rob'&&l.to==='commit'||l.to==='output').every(l=>l.lineCount===trace.retireWidth)
-                &&links.filter(l=>l.to==='issue').every(l=>l.lineCount===trace.structure.allocationWidth);
-            const schedulerOutputs=links.filter(l=>l.from==='issue').reduce((sum,l)=>sum+l.lineCount,0);
-            if(schedulerOutputs!==pipes.length)throw new Error('Scheduler outputs must equal total execution pipes');
+                &&links.filter(l=>l.to.startsWith('issue')).every(l=>l.lineCount===trace.structure.allocationWidth);
+            const schedulerOutputs=links.filter(l=>l.from.startsWith('issue')).reduce((sum,l)=>sum+l.lineCount,0);
+            if(schedulerOutputs!==pipes.length)throw new Error('Scheduler outputs must equal total execution pipes for '+trace.key);
+            for(const bank of sonata.schedulers){
+                const expected=pipes.filter(pipe=>(pipe.node==='exec-fp')===(bank.id==='issue-fp')).length;
+                const actual=links.filter(link=>link.from===bank.id).reduce((sum,link)=>sum+link.lineCount,0);
+                if(actual!==expected)throw new Error(bank.id+' must connect only to its execution pipes');
+            }
             const robTargets=links.filter(l=>l.to==='rob').flatMap(l=>l.lanes.map(p=>JSON.stringify(p.target)));
             if(new Set(robTargets).size!==robTargets.length)throw new Error('Execution pipes merged at a shared ROB input');
             const retireCounts=new Map();for(const op of trace.ops)if(!op[4]&&op[3]>=trace.firstCycle&&op[3]<trace.lastCycle+1){
@@ -107,19 +112,19 @@ module.exports = async function reviewDesktop(window, screenshots) {
                     && Math.abs(p[1]-lane.inlet[1])<1e-6 && Math.abs(p[2]-lane.inlet[2])<1e-6)
                     && positions[0][0]<positions[1][0] && positions[1][0]<positions[2][0];
             });
-            const lightContrast=['issue','memory-wait','rob'].every(node=>{
+            const lightContrast=['issue','issue-fp','memory-wait','rob'].every(node=>{
                 const matches=(s,o)=>s.node===node && (node!=='rob'||o.completion===null||s.end<=o.completion) && s.start>=trace.firstCycle && s.end<=trace.lastCycle && s.end>s.start;
                 const op=sonata.ops.find(o=>o.stages.some(s=>matches(s,o)));
                 if(!op)return true;
                 const stage=op.stages.find(s=>matches(s,op));
                 sonata.captureAt((stage.start+stage.end)/2);
                 const particle=sonata.particles.find(p=>p.id===op.id);
-                return particle?.state==='waiting' && (node==='issue'?particle.brightness>=.4&&particle.brightness<=.6:particle.brightness<.35);
+                return particle?.state==='waiting' && (node.startsWith('issue')?particle.brightness>=.4&&particle.brightness<=.6:particle.brightness<.35);
             });
-            const sequenceColors=['integer','memory','branch'].every(kind=>{
+            const sequenceColors=['integer','memory','branch','fp'].every(kind=>{
                 const op=sonata.ops.find(o=>o.kind===kind&&o.fetch>trace.firstCycle&&o.end< trace.lastCycle&&o.end>o.fetch+3);
-                if(!op)return false;
-                const target={integer:[.29,1,.81],memory:[1,.60,.22],branch:[.62,.43,1]}[kind];
+                if(!op)return kind==='fp';
+                const target={integer:[.29,1,.81],memory:[1,.60,.22],branch:[.62,.43,1],fp:[.3,.7,1]}[kind];
                 return [op.fetch+.1,Math.min(op.end-.1,op.fetch+3)].every(t=>{
                     sonata.captureAt(t);const p=sonata.particles.find(p=>p.id===op.id);
                     return p&&p.color.every((v,i)=>Math.abs(v-target[i])<1e-9);
