@@ -415,14 +415,26 @@ for (const sample of samples) {
             if (a === b) continue;
             assert.ok(Math.abs(a.z - b.z) >= (a.d + b.d) / 2, `${sample.key}: overlapping ${a.id}/${b.id}`);
         }
+    const arithmeticPipes = sample.structure.executionNodes
+        .filter((node) => node.kind === "integer" || node.kind === "branch")
+        .reduce((sum, node) => sum + node.pipeCount, 0);
+    assert.equal(
+        replay.memory.executionNodes.find((node) => node.id === "exec-integer")?.pipeCount ?? 0,
+        arithmeticPipes
+    );
+    assert.ok(!replay.memory.executionNodes.some((node) => node.id === "exec-branch"));
     const launches = new Map();
     for (const o of replay.ops) {
-        for (const stage of o.stages.filter((s) => s.node === "exec-load" || s.node === "exec-store")) {
+        for (const stage of o.stages.filter((s) => ["exec-load", "exec-store", "exec-integer"].includes(s.node))) {
             const key = `${stage.node}:${stage.start}`;
             const lanes = launches.get(key) ?? new Set();
-            assert.ok(!lanes.has(o.pipeLane), `${sample.key}: coincident memory launch ${key}`);
+            assert.ok(!lanes.has(o.pipeLane), `${sample.key}: coincident execution launch ${key}`);
             lanes.add(o.pipeLane);
             launches.set(key, lanes);
+        }
+        if (o.kind === "branch") {
+            assert.equal(o.execution, "exec-integer");
+            assert.ok(!o.stages.some((stage) => stage.node === "exec-branch"));
         }
         const raw = sample.ops.find((t) => t[0] === o.id);
         assert.equal(o.allocation, raw[7]);

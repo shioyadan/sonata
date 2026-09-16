@@ -1,5 +1,5 @@
 "use strict";
-// 命令種別の分類と、観測したメモリアクセス時間を表示区間へ分ける。
+// 命令の分類、整数/分岐の表示管路の統合、観測したメモリアクセスの区間分割。
 import type replayModel = require("./replay-model.cts");
 type Operation = replayModel.Operation;
 type Stage = replayModel.Stage;
@@ -234,9 +234,22 @@ function prepareMemory(ops: Operation[], trace: replayModel.Trace) {
             : budget
         : 0;
     const loadPipes = loadCount ? budget - storePipes : 0;
+    const arithmetic = trace.structure.executionNodes.filter(
+        (node) => node.kind === "integer" || node.kind === "branch"
+    );
     const executionNodes = trace.structure.executionNodes
-        .filter((n) => n.kind !== "memory")
-        .map((n) => ({ ...n, latency: 1, sharedPipes: 0 }));
+        .filter((node) => node.kind === "fp")
+        .map((node) => ({ ...node, latency: 1, sharedPipes: 0 }));
+    // 整数と分岐は同じ表示ユニットへ束ね、元の管路数は合計で保つ。
+    if (arithmetic.length)
+        executionNodes.unshift({
+            id: "exec-integer",
+            kind: "integer",
+            names: [...new Set(arithmetic.flatMap((node) => node.names))],
+            pipeCount: arithmetic.reduce((sum, node) => sum + node.pipeCount, 0),
+            latency: 1,
+            sharedPipes: 0
+        });
     for (const kind of ["load", "store"] as const) {
         const pipeCount = kind === "load" ? loadPipes : storePipes;
         if (pipeCount)
@@ -251,8 +264,8 @@ function prepareMemory(ops: Operation[], trace: replayModel.Trace) {
     }
     if (profile?.memoryKinds.includes("atomic") || ops.some((op) => op.memoryKind === "atomic"))
         executionNodes.push({ id: "exec-memory", kind: "memory", names: [], pipeCount: 1, latency: 1, sharedPipes });
-    // 同時に発行されたアクセスは別の表示管路へ分ける。物理ポートIDの推定ではない。
-    for (const node of executionNodes.filter((n) => n.kind === "memory")) {
+    // 同時に発行された命令は別の表示管路へ分ける。物理ポートIDの推定ではない。
+    for (const node of executionNodes.filter((node) => node.kind === "memory" || node.kind === "integer")) {
         const routed = ops
             .filter((op) => op.execution === node.id)
             .sort(

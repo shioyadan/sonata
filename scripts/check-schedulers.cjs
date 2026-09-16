@@ -1,5 +1,5 @@
 "use strict";
-// FP分離は表示の変更に限定し、待機位置・記録時刻・キューをまたぐ依存を保つ。
+// 共通スケジューラと整数/分岐の実行統合は表示に限定し、記録時刻と依存を保つ。
 const assert = require("node:assert/strict");
 const { createReplay, createWaitPlayback, measureTransfers } = require("../src/replay-model.cts");
 
@@ -43,6 +43,7 @@ function fixture(ops, fp = true) {
             frontNodes: [{ id: "front-0", names: ["F"] }],
             executionNodes: [
                 { id: "exec-integer", kind: "integer", names: ["X"], pipeCount: 2 },
+                { id: "exec-branch", kind: "branch", names: ["B"], pipeCount: 1 },
                 { id: "exec-memory", kind: "memory", names: ["X"], pipeCount: 1 },
                 ...(fp ? [{ id: "exec-fp", kind: "fp", names: ["X"], pipeCount: 2 }] : [])
             ],
@@ -77,25 +78,19 @@ assert.deepEqual(
     replay.ops.map((op) => op.kind),
     ["integer", "fp", "fp", "memory", "memory", "fp"]
 );
-assert.deepEqual(
-    replay.schedulers.map((bank) => bank.id),
-    ["issue", "issue-fp"]
-);
-const [main, fp] = replay.schedulers;
-assert.equal(fp.offset, main.capacity);
-assert.equal(main.capacity + fp.capacity, replay.trace.structure.queueCapacity);
+assert.deepEqual(replay.schedulers, [{ id: "issue", offset: 0, capacity: 16 }]);
 for (const op of replay.ops) {
-    const bank = op.kind === "fp" ? fp : main;
-    assert.ok(op.issueSlot >= bank.offset && op.issueSlot < bank.offset + bank.capacity);
-    assert.equal(op.stages[1].node, bank.id);
+    assert.ok(op.issueSlot >= 0 && op.issueSlot < replay.trace.structure.queueCapacity);
+    assert.equal(op.stages[1].node, "issue");
     assert.equal(op.allocation, input.ops[op.id][7]);
     assert.equal(op.issue, input.ops[op.id][8]);
     assert.equal(op.completion, input.ops[op.id][9]);
 }
 const transfers = measureTransfers(replay.ops, { frontNodes: input.structure.frontNodes });
-assert.equal(transfers.get("front-0>issue-fp").peak, 1);
-assert.ok(transfers.has("issue-fp>exec-fp"));
-assert.ok(!transfers.has("issue>exec-fp"));
+assert.equal(transfers.get("front-0>issue").peak, 2);
+assert.ok(transfers.has("issue>exec-fp"));
+assert.ok(transfers.has("issue>exec-integer"));
+assert.ok(![...transfers.keys()].some((key) => key.includes("issue-fp") || key.includes("exec-branch")));
 const immediate = measureTransfers(
     [
         {
@@ -113,14 +108,20 @@ const immediate = measureTransfers(
     ],
     { frontNodes: input.structure.frontNodes }
 );
-assert.equal(immediate.get("front-0>issue-fp").peak, 1);
-assert.equal(immediate.get("issue-fp>exec-fp").peak, 1);
+assert.equal(immediate.get("front-0>issue").peak, 1);
+assert.equal(immediate.get("issue>exec-fp").peak, 1);
 const matrix = replay.dependencyReplay.stateAt(5);
 assert.equal(matrix.rows.length, 5);
 assert.equal(new Set(matrix.rows.map((row) => row.slot)).size, 5);
 assert.equal(matrix.cells.length, 2);
-assert.ok(matrix.cells.some((cell) => cell.consumer === 1 && cell.row >= fp.offset && cell.column < fp.offset));
-assert.ok(matrix.cells.some((cell) => cell.consumer === 4 && cell.row < fp.offset && cell.column >= fp.offset));
+for (const [consumer, producer] of [
+    [1, 0],
+    [4, 1]
+]) {
+    const cell = matrix.cells.find((cell) => cell.consumer === consumer);
+    assert.equal(cell.row, replay.ops.find((op) => op.id === consumer).issueSlot);
+    assert.equal(cell.column, replay.ops.find((op) => op.id === producer).issueSlot);
+}
 assert.ok(
     replay.dependencyReplay
         .stateAt(8.3)
@@ -129,22 +130,59 @@ assert.ok(
 );
 assert.ok(replay.dependencyReplay.stateAt(9.2).broadcasts.some((event) => event.producer === 0));
 
-// 別窓で整数側が増えて全体番号が変わっても、FP待機列内の位置は継続する。
-const oldSlots = new Map(replay.ops.map((op) => [op.id, op.issueSlot - (op.kind === "fp" ? fp.offset : 0)]));
+// 区間内の種別構成が変わっても、全命令が共通の行番号を引き継ぐ。
+const oldSlots = new Map(replay.ops.map((op) => [op.id, op.issueSlot]));
 const next = structuredClone(input);
 next.firstCycle = 4;
 next.ops.push(...Array.from({ length: 8 }, (_, i) => operation(i + 6, "add x1, x2, x3", 10, 15)));
 source.loadData(next, { continuityAt: 5 });
-const newFp = replay.schedulers[1];
-assert.ok(newFp.offset > fp.offset);
-for (const op of replay.ops.filter((op) => op.id < 5))
-    assert.equal(op.issueSlot - (op.kind === "fp" ? newFp.offset : 0), oldSlots.get(op.id));
+assert.deepEqual(replay.schedulers, [{ id: "issue", offset: 0, capacity: 16 }]);
+for (const op of replay.ops.filter((op) => op.id < 5)) assert.equal(op.issueSlot, oldSlots.get(op.id));
 
-// 区間内にFPがなくても、全体の構造で観測済みならFP側を消さない。
+// INT/BRは同じユニットとレーン集合を使い、分類・FPユニットは維持する。
+const launches = fixture([operation(0, "add x1, x2, x3", 2, 8), operation(3, "b.ne 0x100", 2, 8)]);
+source.loadData(launches);
+const combined = replay.memory.executionNodes.find((node) => node.id === "exec-integer");
+assert.equal(combined.kind, "integer");
+assert.equal(combined.pipeCount, 3);
+assert.deepEqual(combined.names, ["X", "B"]);
+assert.ok(!replay.memory.executionNodes.some((node) => node.kind === "branch"));
+assert.equal(replay.ops[1].kind, "branch");
+assert.equal(replay.ops[1].execution, "exec-integer");
+assert.equal(replay.ops[1].stages[2].node, "exec-integer");
+assert.notEqual(replay.ops[0].pipeLane, replay.ops[1].pipeLane, "Concurrent INT/BR launches overlap");
+assert.equal(replay.memory.executionNodes.find((node) => node.id === "exec-fp").pipeCount, 2);
+const oldLanes = new Map(replay.ops.map((op) => [op.id, op.pipeLane]));
+const nextLaunches = structuredClone(launches);
+nextLaunches.firstCycle = 4;
+nextLaunches.ops.push(operation(6, "add x1, x2, x3", 3, 8));
+source.loadData(nextLaunches, { continuityAt: 5 });
+for (const id of [0, 3]) assert.equal(replay.ops.find((op) => op.id === id).pipeLane, oldLanes.get(id));
+assert.equal(new Set(replay.ops.map((op) => op.pipeLane)).size, 3);
+source.loadData(launches, { continuityAt: 5 });
+for (const id of [0, 3]) assert.equal(replay.ops.find((op) => op.id === id).pipeLane, oldLanes.get(id));
+
+// 区間内にFPがなくても観測済みの実行ユニットを保持し、待機列は増やさない。
 source.loadData(fixture([operation(0, "add x1, x2, x3", 2, 8)]));
-assert.equal(replay.schedulers.length, 2);
+assert.equal(replay.schedulers.length, 1);
+assert.ok(replay.memory.executionNodes.some((node) => node.id === "exec-fp"));
 source.loadData(fixture([operation(0, "add x1, x2, x3", 2, 8)], false));
 assert.deepEqual(replay.schedulers, [{ id: "issue", offset: 0, capacity: 16 }]);
+assert.ok(!replay.memory.executionNodes.some((node) => node.id === "exec-fp"));
+
+// 分岐だけを観測したファイルも同じ表示先へ置き、元構造へ整数ユニットを捏造しない。
+const branchOnly = fixture([operation(0, "b.eq 0x100", 2, 8)], false);
+branchOnly.structure.executionNodes = [{ id: "exec-branch", kind: "branch", names: ["B"], pipeCount: 1 }];
+branchOnly.ops[0][6][2][1] = "exec-branch";
+branchOnly.ops[0][10] = "exec-branch";
+const originalBranch = structuredClone(branchOnly);
+source.loadData(branchOnly);
+assert.deepEqual(
+    replay.memory.executionNodes.map((node) => [node.id, node.pipeCount]),
+    [["exec-integer", 1]]
+);
+assert.equal(replay.ops[0].execution, "exec-integer");
+assert.deepEqual(branchOnly, originalBranch);
 
 // 再実行待ちと退出補間を予約し、後から入ったFP命令を重ねない。
 const retry = operation(0, "fadd.d f1, f2, f3", 2, 4, 15);
@@ -155,7 +193,7 @@ retry[6] = [
     ["X", "exec-integer", 14, 15],
     ["W", "rob", 15, 25]
 ];
-source.loadData(fixture([retry, operation(1, "fmul.d f1, f2, f3", 6, 13)]));
+source.loadData(fixture([retry, operation(1, "add x1, x2, x3", 6, 13)]));
 assert.notEqual(replay.ops[0].issueSlot, replay.ops[1].issueSlot);
 
 const waiting = fixture([operation(0, "fadd.d f1, f2, f3", 2, 100, 101)]);
@@ -163,5 +201,5 @@ waiting.lastCycle = 120;
 waiting.ops[0][3] = 120;
 waiting.ops[0][6].at(-1)[3] = 120;
 source.loadData(waiting);
-assert.ok(createWaitPlayback(waiting, replay.ops)(20) > 20, "FP scheduler waits did not allow fast-forward");
-console.log("Schedulers: FP/SIMD banks, cross-bank dependencies, retries and window continuity passed");
+assert.ok(createWaitPlayback(waiting, replay.ops)(20) > 20, "Unified scheduler FP waits did not allow fast-forward");
+console.log("Schedulers: unified queue, INT/BR pipes, mixed dependencies, retries and window continuity passed");
