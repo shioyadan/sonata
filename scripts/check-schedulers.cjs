@@ -196,6 +196,40 @@ retry[6] = [
 source.loadData(fixture([retry, operation(1, "add x1, x2, x3", 6, 13)]));
 assert.notEqual(replay.ops[0].issueSlot, replay.ops[1].issueSlot);
 
+// INT再実行とBR初回発行が重なっても、段ごとに別の管路を使う。
+const integerRetry = operation(0, "add x1, x2, x3", 2, 5, 11);
+integerRetry[6] = [
+    ["Is", "issue", 2, 5],
+    ["X", "exec-integer", 5, 6],
+    ["Is", "issue", 6, 10],
+    ["X", "exec-integer", 10, 11],
+    ["W", "rob", 11, 25]
+];
+const retryLaunches = fixture(
+    [
+        integerRetry,
+        operation(1, "add x1, x2, x3", 3, 7),
+        operation(2, "add x1, x2, x3", 4, 8),
+        operation(3, "b.ne 0x100", 5, 10)
+    ],
+    false
+);
+retryLaunches.structure.executionNodes.find((node) => node.id === "exec-integer").pipeCount = 1;
+source.loadData(retryLaunches);
+const laneAt = (id, start) =>
+    replay.ops.find((op) => op.id === id).stages.find((stage) => stage.start === start).pipeLane;
+assert.notEqual(laneAt(0, 10), laneAt(3, 10), "An INT retry overlapped a BR launch");
+assert.notEqual(laneAt(0, 5), laneAt(0, 10), "Retry fixture did not exercise stage-specific lanes");
+assert.equal(replay.ops[0].pipeLane, laneAt(0, 5), "Compatibility lane did not match the first execution");
+const retryLanes = [laneAt(0, 10), laneAt(3, 10)];
+const expandedRetry = structuredClone(retryLaunches);
+expandedRetry.firstCycle = 9;
+expandedRetry.ops.push(operation(4, "add x1, x2, x3", 9, 9));
+source.loadData(expandedRetry, { continuityAt: 9.5 });
+assert.deepEqual([laneAt(0, 10), laneAt(3, 10)], retryLanes, "Retry lanes moved across an expanded window");
+source.loadData(retryLaunches, { continuityAt: 9.5 });
+assert.deepEqual([laneAt(0, 10), laneAt(3, 10)], retryLanes, "Retry lanes moved across a reverse window change");
+
 const waiting = fixture([operation(0, "fadd.d f1, f2, f3", 2, 100, 101)]);
 waiting.lastCycle = 120;
 waiting.ops[0][3] = 120;

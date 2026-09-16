@@ -265,7 +265,7 @@ function prepareMemory(ops: Operation[], trace: replayModel.Trace) {
     if (profile?.memoryKinds.includes("atomic") || ops.some((op) => op.memoryKind === "atomic"))
         executionNodes.push({ id: "exec-memory", kind: "memory", names: [], pipeCount: 1, latency: 1, sharedPipes });
     // 同時に発行された命令は別の表示管路へ分ける。物理ポートIDの推定ではない。
-    for (const node of executionNodes.filter((node) => node.kind === "memory" || node.kind === "integer")) {
+    for (const node of executionNodes.filter((node) => node.kind === "memory")) {
         const routed = ops
             .filter((op) => op.execution === node.id)
             .sort(
@@ -275,6 +275,17 @@ function prepareMemory(ops: Operation[], trace: replayModel.Trace) {
             );
         routed.forEach((op, index) => {
             op.pipeLane = index % node.pipeCount;
+        });
+    }
+    // INT/BRの再試行も独立した発行として数え、同時の初回発行と重ねない。
+    const integer = executionNodes.find((node) => node.id === "exec-integer");
+    if (integer) {
+        const routed = ops
+            .flatMap((op) => op.stages.filter((stage) => stage.node === integer.id).map((stage) => ({ op, stage })))
+            .sort((a, b) => a.stage.start - b.stage.start || a.op.id - b.op.id);
+        routed.forEach(({ op, stage }, index) => {
+            stage.pipeLane = index % integer.pipeCount;
+            op.pipeLane ??= stage.pipeLane;
         });
     }
     const storeTimes = new Map(trace.storeCompletions ?? []);

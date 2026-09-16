@@ -13,6 +13,7 @@ interface StageRange {
     end: number;
     names: string[];
     displaySlot?: number;
+    pipeLane?: number;
     entryCycles?: number;
 }
 interface Instruction {
@@ -1283,7 +1284,7 @@ function prepareTrace(trace: TraceData, continuity?: { at: number; replay: Repla
             const count = preserveSlots(uses, at, node.startsWith("front-") ? 4096 : 512);
             if (node === "memory-wait" && count !== null) memory.waitSlots.load = count;
         }
-        for (const node of memory.executionNodes.filter((node) => node.kind === "memory" || node.kind === "integer")) {
+        for (const node of memory.executionNodes.filter((node) => node.kind === "memory")) {
             const groups = new Map<number, Instruction[]>();
             for (const op of ops.filter((op) => op.execution === node.id)) {
                 const start = op.stages.find((stage) => stage.node === node.id)?.start ?? Infinity;
@@ -1309,6 +1310,39 @@ function prepareTrace(trace: TraceData, continuity?: { at: number; replay: Repla
                     used.add(op.pipeLane!);
                 }
             }
+        }
+        // INT/BRは再実行ごとに管路を選ぶ。窓が変わっても同じ記録段の位置を保つ。
+        const integer = memory.executionNodes.find((node) => node.id === "exec-integer");
+        if (integer) {
+            const groups = new Map<number, { stage: StageRange; old?: number }[]>();
+            for (const op of ops) {
+                for (const stage of op.stages.filter((stage) => stage.node === integer.id)) {
+                    const old = previous
+                        .get(op.id)
+                        ?.stages.find((value) => value.node === stage.node && value.start === stage.start)?.pipeLane;
+                    if (!groups.has(stage.start)) groups.set(stage.start, []);
+                    groups.get(stage.start)!.push({ stage, old });
+                }
+            }
+            for (const group of groups.values()) {
+                const used = new Set<number>();
+                for (const { stage, old } of group) {
+                    if (old !== undefined && old < integer.pipeCount) {
+                        stage.pipeLane = old;
+                        used.add(old);
+                    }
+                }
+                for (const { stage, old } of group) {
+                    if (old !== undefined && old < integer.pipeCount) continue;
+                    const lane = !used.has(stage.pipeLane!)
+                        ? stage.pipeLane
+                        : Array.from({ length: integer.pipeCount }, (_, i) => i).find((i) => !used.has(i));
+                    if (lane !== undefined) stage.pipeLane = lane;
+                    used.add(stage.pipeLane!);
+                }
+            }
+            for (const op of ops.filter((op) => op.execution === integer.id))
+                op.pipeLane = op.stages.find((stage) => stage.node === integer.id)?.pipeLane;
         }
         for (const group of commitGroups.values() as Iterable<Instruction[]>) {
             const used = new Set<number>();
