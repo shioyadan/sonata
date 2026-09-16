@@ -16,7 +16,7 @@ const limits = {
 interface ThreadState {
     names: Map<number, Set<string>>;
     edges: Map<number, Map<string, Set<string>>>;
-    kinds: Set<"integer" | "memory" | "branch">;
+    kinds: Set<"integer" | "fp" | "memory" | "branch">;
     memoryKinds: Set<"load" | "store" | "atomic">;
     minimum: { load: number | null; store: number | null };
     first: Set<number>;

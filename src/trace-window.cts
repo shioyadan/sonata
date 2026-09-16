@@ -24,7 +24,7 @@ type Options = {
     storeWaits?: readonly StoreWait[];
 };
 const limits = { operations: 16384, stages: 131072, cycles: 512, active: 2048, queue: 256, rob: 2048, width: 32 };
-type ExecutionKind = "integer" | "memory" | "branch";
+type ExecutionKind = "integer" | "fp" | "memory" | "branch";
 interface StructureProfile {
     detected: DetectedStageStructure | null;
     lane: number;
@@ -716,7 +716,7 @@ function buildProfile(observed: StructureObservations, previous?: StructureProfi
         frontNodes,
         executionNames,
         completionNames,
-        kinds: (["integer", "memory", "branch"] as const).filter((kind) => observed.kinds.has(kind)),
+        kinds: (["integer", "fp", "memory", "branch"] as const).filter((kind) => observed.kinds.has(kind)),
         memoryKinds: (["load", "store", "atomic"] as const).filter((kind) => observed.memoryKinds.has(kind)),
         memoryMinimum: {
             load: previous?.memoryMinimum.load ?? null,

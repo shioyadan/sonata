@@ -396,7 +396,9 @@ async function checkFileStructure() {
         instruction(602, "sw x0, 0(x1)", 5) +
         instruction(603, "bne x0, x1") +
         instruction(604, "sw x0, 0(x1)", 2, 1) +
-        instruction(605, "bne x0, x1", 1, 0, true);
+        instruction(605, "bne x0, x1", 1, 0, true) +
+        instruction(606, "20000838 r122 = FADD.d(r121, r118)", 4) +
+        instruction(607, "add v0.4s, v1.4s, v2.4s", 2);
     const box = mailbox(),
         session = createFileSession(box.send),
         input = controlledInput(prefix, "structure.kanata");
@@ -410,7 +412,7 @@ async function checkFileStructure() {
         const initial = await window(100);
         assert.deepEqual(initial.displayProfile.memoryKinds, []);
         input.append(tail);
-        await box.wait((message) => message.type === "loaded" && message.source.opCount === 606);
+        await box.wait((message) => message.type === "loaded" && message.source.opCount === 608);
         const partial = await window(101);
         assert.equal(input.finished, false, "Global structure inference waited for EOF");
         assert.deepEqual(partial.displayProfile, {
@@ -419,13 +421,13 @@ async function checkFileStructure() {
         });
         assert.deepEqual(
             partial.structure.executionNodes.map((node) => node.kind),
-            ["integer", "memory", "branch"]
+            ["integer", "fp", "memory", "branch"]
         );
         input.finish();
         await opening;
         const earliest = await window(102);
         assert.deepEqual(earliest.structure, partial.structure, "EOF changed an already observed file structure");
-        for (const id of [600, 601, 602, 603]) {
+        for (const id of [600, 601, 602, 603, 606, 607]) {
             const later = await window(103 + id, recorded.get(id).first);
             assert.deepEqual(
                 later.structure,
@@ -433,7 +435,19 @@ async function checkFileStructure() {
                 "File stage structure followed the selected instruction kind"
             );
             assert.deepEqual(later.displayProfile, earliest.displayProfile);
+            if (id >= 606) {
+                const op = later.ops.find((item) => item[0] === id);
+                assert.equal(op[10], "exec-fp");
+                assert.deepEqual(op.slice(2, 4), [recorded.get(id).first, recorded.get(id).end]);
+                assert.ok(op[6].some((stage) => stage[1] === "exec-fp"));
+            }
         }
+        const beforeFP = await window(900, recorded.get(606).first - 32);
+        assert.equal(
+            beforeFP.feedPreview.find((op) => op.id === 606)?.kind,
+            "fp",
+            "Feed preview lost FP classification"
+        );
         const revisit = await window(200);
         assert.deepEqual(
             revisit.structure,
