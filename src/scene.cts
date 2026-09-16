@@ -203,7 +203,8 @@ function createScene({ gpu, replay, session }: SceneOptions) {
     }
 
     function layoutBounds() {
-        if (replay.trace.key !== "local-file") return { left: -14.7, right: 14.7, back: -7.1, front: 7.9 };
+        if (replay.trace.key !== "local-file" && replay.schedulers.length === 1)
+            return { left: -14.7, right: 14.7, back: -7.1, front: 7.9 };
         const nodes = [...scene.nodes.values()];
         return {
             left: Math.min(-14.7, ...nodes.map((n) => n.x - n.w / 2 - 0.5)),
@@ -238,7 +239,9 @@ function createScene({ gpu, replay, session }: SceneOptions) {
         const peak =
             (
                 scene.transferProfile.get(`${from}>${to}`) ??
-                (from === "register-read" ? scene.transferProfile.get(`issue>${to}`) : null)
+                (from === "register-read"
+                    ? scene.transferProfile.get(`${to === "exec-fp" ? "issue-fp" : "issue"}>${to}`)
+                    : null)
             )?.peak ?? 0;
         // 並列幅はモジュールのラベルと同じ情報から決める。抜粋内で実際に使う
         // 管路はこれより少ない場合があるため、観測ピークは別の診断値に保持する。
@@ -246,14 +249,16 @@ function createScene({ gpu, replay, session }: SceneOptions) {
         const memoryPath = from === "memory-wait" || to === "memory-wait";
         const retiring = from === "commit" || to === "commit";
         const count =
-            from === "issue" && to === "register-read"
-                ? replay.memory.executionNodes.reduce((sum, n) => sum + n.pipeCount, 0)
+            from.startsWith("issue") && to === "register-read"
+                ? replay.memory.executionNodes
+                      .filter((n) => (n.kind === "fp") === (from === "issue-fp"))
+                      .reduce((sum, n) => sum + n.pipeCount, 0)
                 : (execution ??
                   (memoryPath
                       ? (scene.nodes.get("exec-load")?.pipeCount ?? 1)
                       : retiring
                         ? replay.trace.retireWidth
-                        : to === "issue"
+                        : to.startsWith("issue")
                           ? replay.trace.structure.allocationWidth
                           : replay.trace.fetchWidth));
         const lanes = Array.from({ length: count }, (_, index) => {
@@ -263,9 +268,9 @@ function createScene({ gpu, replay, session }: SceneOptions) {
                 source[1] = target[1];
                 source[2] = target[2];
             }
-            if (from === "issue" && to === "register-read") {
+            if (from.startsWith("issue") && to === "register-read") {
                 const ports = [...scene.nodes.values()]
-                    .filter((n) => n.pipeCount!)
+                    .filter((n) => n.pipeCount! && (n.id === "exec-fp") === (from === "issue-fp"))
                     .flatMap((n) => Array.from({ length: n.pipeCount! }, (_, i) => executionLane(n, i).inlet))
                     .sort((a, b) => a[2] - b[2]);
                 target[1] = ports[index][1];
@@ -292,26 +297,41 @@ function createScene({ gpu, replay, session }: SceneOptions) {
         return node;
     }
 
+    function schedulerForRow(row: number) {
+        return (
+            replay.schedulers.find(
+                (scheduler) => row >= scheduler.offset && row < scheduler.offset + scheduler.capacity
+            ) ?? replay.schedulers[0]
+        );
+    }
+
     function matrixPosition(row: number, column = -1): Vector {
-        const n = scene.nodes.get("issue")!,
+        const scheduler = schedulerForRow(row),
+            n = scene.nodes.get(scheduler.id)!,
+            localRow = row - scheduler.offset,
             columns = replay.dependencyReplay.columnCount,
             banks = n.matrixBanks ?? 1,
-            rows = Math.ceil(replay.trace.structure.queueCapacity / banks),
-            bank = Math.floor(row / rows),
+            rows = Math.ceil(scheduler.capacity / banks),
+            bank = Math.floor(localRow / rows),
             width = n.w / banks,
             x = n.x + (bank - (banks - 1) / 2) * width;
         return [
-            x + (column < 0 ? -0.44 * width + (row % 2) * 0.28 : (-0.28 + ((column + 0.5) * 0.68) / columns) * width),
+            x +
+                (column < 0
+                    ? -0.44 * width + (localRow % 2) * 0.28
+                    : (-0.28 + ((column + 0.5) * 0.68) / columns) * width),
             n.h + 0.23,
-            n.z - n.matrixDepth! / 2 + (((row % rows) + 0.5) * n.matrixDepth!) / rows
+            n.z - n.matrixDepth! / 2 + (((localRow % rows) + 0.5) * n.matrixDepth!) / rows
         ];
     }
 
     function crossesDependencyGrid(a: Vector, b = a) {
-        const n = scene.nodes.get("issue")!,
-            low: Vector = [n.x - n.w * 0.3, n.h + 0.06, n.z - n.matrixDepth! / 2 - 0.06],
-            high: Vector = [n.x + n.w * 0.42, n.h + 1.2, n.z + n.matrixDepth! / 2 + 0.06];
-        return crossesBox(a, b, low, high);
+        return replay.schedulers.some((scheduler) => {
+            const n = scene.nodes.get(scheduler.id)!,
+                low: Vector = [n.x - n.w * 0.3, n.h + 0.06, n.z - n.matrixDepth! / 2 - 0.06],
+                high: Vector = [n.x + n.w * 0.42, n.h + 1.2, n.z + n.matrixDepth! / 2 + 0.06];
+            return crossesBox(a, b, low, high);
+        });
     }
 
     function crossesMapWords(a: Vector, b = a) {
@@ -465,31 +485,33 @@ function createScene({ gpu, replay, session }: SceneOptions) {
         return { inlet: [n.x - n.w * 0.35, y, z], outlet: [n.x + n.w * 0.35, y, z], depth: pitch * 0.65 };
     }
 
-    function wakeBusEntry(): Vector {
-        const n = scene.nodes.get("issue")!;
+    function wakeBusEntry(row = 0): Vector {
+        const n = scene.nodes.get(schedulerForRow(row).id)!;
         return [n.x - n.w * 0.5, n.h + 0.3, n.z - n.d * 0.5 - 0.22];
     }
 
-    function wakeColumnHead(column: number): Vector {
-        const n = scene.nodes.get("issue")!,
-            p = matrixPosition(0, column);
+    function wakeColumnHead(column: number, row = 0): Vector {
+        const scheduler = schedulerForRow(row),
+            n = scene.nodes.get(scheduler.id)!,
+            p = matrixPosition(scheduler.offset, column);
         return [p[0], n.h + 0.3, n.z - n.d * 0.5 - 0.22];
     }
 
     function issueRowExit(slot: number): Vector {
-        const n = scene.nodes.get("issue")!,
+        const n = scene.nodes.get(schedulerForRow(slot).id)!,
             p = matrixPosition(slot);
         return [n.x + n.w * 0.5 + 0.06, p[1], p[2]];
     }
 
     function issuePath(issue: Issue) {
-        const n = scene.nodes.get("issue")!,
+        const scheduler = schedulerForRow(issue.slot ?? 0),
+            n = scene.nodes.get(scheduler.id)!,
             op = replay.ops.find((o) => o.id === issue.id)!,
             origin = matrixPosition(issue.slot!),
             exit = issueRowExit(issue.slot!);
         const connection =
-            scene.connections.find((c) => c.from === "issue" && c.to === op.execution) ??
-            scene.connections.find((c) => c.from === "issue")!;
+            scene.connections.find((c) => c.from === scheduler.id && c.to === op.execution) ??
+            scene.connections.find((c) => c.from === scheduler.id)!;
         const unit = scene.nodes.get(op.execution)!,
             z = executionLane(unit, (op.pipeLane ?? op.index) % unit.pipeCount!).inlet[2];
         const lane =
@@ -500,8 +522,8 @@ function createScene({ gpu, replay, session }: SceneOptions) {
                 : [
                       exit,
                       [exit[0], exit[1], n.z + n.d * 0.5 + 0.18],
-                      [matrixPosition(0, issue.column!)[0], exit[1], n.z + n.d * 0.5 + 0.18],
-                      matrixPosition(0, issue.column!)
+                      [matrixPosition(scheduler.offset, issue.column!)[0], exit[1], n.z + n.d * 0.5 + 0.18],
+                      matrixPosition(scheduler.offset, issue.column!)
                   ];
         return { id: issue.id, column: issue.column, origin, exit, port: lane.target, signal };
     }
@@ -588,32 +610,45 @@ function createScene({ gpu, replay, session }: SceneOptions) {
                 node.d = Math.max(node.d, (node.instructionRows - 1) * 0.38 + 0.48);
             }
         }
-        const scheduler = makeNode(
-            "issue",
-            "SCHEDULER",
-            hasRegisterRead ? -5.2 : -3.7,
-            0,
-            hasRegisterRead ? 3.2 : 3.6,
-            hasRegisterRead ? 3.2 : 3.6,
-            0.65,
-            session.style.palette.blue,
-            `${replay.trace.structure.queueCapacity} ROWS × ${replay.dependencyReplay.columnCount} COLS · ${replay.trace.evidence?.scheduling.kind === "recorded" ? "RECORDED" : replay.trace.key === "local-file" ? "UNOBSERVED" : "RAW ESTIMATE"}`
-        );
-        // 駒を縮めずに置けるよう、待機列の行間と筐体の奥行きを確保する。
-        if (replay.trace.key === "local-file" && !replay.trace.evidence && replay.trace.structure.queueCapacity > 128) {
-            // 依存未観測の大きな待機列は、未知の依存列を補わず128行ずつ並べる。
-            scheduler.matrixBanks = Math.ceil(replay.trace.structure.queueCapacity / 128);
-            scheduler.x -= (scheduler.w * (scheduler.matrixBanks - 1)) / 2;
-            scheduler.w *= scheduler.matrixBanks;
-            scheduler.detail = `${replay.trace.structure.queueCapacity} ROWS · ${scheduler.matrixBanks} BANKS · UNOBSERVED`;
+        for (const descriptor of replay.schedulers) {
+            const fp = descriptor.id === "issue-fp",
+                divided = replay.schedulers.length > 1;
+            const scheduler = makeNode(
+                descriptor.id,
+                fp ? "FP / SIMD SCHEDULER" : divided ? "INT / MEM / BR SCHEDULER" : "SCHEDULER",
+                hasRegisterRead ? -5.2 : -3.7,
+                0,
+                hasRegisterRead ? 3.2 : 3.6,
+                hasRegisterRead ? 3.2 : 3.6,
+                0.65,
+                fp ? session.style.palette.fp : session.style.palette.blue,
+                `${descriptor.capacity} ROWS × ${replay.dependencyReplay.columnCount} COLS · ${divided ? "INFERRED PARTITION" : replay.trace.evidence?.scheduling.kind === "recorded" ? "RECORDED" : replay.trace.key === "local-file" ? "UNOBSERVED" : "RAW ESTIMATE"}`
+            );
+            // 駒を縮めずに置けるよう、待機列の行間と筐体の奥行きを確保する。
+            if (replay.trace.key === "local-file" && !replay.trace.evidence && descriptor.capacity > 128) {
+                // 依存未観測の大きな待機列は、未知の依存列を補わず128行ずつ並べる。
+                scheduler.matrixBanks = Math.ceil(descriptor.capacity / 128);
+                scheduler.x -= (scheduler.w * (scheduler.matrixBanks - 1)) / 2;
+                scheduler.w *= scheduler.matrixBanks;
+                scheduler.detail = `${descriptor.capacity} ROWS · ${scheduler.matrixBanks} BANKS · ${divided ? "INFERRED PARTITION" : "UNOBSERVED"}`;
+            }
+            scheduler.matrixDepth = Math.max(
+                (scheduler.w / (scheduler.matrixBanks ?? 1)) * 0.68,
+                Math.ceil(descriptor.capacity / (scheduler.matrixBanks ?? 1)) * 0.14
+            );
+            scheduler.d = Math.max(scheduler.d, scheduler.matrixDepth / 0.84);
+            if (fp) {
+                const integer = scene.nodes.get("issue")!;
+                scheduler.z = integer.z - (integer.d + scheduler.d) / 2 - 1.1;
+            }
         }
-        scheduler.matrixDepth = Math.max(
-            (scheduler.w / (scheduler.matrixBanks ?? 1)) * 0.68,
-            Math.ceil(replay.trace.structure.queueCapacity / (scheduler.matrixBanks ?? 1)) * 0.14
-        );
-        scheduler.d = Math.max(scheduler.d, scheduler.matrixDepth / 0.84);
         if (replay.trace.key === "local-file") {
-            let right = scheduler.x - scheduler.w / 2 - 0.3;
+            let right = Math.min(
+                ...replay.schedulers.map(({ id }) => {
+                    const node = scene.nodes.get(id)!;
+                    return node.x - node.w / 2 - 0.3;
+                })
+            );
             for (const descriptor of [...front].reverse()) {
                 const node = scene.nodes.get(descriptor.id)!;
                 node.x = Math.min(node.x, right - node.w / 2);
@@ -621,7 +656,7 @@ function createScene({ gpu, replay, session }: SceneOptions) {
             }
         }
         // STORE より下で LOAD と LOAD WAIT をまとめる。再生側の経路順は変更しない。
-        const order = ["exec-integer", "exec-branch", "exec-store", "exec-load", "exec-memory"];
+        const order = ["exec-fp", "exec-integer", "exec-branch", "exec-store", "exec-load", "exec-memory"];
         const units = [...replay.memory.executionNodes].sort((a, b) => order.indexOf(a.id) - order.indexOf(b.id));
         let executionEdge = -5.725;
         for (const n of units) {
@@ -630,14 +665,17 @@ function createScene({ gpu, replay, session }: SceneOptions) {
             const width = 0.78 + 1.17 * latency;
             const depth = Math.max(memory ? 1.25 : 3.05, n.pipeCount * (memory ? 0.38 : 0.3) + 0.65);
             const z =
-                n.id === "exec-integer"
-                    ? depth === 3.05
-                        ? -4.2
-                        : -5.725 + depth / 2
-                    : Math.max(n.id === "exec-branch" ? 0 : 2.7, executionEdge + 0.4 + depth / 2);
+                n.id === "exec-fp"
+                    ? -5.725 - 0.4 - depth / 2
+                    : n.id === "exec-integer"
+                      ? depth === 3.05
+                          ? -4.2
+                          : -5.725 + depth / 2
+                      : Math.max(n.id === "exec-branch" ? 0 : 2.7, executionEdge + 0.4 + depth / 2);
             executionEdge = z + depth / 2;
             const label = {
                 "exec-integer": "INTEGER",
+                "exec-fp": "FP / SIMD",
                 "exec-branch": "BRANCH",
                 "exec-load": "LOAD",
                 "exec-store": "STORE",
@@ -745,10 +783,21 @@ function createScene({ gpu, replay, session }: SceneOptions) {
             );
         }
         front.slice(1).forEach((n, i) => addConnection(front[i].id, n.id, scene.nodes.get(front[i].id)!.color));
-        addConnection(front.at(-1)!.id, "issue", session.style.palette.integer);
-        if (hasRegisterRead) addConnection("issue", "register-read", session.style.palette.blue);
+        for (const scheduler of replay.schedulers) {
+            const color = scheduler.id === "issue-fp" ? session.style.palette.fp : session.style.palette.blue;
+            addConnection(
+                front.at(-1)!.id,
+                scheduler.id,
+                scheduler.id === "issue" ? session.style.palette.integer : color
+            );
+            if (hasRegisterRead) addConnection(scheduler.id, "register-read", color);
+        }
         for (const n of replay.memory.executionNodes) {
-            addConnection(hasRegisterRead ? "register-read" : "issue", n.id, session.style.palette[n.kind]);
+            addConnection(
+                hasRegisterRead ? "register-read" : n.kind === "fp" ? "issue-fp" : "issue",
+                n.id,
+                session.style.palette[n.kind]
+            );
             addConnection(n.id, "rob", session.style.palette[n.kind]);
         }
         if (scene.nodes.has("memory-wait")) {
@@ -1110,20 +1159,9 @@ function createScene({ gpu, replay, session }: SceneOptions) {
     }
 
     function matrixModule(tris: TriangleData, lines: number[], n: SceneNode) {
-        housing(
-            tris,
-            lines,
-            n.x,
-            -0.25,
-            n.z,
-            n.w + 0.2,
-            0.16,
-            n.d + 0.2,
-            session.style.palette.blue,
-            0.22,
-            baseLevels.board
-        );
-        housing(tris, lines, n.x, -0.05, n.z, n.w, n.h + 0.05, n.d, session.style.palette.blue, 0.3, baseLevels.plinth);
+        const scheduler = replay.schedulers.find(({ id }) => id === n.id)!;
+        housing(tris, lines, n.x, -0.25, n.z, n.w + 0.2, 0.16, n.d + 0.2, n.color, 0.22, baseLevels.board);
+        housing(tris, lines, n.x, -0.05, n.z, n.w, n.h + 0.05, n.d, n.color, 0.3, baseLevels.plinth);
         const y = n.h + 0.08,
             x0 = n.x - n.w * 0.28,
             x1 = n.x + n.w * 0.4,
@@ -1131,13 +1169,13 @@ function createScene({ gpu, replay, session }: SceneOptions) {
             z1 = n.z + n.matrixDepth! / 2;
         n.grid = { rows: [], columns: [] };
         // 境界線ではなく、同じエントリの行・列を一本ずつ描く。交点を依存セルと揃える。
-        for (let r = 0; r < replay.trace.structure.queueCapacity; r++) {
-            const p = matrixPosition(r),
+        for (let r = 0; r < scheduler.capacity; r++) {
+            const p = matrixPosition(scheduler.offset + r),
                 segment: [Vector, Vector] = [
                     [p[0], y, p[2]],
                     [
                         n.matrixBanks
-                            ? matrixPosition(r, replay.dependencyReplay.columnCount - 1)[0] +
+                            ? matrixPosition(scheduler.offset + r, replay.dependencyReplay.columnCount - 1)[0] +
                               ((n.w / n.matrixBanks) * 0.34) / replay.dependencyReplay.columnCount
                             : x1,
                         y,
@@ -1148,13 +1186,13 @@ function createScene({ gpu, replay, session }: SceneOptions) {
             line(
                 lines,
                 ...segment,
-                session.style.palette.blue,
+                n.color,
                 session.style.matte ? (r % 8 === 0 ? 0.42 : 0.27) : r % 8 === 0 ? 0.24 : 0.13
             );
         }
         if (n.matrixBanks) return;
         for (let c = 0; c < replay.dependencyReplay.columnCount; c++) {
-            const x = matrixPosition(0, c)[0],
+            const x = matrixPosition(scheduler.offset, c)[0],
                 segment: [Vector, Vector] = [
                     [x, y, z0],
                     [x, y, z1]
@@ -1163,12 +1201,12 @@ function createScene({ gpu, replay, session }: SceneOptions) {
             line(
                 lines,
                 ...segment,
-                session.style.palette.blue,
+                n.color,
                 session.style.matte ? (c % 8 === 0 ? 0.32 : 0.2) : c % 8 === 0 ? 0.22 : 0.11
             );
         }
-        for (const x of [x0, x1]) line(lines, [x, y, z0], [x, y, z1], session.style.palette.blue, 0.5);
-        for (const z of [z0, z1]) line(lines, [x0, y, z], [x1, y, z], session.style.palette.blue, 0.5);
+        for (const x of [x0, x1]) line(lines, [x, y, z0], [x, y, z1], n.color, 0.5);
+        for (const z of [z0, z1]) line(lines, [x0, y, z], [x1, y, z], n.color, 0.5);
     }
 
     function renameModule(tris: TriangleData, lines: number[], n: SceneNode) {
@@ -1433,7 +1471,7 @@ function createScene({ gpu, replay, session }: SceneOptions) {
             if (session.style.matte) {
                 contactShadow(shadows, x, baseLevels.board + 0.002, z, w + 0.2, d + 0.2, 0.14);
                 const specialized =
-                    node.pipeCount! || node.mapWords! || ["issue", "register-read", "commit"].includes(id);
+                    node.pipeCount! || node.mapWords! || ["issue", "issue-fp", "register-read", "commit"].includes(id);
                 const stripe = Math.min(w * 0.6, 1.5),
                     top = h - (specialized ? 0 : 0.05);
                 beveledBlock(
@@ -1454,7 +1492,7 @@ function createScene({ gpu, replay, session }: SceneOptions) {
                 executionModule(tris, lines, node);
                 continue;
             }
-            if (id === "issue") {
+            if (id === "issue" || id === "issue-fp") {
                 matrixModule(tris, lines, node);
                 continue;
             }
@@ -1626,6 +1664,7 @@ function createScene({ gpu, replay, session }: SceneOptions) {
         executionLane,
         nodePort,
         matrixPosition,
+        schedulerForRow,
         crossesDependencyGrid,
         crossesMapWords,
         renameNode,

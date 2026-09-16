@@ -315,31 +315,35 @@ function createActivity({ camera, clock, scene, gpu, paths, replay, session }: A
                 );
             } else {
                 const arrival = (age - wakeFlightCycles) / (wakeEffectCycles - wakeFlightCycles),
-                    p = scene.wakeBusEntry();
-                const column = replay.dependencyReplay.columnAt(event.id, session.cycle);
-                scene.ring(
-                    lines,
-                    p[0],
-                    p[1],
-                    p[2],
-                    0.1 + arrival * 0.15,
-                    session.style.palette.integer,
-                    (1 - arrival) * 0.8,
-                    0,
-                    TAU,
-                    32
-                );
-                scene.point(points, p, session.style.palette.integer, 25, (1 - arrival) * 0.65);
-                if (column !== null) {
-                    const target = scene.wakeColumnHead(column!);
-                    scene.line(lines, p, target, session.style.palette.integer, (1 - arrival) * 0.65);
-                    scene.point(
-                        points,
-                        route(p, target, smooth(arrival / 0.5)),
+                    column = replay.dependencyReplay.columnAt(event.id, session.cycle);
+                for (const scheduler of replay.schedulers) {
+                    const p = scene.wakeBusEntry(scheduler.offset);
+                    if (scheduler.offset)
+                        scene.line(lines, scene.wakeBusEntry(), p, session.style.palette.integer, (1 - arrival) * 0.45);
+                    scene.ring(
+                        lines,
+                        p[0],
+                        p[1],
+                        p[2],
+                        0.1 + arrival * 0.15,
                         session.style.palette.integer,
-                        14,
-                        (1 - arrival) * 0.8
+                        (1 - arrival) * 0.8,
+                        0,
+                        TAU,
+                        32
                     );
+                    scene.point(points, p, session.style.palette.integer, 25, (1 - arrival) * 0.65);
+                    if (column !== null && !scene.nodes.get(scheduler.id)!.matrixBanks) {
+                        const target = scene.wakeColumnHead(column!, scheduler.offset);
+                        scene.line(lines, p, target, session.style.palette.integer, (1 - arrival) * 0.65);
+                        scene.point(
+                            points,
+                            route(p, target, smooth(arrival / 0.5)),
+                            session.style.palette.integer,
+                            14,
+                            (1 - arrival) * 0.8
+                        );
+                    }
                 }
             }
         }
@@ -459,8 +463,7 @@ function createActivity({ camera, clock, scene, gpu, paths, replay, session }: A
     }
 
     function drawDependencyMatrix(lines: number[], points: number[]) {
-        const n = scene.nodes.get("issue")!,
-            byID = new Map(replay.ops.map((op) => [op.id, op]));
+        const byID = new Map(replay.ops.map((op) => [op.id, op]));
         for (const row of activity.frame.matrix.rows) {
             const p = scene.matrixPosition(row.slot!),
                 right = scene.matrixPosition(row.slot!, replay.dependencyReplay.columnCount - 1);
@@ -478,7 +481,8 @@ function createActivity({ camera, clock, scene, gpu, paths, replay, session }: A
             const p = scene.matrixPosition(cell.row!, cell.column!),
                 color = session.style.palette[byID.get(cell.consumer)!.kind];
             scene.point(points, p, color, cell.waiting ? 7 : 11, cell.alpha * (cell.waiting ? 0.8 : 1.2));
-            const dx = Math.min(0.045, (n.w * 0.24) / replay.dependencyReplay.columnCount);
+            const n = scene.nodes.get(scene.schedulerForRow(cell.row!).id)!,
+                dx = Math.min(0.045, (n.w * 0.24) / replay.dependencyReplay.columnCount);
             scene.line(lines, [p[0] - dx, p[1], p[2]], [p[0] + dx, p[1], p[2]], color, cell.alpha);
         }
         for (const dep of activity.frame.matrix.external) {
@@ -518,7 +522,7 @@ function createActivity({ camera, clock, scene, gpu, paths, replay, session }: A
                     fade * 0.85
                 );
             }
-            if (issue.column !== null && !n.matrixBanks) {
+            if (issue.column !== null && !scene.nodes.get(scene.schedulerForRow(issue.slot!).id)!.matrixBanks) {
                 // 選択された行の命令は右へ抜ける。選択信号はその端を回り込み、
                 // 対応するエントリの列を下から上へ進む。
                 const progress =
@@ -535,10 +539,13 @@ function createActivity({ camera, clock, scene, gpu, paths, replay, session }: A
                     scene.point(points, end, color, inColumn ? 8 : 10, inColumn ? columnGlow * 0.85 : fade * 0.75);
                 }
                 if (columnGlow > 0) {
-                    const bottom = scene.matrixPosition(replay.trace.structure.queueCapacity - 1, issue.column!),
-                        top = scene.matrixPosition(0, issue.column!);
-                    // 選択列は明るい細線として一続きに描き、列全体を見分けやすくする。
-                    scene.line(lines, bottom, top, color, columnGlow * 0.85);
+                    // 全体のproducer列を各筐体に持たせ、別schedulerの依存も同じ発行で通知する。
+                    for (const scheduler of replay.schedulers) {
+                        if (scene.nodes.get(scheduler.id)!.matrixBanks) continue;
+                        const bottom = scene.matrixPosition(scheduler.offset + scheduler.capacity - 1, issue.column!),
+                            top = scene.matrixPosition(scheduler.offset, issue.column!);
+                        scene.line(lines, bottom, top, color, columnGlow * 0.85);
+                    }
                     for (const target of issue.targets)
                         scene.point(
                             points,
@@ -552,17 +559,26 @@ function createActivity({ camera, clock, scene, gpu, paths, replay, session }: A
         }
         for (const event of activity.frame.matrix.broadcasts) {
             if (event.column !== null) {
-                const top = scene.wakeColumnHead(event.column),
-                    bottom = scene.matrixPosition(replay.trace.structure.queueCapacity - 1, event.column);
-                const head = top.map((v, i) => mix(v, bottom[i], smooth(event.progress)));
-                scene.line(lines, scene.wakeBusEntry(), top, session.style.palette.integer, (1 - event.progress) * 0.8);
-                scene.line(lines, top, head, session.style.palette.integer, (1 - event.progress) * 0.65);
-                scene.point(points, head, session.style.palette.integer, 15, (1 - event.progress) * 0.8);
+                for (const scheduler of replay.schedulers) {
+                    if (scene.nodes.get(scheduler.id)!.matrixBanks) continue;
+                    const top = scene.wakeColumnHead(event.column, scheduler.offset),
+                        bottom = scene.matrixPosition(scheduler.offset + scheduler.capacity - 1, event.column);
+                    const head = top.map((v, i) => mix(v, bottom[i], smooth(event.progress)));
+                    scene.line(
+                        lines,
+                        scene.wakeBusEntry(scheduler.offset),
+                        top,
+                        session.style.palette.integer,
+                        (1 - event.progress) * 0.8
+                    );
+                    scene.line(lines, top, head, session.style.palette.integer, (1 - event.progress) * 0.65);
+                    scene.point(points, head, session.style.palette.integer, 15, (1 - event.progress) * 0.8);
+                }
             } else
                 for (const row of event.rows) {
                     const p = scene.matrixPosition(row!),
                         entry = [p[0] - 0.13, p[1], p[2]],
-                        bus = scene.wakeBusEntry();
+                        bus = scene.wakeBusEntry(row!);
                     scene.line(
                         lines,
                         bus,
