@@ -66,10 +66,14 @@ async function reviewImportDrag(window: BrowserWindow) {
         const expected = ((s.value - s.min) / (s.max - s.min + 2)) * 100;
         assert.ok(Math.abs(s.left - expected) < 0.01, "The visible window did not follow the range input");
     };
+    // 解析中は初期maxが古くなる。現在の軸上で指定した位置に達するまで待ち、
+    // 25%のmouseDownを55%のmouseMoveとして誤認しない。
+    const atFraction = (s: Awaited<ReturnType<typeof state>>, fraction: number) =>
+        Math.abs((s.value - s.min) / (s.max - s.min) - fraction) < 0.02;
     mouse("mouseDown", 0.25);
-    await ready((s) => !s.selecting && s.value > initial.max * 0.15, "Dragging did not cancel the pending window");
+    await ready((s) => !s.selecting && atFraction(s, 0.25), "Dragging did not cancel the pending window");
     mouse("mouseMove", 0.55);
-    await ready((s) => s.value > initial.max * 0.45, "The native range did not move before EOF");
+    await ready((s) => atFraction(s, 0.55), "The native range did not move before EOF");
     const held = await state();
     followsInput(held);
     await evaluate(() => {
@@ -86,7 +90,7 @@ async function reviewImportDrag(window: BrowserWindow) {
     assert.ok(completed.playing && !completed.selecting, "Dragging lost playback intent or started a refresh");
     followsInput(completed);
     mouse("mouseMove", 0.75);
-    await ready((s) => s.value > held.value, "The range stopped dragging after a source update");
+    await ready((s) => atFraction(s, 0.75), "The range stopped dragging after a source update");
     const selected = await state();
     followsInput(selected);
     mouse("mouseUp", 0.75);
