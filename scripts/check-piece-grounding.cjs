@@ -402,6 +402,101 @@ for (const [index, current] of simultaneous.entries()) {
     near(passing.positionAt(current, midpoint)[0], -(index % 4) * 0.32, "Batched entry skipped Fetch");
     near(passing.positionAt(current, 4.82)[0], 10 - index * 0.32, "Batched entry did not reach Decode");
 }
+// 満杯のFにいた4束を先に退出させ、同時D入場する待機束の追突も防ぐ。
+for (const count of [12, 20]) {
+    const mixed = Array.from({ length: count }, (_, id) => ({
+        ...op,
+        id,
+        fetch: id,
+        end: 60 + id,
+        stages: [
+            { node: "front", start: id, end: 30 },
+            { node: "next", start: 30, end: 40 + id }
+        ]
+    }));
+    const original = JSON.stringify(mixed),
+        batches = Math.ceil(count / 4),
+        duration = 0.82 / batches;
+    const mixedPaths = createPaths({
+        session,
+        replay: {
+            ops: mixed,
+            trace: { firstCycle: 0, fetchWidth: 1 },
+            frontend: {
+                fetchNode: "front",
+                fetchCapacity: 4,
+                stages: new Map([
+                    ["front", { capacity: 4 }],
+                    ["next", { capacity: count }]
+                ]),
+                admission: (id) => ({ start: id < 4 ? id : 30, end: 30 }),
+                passage: (id) => ({ index: id, count }),
+                position: (id, node) => ({ row: node === "front" ? id % 4 : id, lane: 0 })
+            }
+        },
+        scene: {
+            nodes: new Map(
+                ["front", "next"].map((id, i) => [id, { id, x: i * (count * 0.32 + 1), h: 1, z: 0, w: 2, d: 1 }])
+            ),
+            frontInstructionPosition: (node, row) => [node.x - row * 0.32, node.h + 0.34, node.z],
+            inputPosition: () => [-15.6, 0.8, 0]
+        }
+    });
+    mixedPaths.setGround(createGround(plane(0.4, -20, 20), -0.8));
+    const times = Array.from(
+        { length: count === 20 ? 165 : 83 },
+        (_, index) => 30 + index * (count === 20 ? 0.005 : 0.01)
+    );
+    const reference = times.map((time) => mixed.map((current) => mixedPaths.positionAt(current, time)));
+    for (const [index, positions] of reference.entries()) {
+        const visible = positions.filter(Boolean);
+        for (let i = 0; i < visible.length; i++)
+            for (let j = i + 1; j < visible.length; j++)
+                assert.ok(
+                    Math.hypot(...visible[i].map((value, axis) => value - visible[j][axis])) >= 0.24 - 1e-9,
+                    `${count} mixed Fetch groups overlap at ${times[index]}`
+                );
+        assert.equal(mixedPaths.occupancy(times[index]).active.length, count, "Batched exit changed occupancy");
+    }
+    for (const current of mixed) {
+        const index = Math.floor(current.id / 4),
+            start = 30 + duration * index;
+        if (current.id < 4) {
+            near(mixedPaths.positionAt(current, 30)[0], -current.id * 0.32, "Resident Fetch moved before its turn");
+            near(
+                mixedPaths.positionAt(current, start + duration)[0],
+                count * 0.32 + 1 - current.id * 0.32,
+                "Resident Fetch did not leave before later groups"
+            );
+        } else {
+            assert.equal(
+                mixedPaths.positionAt(current, start - 1e-6),
+                null,
+                "Pending group entered before the resident exit"
+            );
+            near(
+                mixedPaths.positionAt(current, start + duration / 2)[0],
+                -(current.id % 4) * 0.32,
+                "Mixed group skipped Fetch"
+            );
+        }
+        for (const shape of [paper, puck]) {
+            session.style = styles[shape];
+            const time = start + duration * 0.75,
+                piece = mixedPaths.groundedPiece(current, time);
+            near(piece.position[1], 0.4 + 0.12 * heights[shape], "Batched exit changed support height");
+            mixedPaths.groundedPiece(current, 30.82);
+            assert.deepEqual(mixedPaths.groundedPiece(current, time), piece, "Reverse seek changed batched grounding");
+        }
+    }
+    for (const [index, time] of [...times.entries()].toReversed())
+        assert.deepEqual(
+            mixed.map((current) => mixedPaths.positionAt(current, time)),
+            reference[index],
+            "Reverse seek changed mixed passage"
+        );
+    assert.equal(JSON.stringify(mixed), original, "Mixed passage changed recorded stage times");
+}
 assert.equal(
     JSON.stringify([delayed, immediate, canceled, afterNp]),
     originalStages,

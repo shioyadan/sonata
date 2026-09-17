@@ -486,12 +486,14 @@ function createPaths<T extends PathOperation>({
     function fetchPass(op: PathOperation, stage: PathStage, time: number) {
         const previous = op.stages[op.stages.indexOf(stage) - 1];
         if (!previous || previous.node !== replay.frontend.fetchNode) return null;
-        const admission = replay.frontend.admission(op.id);
-        if (!admission || !Number.isFinite(admission.start) || admission.start < admission.end) return null;
-        // 同時刻の入場・退出もFを飛ばさず、次段の進入補間内でFを経由する。
-        // 固定枠より多い束は枠数ずつ時間を分け、同じF座標へ一斉に集めない。
-        const passage = replay.frontend.passage(op.id),
-            batch = Math.floor((passage?.index ?? 0) / replay.frontend.fetchCapacity),
+        const admission = replay.frontend.admission(op.id),
+            passage = replay.frontend.passage(op.id);
+        if (!admission || !Number.isFinite(admission.start)) return null;
+        const instant = admission.start === admission.end;
+        if (!instant && !passage) return null;
+        // 既存F束の退出を先に渡し、続く0滞在束は同じ進入時間内でFを通す。
+        // 固定枠数ずつ共通の時間枠を割り当て、後続による追い越しを防ぐ。
+        const batch = Math.floor((passage?.index ?? 0) / replay.frontend.fetchCapacity),
             batches = Math.ceil((passage?.count ?? 1) / replay.frontend.fetchCapacity),
             duration = Math.min(stage.end - stage.start, stageTransition(stage)) / batches;
         const via = location(op, previous, admission.end),
@@ -499,13 +501,14 @@ function createPaths<T extends PathOperation>({
             start = stage.start + duration * batch,
             end = start + duration,
             middle = (start + end) / 2,
-            entering = time < middle;
+            entering = instant && time < middle;
         return {
             from: entering ? inputSource(op, previous, via, admission.end) : via,
             to: entering ? via : target,
             groundFrom: via,
-            start: entering ? start : middle,
-            end: entering ? middle : end
+            start: entering || !instant ? start : middle,
+            end: entering ? middle : end,
+            waiting: instant ? null : via
         };
     }
 
@@ -581,7 +584,7 @@ function createPaths<T extends PathOperation>({
         const pass = fetchPass(op, stage, t);
         if (pass)
             return t < pass.start
-                ? null
+                ? pass.waiting
                 : route(pass.from, pass.to, smooth((t - pass.start) / (pass.end - pass.start)));
         const source = entrySource(op, stage, target);
         if (previous?.node === "issue") {
