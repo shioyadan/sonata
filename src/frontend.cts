@@ -6,6 +6,7 @@ import type replayModel = require("./replay-model.cts");
 const advanceCycles = 0.45;
 type Interval = { start: number; end: number };
 type Bundle = { fetchCycle: number; ids: number[]; ranges: Map<string, Interval> };
+type FetchReservation = Interval & { fetchCycle: number; exits: Map<number, number> };
 type MotionEvent = { time: number; slope: number; pending: number; settled: number };
 type MotionPoint = { time: number; value: number; slope: number };
 
@@ -86,24 +87,34 @@ class QueueRows {
 
 class FrontendLayout {
     readonly lanes: number;
+    readonly fetchNode: string | null;
+    readonly fetchCapacity = 4;
     readonly stages = new Map<string, { capacity: number }>();
     readonly groups: { fetchCycle: number; ids: number[] }[];
     private readonly bundles: Bundle[];
     private readonly locations = new Map<number, { group: number; lane: number }>();
     private readonly queues = new Map<string, QueueRows>();
+    private readonly fetchReservations = new Map<number, FetchReservation>();
+    private readonly admissions = new Map<number, Interval>();
+    private readonly passages = new Map<number, { index: number; count: number }>();
+    private readonly passageGroups = new Map<number, number[]>();
+    private readonly waiting: { id: number; start: number; end: number }[] = [];
+    private readonly waitingEnds: number[] = [];
+    private readonly waitingStarts: number[] = [];
 
     constructor(
         ops: readonly replayModel.Operation[],
         trace: Pick<replayModel.Trace, "fetchWidth" | "structure">,
         continuity?: { at: number; frontend: FrontendLayout }
     ) {
+        this.fetchNode = trace.structure.frontNodes.find((node) => node.names.includes("F"))?.id ?? null;
         const grouped = new Map<number, { ids: Set<number>; ranges: Map<string, Interval> }>();
         const ensure = (fetchCycle: number) => {
             if (!grouped.has(fetchCycle)) grouped.set(fetchCycle, { ids: new Set(), ranges: new Map() });
             return grouped.get(fetchCycle)!;
         };
         const reserve = (ranges: Map<string, Interval>, node: string, start: number, end: number) => {
-            if (end <= start) return;
+            if (end < start || (end === start && node !== this.fetchNode)) return;
             const old = ranges.get(node);
             ranges.set(node, { start: Math.min(start, old?.start ?? start), end: Math.max(end, old?.end ?? end) });
         };
@@ -117,7 +128,9 @@ class FrontendLayout {
                     group.ranges,
                     stage.node,
                     stage.start,
-                    Math.min(op.end, next ? next.start + geometry.stageTransition(next) : stage.end)
+                    stage.node === this.fetchNode
+                        ? Math.min(op.end, stage.end, next?.start ?? Infinity)
+                        : Math.min(op.end, next ? next.start + geometry.stageTransition(next) : stage.end)
                 );
             }
         }
@@ -161,7 +174,12 @@ class FrontendLayout {
             ...trace.structure.frontNodes.map((node) => node.id),
             ...this.bundles.flatMap((bundle) => [...bundle.ranges.keys()])
         ]);
+        this.prepareFetch(ops, continuity);
         for (const node of nodes) {
+            if (node === this.fetchNode) {
+                this.stages.set(node, { capacity: this.fetchCapacity });
+                continue;
+            }
             const queue = new QueueRows(this.bundles, node);
             this.queues.set(node, queue);
             this.stages.set(node, {
@@ -170,10 +188,123 @@ class FrontendLayout {
         }
     }
 
+    private prepareFetch(ops: readonly replayModel.Operation[], continuity?: { at: number; frontend: FrontendLayout }) {
+        if (!this.fetchNode) return;
+        let active: FetchReservation[] = [],
+            previousStart = -Infinity;
+        for (const bundle of this.bundles) {
+            const range = bundle.ranges.get(this.fetchNode);
+            if (!range) continue;
+            const old = continuity?.frontend.fetchReservations.get(bundle.fetchCycle);
+            let start = Math.max(range.start, previousStart);
+            // 同じ観測の窓交換では、入口からの移動を再開しない。
+            if (old && Number.isFinite(old.start) && old.start >= start) start = old.start;
+            let occupants = active.filter((row) => row.end > start);
+            if (occupants.length >= this.fetchCapacity) {
+                start = Math.max(start, Math.min(...occupants.map((row) => row.end)));
+                occupants = active.filter((row) => row.end > start);
+            }
+            const exits = new Map(old?.start === start ? old.exits : []);
+            for (const row of occupants) exits.set(row.fetchCycle, row.end);
+            const reservation = {
+                fetchCycle: bundle.fetchCycle,
+                start,
+                end: range.end,
+                // 新しい束には退出済みの補間を予約しない。残る束だけ滑らかに前詰めする。
+                exits
+            };
+            this.fetchReservations.set(bundle.fetchCycle, reservation);
+            if (start <= range.end) {
+                previousStart = start;
+                active = occupants;
+                if (start < range.end) active.push(reservation);
+            }
+        }
+        for (const op of ops) {
+            const index = op.stages.findIndex((stage) => stage.node === this.fetchNode);
+            if (index < 0) continue;
+            const stage = op.stages[index],
+                end = Math.min(op.end, stage.end, op.stages[index + 1]?.start ?? Infinity),
+                reservation = this.fetchReservations.get(Math.floor(op.fetch))!;
+            const start = Math.max(stage.start, reservation.start);
+            // F内で取消まで入口にいた命令は入れない。後段での将来の取消は参照しない。
+            const canceledHere = op.flush && end === op.end && (op.stages[index + 1]?.start ?? Infinity) >= end;
+            const admitted = canceledHere && start >= end ? Infinity : Math.min(start, end);
+            this.admissions.set(op.id, { start: admitted, end });
+            if (admitted > stage.start)
+                this.waiting.push({ id: op.id, start: stage.start, end: Math.min(admitted, end) });
+        }
+        const passing = new Map<number, Set<number>>();
+        for (const op of ops) {
+            const range = this.admissions.get(op.id);
+            if (!range || !Number.isFinite(range.start) || range.start !== range.end) continue;
+            if (!passing.has(range.end))
+                passing.set(range.end, new Set(continuity?.frontend.passageGroups.get(range.end)));
+            passing.get(range.end)!.add(Math.floor(op.fetch));
+        }
+        for (const [time, groups] of passing)
+            this.passageGroups.set(
+                time,
+                [...groups].sort((a, b) => a - b)
+            );
+        for (const op of ops) {
+            const range = this.admissions.get(op.id);
+            if (!range || range.start !== range.end) continue;
+            const groups = this.passageGroups.get(range.end);
+            if (groups) this.passages.set(op.id, { index: groups.indexOf(Math.floor(op.fetch)), count: groups.length });
+        }
+        this.waiting.sort((a, b) => a.id - b.id);
+        let end = -Infinity,
+            start = Infinity;
+        for (const entry of this.waiting) {
+            end = Math.max(end, entry.end);
+            this.waitingEnds.push(end);
+        }
+        for (let index = this.waiting.length - 1; index >= 0; index--) {
+            start = Math.min(start, this.waiting[index].start);
+            this.waitingStarts[index] = start;
+        }
+    }
+
+    admission(id: number): Interval | null {
+        return this.admissions.get(id) ?? null;
+    }
+
+    // 同時刻の0滞在通過は束ごとの順番を渡し、次段への補間内で重ねず通す。
+    passage(id: number): { index: number; count: number } | null {
+        return this.passages.get(id) ?? null;
+    }
+
+    pending(time: number, limit = Infinity): number[] {
+        const ids: number[] = [];
+        // 解放済みの接頭部と、まだFetchされていない接尾部を時刻索引で飛ばす。
+        for (let index = upperBound(this.waitingEnds, time, (end) => end); index < this.waiting.length; index++) {
+            if (ids.length >= limit || this.waitingStarts[index] > time) break;
+            const entry = this.waiting[index];
+            if (entry.start <= time && time < entry.end) ids.push(entry.id);
+        }
+        return ids;
+    }
+
     position(id: number, node: string, time: number): { row: number; lane: number } | null {
-        const place = this.locations.get(id),
-            queue = this.queues.get(node);
-        if (!place || !queue) return null;
+        const place = this.locations.get(id);
+        if (!place) return null;
+        if (node === this.fetchNode) {
+            const passage = this.passages.get(id);
+            if (passage) return { row: passage.index % this.fetchCapacity, lane: place.lane };
+            const reservation = this.fetchReservations.get(this.bundles[place.group].fetchCycle);
+            if (!reservation) return null;
+            const at = Math.min(
+                reservation.end,
+                Number.isFinite(reservation.start) ? Math.max(time, reservation.start) : time
+            );
+            let row = 0;
+            for (const end of reservation.exits.values())
+                row += at <= end ? 1 : at >= end + advanceCycles ? 0 : 1 - (at - end) / advanceCycles;
+            return { row: Math.min(this.fetchCapacity - 1, row), lane: place.lane };
+        }
+        const queue = this.queues.get(node);
+        if (!queue) return null;
         const range = this.bundles[place.group].ranges.get(node);
         if (!range) return null;
         // 次段への経路が退場元を参照するときも、最後に保持した位置を返す。
