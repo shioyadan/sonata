@@ -1,6 +1,6 @@
 # ソースの構造
 
-編集用の `src/` は責務に沿って分け、アプリ本体は配布時に `dist/sonata.html` 一つへ結合します。5デモが使う4本のgzip生トレースは `dist/samples/` へ分離します。画面の配置・記録値・再生時刻と、外観の材質・照明・合成を分けることで、Neon / Aluminum / Paper を同じ再生内容で比較できます。
+編集用の `src/` は責務に沿って分け、アプリ本体は配布時に `dist/sonata.html` 一つへ結合します。6デモが使う5本のgzip生トレースは `dist/samples/` へ分離します。画面の配置・記録値・再生時刻と、外観の材質・照明・合成を分けることで、Neon / Aluminum / Paper を同じ再生内容で比較できます。
 
 ## 境界と編集先
 
@@ -85,7 +85,7 @@ GPU の描画先は初期化前には `null` です。残る非 null assertion �
 
 - `npm run typecheck`: ブラウザ用コードと型付きの画面検査を `strict` で検査。型境界の不正な入力・null の扱い・GPU 資源の前提も検査。
 - `npm test`: 再生・演出計算、独立したシーン間の状態分離、モジュールの解決・キャッシュ・スコープ・循環参照、本体HTMLとgzip生トレースの再現可能なビルド、生ログと旧fixtureの命令記録の一致。
-- `npm run test:render`: 全5デモ、3スタイル、選択・接地・滑走・影、キーボード・タッチ、モバイル復帰、WebGL の障害と復旧。
+- `npm run test:render`: 全6デモ、3スタイル、選択・接地・滑走・影、キーボード・タッチ、モバイル復帰、WebGL の障害と復旧。
 
 CPU検査の実行一覧は `scripts/test.cjs`、描画検査の範囲選択は `scripts/render-plan.cjs` に置きます。`render.cjs` は隔離配信とElectronの寿命、時間・結果記録を担当し、デスクトップ操作は `check-desktop.cjs`、記録表示は `check-evidence-render.cjs`、動きの設定は `check-motion.cjs` へ分けます。File検査は基本入力・探索・逐次競合・再生・端末配置を明示的に選べます。[対象を絞るコマンド](development.md#検証)を参照してください。
 

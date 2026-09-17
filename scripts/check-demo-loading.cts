@@ -285,6 +285,33 @@ async function reviewDemoLoading(
         await evaluate(() => document.getElementById("demo-cancel")!.click());
         await restore();
         assert.equal((await state()).key, "memory-tide", "A canceled sample request replaced the current trace");
+
+        // 大きい構造を初回から収め、自動回転中の切替でも追従する。手動zoomは保持する。
+        await window.loadURL(`${baseURL}sonata.html#demo=namd-flow`);
+        await ready();
+        await until((s) => s.loaded && s.key === "namd-flow", "The NAMD demo link did not load");
+        await evaluate(({ sonata }) => sonata.setPlaying(false));
+        const large = await evaluate(({ sonata }) => sonata.camera);
+        assert.ok(large.targetRadius > 32.5, "The first large sample kept the default camera radius");
+        assert.ok(
+            large.targetFocus.some((v) => v !== 0),
+            "The first large sample was not centered"
+        );
+        assert.equal(
+            await evaluate(() => document.getElementById("auto-camera")!.getAttribute("aria-pressed")),
+            "true"
+        );
+        await select("rename-rush");
+        const small = await evaluate(({ sonata }) => sonata.camera);
+        assert.ok(small.targetRadius < large.targetRadius, "Switching demos did not refit the camera");
+        await select("namd-flow");
+        assert.equal(await evaluate(({ sonata }) => sonata.camera.targetRadius), large.targetRadius);
+        await evaluate(() => document.getElementById("zoom-in")!.click());
+        const zoomed = await evaluate(({ sonata }) => sonata.camera);
+        await select("rename-rush");
+        const preserved = await evaluate(({ sonata }) => sonata.camera);
+        assert.equal(preserved.targetRadius, zoomed.targetRadius, "Demo selection discarded manual zoom");
+        assert.deepEqual(preserved.targetFocus, zoomed.targetFocus, "Demo selection discarded manual focus");
         return {
             standaloneFile: true,
             lazySamples: true,
@@ -294,7 +321,8 @@ async function reviewDemoLoading(
             failureAndRetry: true,
             latestSelection: true,
             fileRace: true,
-            cancel: true
+            cancel: true,
+            largeSampleFit: true
         };
     } finally {
         await restore();

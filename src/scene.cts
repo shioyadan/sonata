@@ -216,7 +216,11 @@ function createScene({ gpu, replay, session }: SceneOptions) {
     function linkPort(id: string, output: boolean, lane: number, count: number): Vector {
         const n = scene.nodes.get(id)!,
             offset = lane - (count - 1) / 2;
-        if (!n) return [id === "input" ? inputPosition()[0] : 15.8, 0.8, offset * 0.3];
+        if (!n) {
+            const commit = scene.nodes.get("commit")!;
+            const x = id === "input" ? inputPosition()[0] : Math.max(15.8, commit.x + commit.w / 2 + 3.6);
+            return [x, 0.8, offset * 0.3];
+        }
         if (id === "commit") {
             const p = commitSlot(lane)[output ? "outlet" : "inlet"];
             return [n.x + (output ? 1 : -1) * (n.w / 2 + 0.01), p[1], p[2]];

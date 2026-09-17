@@ -42,10 +42,11 @@ function createCamera({
         eye: [0, 20, 30] as Vec3
     };
     const minCameraRadius = 3;
-    let fitted: string | null = null;
     let fittedBounds: string | undefined;
     const targetState = () =>
         JSON.stringify([camera.targetAzimuth, camera.targetElevation, camera.targetRadius, camera.targetFocus]);
+    // 初回サンプルもFitの対象にし、読込み前の手動操作は一致判定で保持する。
+    let fitted = targetState();
     function project(p: Vec3): Vec3 {
         const m = camera.viewProjection;
         const w = m[3] * p[0] + m[7] * p[1] + m[11] * p[2] + m[15];
@@ -95,8 +96,7 @@ function createCamera({
 
     function fitLayout() {
         // Fit後に利用者が回転・拡大・平行移動していなければ、構造の拡大にも追従する。
-        if (fitted !== null && fitted === targetState() && fittedBounds !== JSON.stringify(sceneBounds?.()))
-            setCamera(camera.cameraMode);
+        if (fitted === targetState() && fittedBounds !== JSON.stringify(sceneBounds?.())) setCamera(camera.cameraMode);
     }
 
     function toggleAuto(value = !camera.autoOrbit) {

@@ -52,6 +52,16 @@ RSD から得た `mshr.log` の一部を表示用データに加工していま�
 
 元ログ全体の 108 種類の命令アドレスと命令内容は、[Asm/IntRegImm テスト](https://github.com/rsd-devel/rsd/blob/7b65f6ba0bce58d4d859082660123b7100aae975/Processor/Src/Verification/TestCode/Asm/IntRegImm/code.s)の実行ファイルと一致しました。比較には、起動処理の後に実行されたテスト本体の 38 種類の命令も含みます。シミュレータの版や実行設定までは特定できていません。上記リビジョンは命令の由来を照合した版であり、ログ生成時の RSD リビジョンを保証するものではありません。
 
+## SPEC CPU のNAMD実行トレース
+
+- 対象デモ: `namd-flow`（**NAMD flow**）
+- 元ログ: `namd_sim0_straight.c0.txt.gz`
+- 提供者による確認: SPEC CPUのNAMDを、Onikiri2でSTRAIGHT ISA向けにシミュレーションした記録。
+
+元ログの連続した先頭部分をKanata形式のままgzipで同梱し、9,780–10,035サイクルを表示します。時刻・命令ID・命令文字列は変更していません。元プログラムのソースや実行ファイル本体は同梱しません。SPEC CPUの世代、NAMDの版・入力、シミュレータのリビジョン・CPU設定は未確認です。
+
+Sonata本体のBSDライセンスを、NAMDの元プログラムや命令列へ適用するものではありません。この実行トレースの再配布条件は未確認です。[SPEC CPU2006の権利表示](https://www.spec.org/cpu2006/Docs/legal.html)と[CPU2017のライセンス一覧](https://www.spec.org/cpu2017/Docs/licenses.html)は元製品の条件を示す資料であり、この短いトレースの再配布許諾を確認した根拠としては扱いません。SPECはStandard Performance Evaluation Corporationの登録商標です。このデモは可視化用であり、SPECの性能結果や認証として提供するものではありません。
+
 ## 開発用依存関係と画像
 
 Electron、TypeScript、tsx / esbuild などの開発用依存関係は、開発・検証・データ抽出に使用します。上記で同梱を明記した解析・圧縮実装を除き、npm パッケージ本体を Sonata の Git リポジトリや配布 HTML には含めません。gem5 と RSD のシミュレータ本体も同梱しません。

@@ -26,7 +26,7 @@ npm run build
 
 生成された **`dist/sonata.html`** をブラウザで開いてください。コード・スタイル・解析器・ライセンスを含む単一 HTML です。別の場所へコピーしても、手元のトレースをネットワーク接続なしで開けます。ブラウザは WebGL 2 が必要です。
 
-サンプルを試す場合は `npm start` で `http://127.0.0.1:4173` を開き、一覧から選んでください。5つのデモは `dist/samples/` の4本のgzip生トレースを使い、選択時に必要なファイルだけを取得・解析します。`#demo=rename-rush` のようなリンクで直接開くこともできます。ソース変更後はサーバーを再起動してください。
+サンプルを試す場合は `npm start` で `http://127.0.0.1:4173` を開き、一覧から選んでください。6つのデモは `dist/samples/` の5本のgzip生トレースを使い、選択時に必要なファイルだけを取得・解析します。`#demo=rename-rush` のようなリンクで直接開くこともできます。ソース変更後はサーバーを再起動してください。
 
 サンプルも手元のファイルも、同じWorker・Konata core・区間変換を通して読み込みます。サンプルの名前・初期位置・見どころ・出典は小さな一覧にまとめ、命令やレジスタ値は生ログから解析します。
 
@@ -84,6 +84,7 @@ Aluminum / Paper の命令は、待機・移動・実行を通して同じ大き
 | Miss & recover | RSD / RISC-V | IntRegImm テストの起動処理、キャッシュミスと予測ミス |
 | Rename rush | gem5 ARM64 O3 | CoreMark、記録されたリネームと物理レジスタの読み書き |
 | x86 recovery | gem5 x86 O3 | CoreMark、micro-op とレジスタ復元 |
+| NAMD flow | Onikiri2 / STRAIGHT ISA | SPEC CPUのNAMD、FP演算・ディスパッチと予測ミス後の再開 |
 
 実行条件は各デモの **Run details** と [デモの出自](data/README.md) に記載しています。データに記録された時刻・依存関係と、推定した構造や光の演出を区別しています。Top-down はトレースから推定した分類を、現在から過去8サイクルの窓で表示します。分類を支える構造や分岐回復の観測例が不足する場合は、その原因を断定しません。実装上の解釈は [可視化の仕様](docs/visualization.md) を参照してください。
 
@@ -137,7 +138,7 @@ src/                    編集用のソース
   sonata.css            共通 UI・情報パネル
   scene.css             シーン上の表示
   appearance.css        画面サイズ対応・配色
-data/                   gzip生トレース4本・デモ一覧・出典・CPU回帰用データ
+data/                   gzip生トレース5本・デモ一覧・出典・CPU回帰用データ
 scripts/                ビルド・検証・デモ抽出
 vendor/konata-core/      読込み・抽出に使う Konata core と生成済みブラウザ用コード
 vendor/wasm-zstd/        同梱する圧縮器とライセンス
@@ -155,4 +156,4 @@ work/                   ローカル作業メモ・引き継ぎ資料（Git 対�
 
 Sonata 本体は [BSD-3-Clause](LICENSE.md) です。Konata から引き継いだ著作権表示を保持しています。解析コードの出典・固定リビジョンは [vendor/konata-core](vendor/konata-core/README.md) に記録しています。
 
-配布デモに含まれる CoreMark と RSD 由来の命令列には、それぞれのライセンスが適用されます。出典・権利表示は [第三者ライセンス](THIRD_PARTY_NOTICES.md) を参照してください。配布 HTML にも全文を含め、画面の **Licenses** から確認できます。
+CoreMark・RSD由来の命令列のライセンスと、SPEC CPUのNAMDトレースの出典・確認範囲は [第三者ライセンス](THIRD_PARTY_NOTICES.md) を参照してください。配布 HTML にも全文を含め、画面の **Licenses** から確認できます。

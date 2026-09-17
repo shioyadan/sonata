@@ -119,7 +119,7 @@ async function reviewSmoke(window: BrowserWindow, screenshots: string, begin: (n
             .map((option) => option.value)
             .filter(Boolean)
     );
-    assert.deepEqual(keys, ["branch-storm", "wide-open", "memory-tide", "rename-rush", "x86-recovery"]);
+    assert.deepEqual(keys, ["branch-storm", "wide-open", "memory-tide", "rename-rush", "x86-recovery", "namd-flow"]);
     const demos = [];
     for (const key of keys) {
         await evaluate((_page, key) => {

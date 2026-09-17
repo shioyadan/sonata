@@ -319,6 +319,11 @@ checkSpacing(
     "16 commit lanes"
 );
 checkFrontendLayout(denseScene, denseReplay);
+for (const connection of denseScene.connections)
+    assert.ok(
+        connection.lanes.every(({ source, target }) => target[0] > source[0]),
+        `Dense scene reversed ${connection.from} → ${connection.to}`
+    );
 const positions = denseReplay.ops.map((op) => densePaths.positionAt(op, 95)),
     seats = denseReplay.ops.map((op) => denseReplay.frontend.position(op.id, "front-1", 95));
 for (let index = 0; index < positions.length - 1; index++) {

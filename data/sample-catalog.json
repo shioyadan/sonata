@@ -273,7 +273,7 @@
       "simulator": "Onikiri2",
       "workload": "SPEC CPU · NAMD",
       "processor": "STRAIGHT ISA · simulation",
-      "configuration": "The trace provider identified Onikiri2, the STRAIGHT ISA and the SPEC CPU NAMD workload. SPEC CPU edition, input, simulator revision and CPU configuration are not retained.",
+      "configuration": "The trace provider identified Onikiri2, the STRAIGHT ISA and the SPEC CPU NAMD workload. SPEC CPU edition, input, simulator revision and CPU configuration have not been verified.",
       "note": "Recorded dispatch, FP execution and Xbm branch-misprediction stages are preserved. This excerpt includes 92 squashed instructions at cycle 9796, dispatch recovery and later FP commits. Capacity estimates come from observed activity; no architectural register map is supplied.",
       "workloadKnown": true,
       "evidence": [

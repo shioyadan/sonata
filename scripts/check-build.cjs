@@ -73,8 +73,14 @@ assert.deepEqual(
     "Demo catalog changed the labels, metadata or portable sample URLs"
 );
 assert.deepEqual(
-    catalog.map(({ key, label }) => ({ key, label })),
+    catalog
+        .filter((entry) => expected.some((legacy) => legacy.key === entry.key))
+        .map(({ key, label }) => ({ key, label })),
     expected.map(({ key, label }) => ({ key, label }))
+);
+assert.deepEqual(
+    catalog.map((entry) => entry.key),
+    [...expected.map((entry) => entry.key), "namd-flow"]
 );
 assert.ok(JSON.stringify(catalog).length < 32768, "Sample metadata is no longer a small catalog");
 const sampleFiles = sources.map(({ file }) => file).sort();

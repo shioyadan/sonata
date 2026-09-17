@@ -9,7 +9,8 @@ module.exports = async function reviewDesktop(window, screenshots) {
     const js = (source) => window.webContents.executeJavaScript(source);
     const browserTest = createBrowserTest(window);
     const settle = () => browserTest.settle({ finish: true });
-    const waitFor = (source, message) => waitUntil(() => js(source), message, { timeout: 5000, interval: 60 });
+    const waitFor = (source, message, timeout = 5000) =>
+        waitUntil(() => js(source), message, { timeout, interval: 60 });
     assert.equal(await js("typeof sonata"), "object", "WebGL mockup did not initialize");
     assert.equal(
         await js("document.querySelectorAll('script[src],link[rel=stylesheet]').length"),
@@ -30,7 +31,7 @@ module.exports = async function reviewDesktop(window, screenshots) {
     assert.ok(await js("!document.getElementById('license-panel').open"));
     const results = [];
     const keys = await js("sonataDemoCatalog.map(t => t.key)");
-    assert.deepEqual(keys, ["branch-storm", "wide-open", "memory-tide", "rename-rush", "x86-recovery"]);
+    assert.deepEqual(keys, ["branch-storm", "wide-open", "memory-tide", "rename-rush", "x86-recovery", "namd-flow"]);
     for (const key of keys) {
         const result = await js(`(async () => {
             await sonata.loadTrace(${JSON.stringify(key)});
@@ -94,7 +95,7 @@ module.exports = async function reviewDesktop(window, screenshots) {
                             const c=Math.floor(s.start);counts.set(c,(counts.get(c)||0)+1);
                         }}
                     }
-                    return links.find(link=>link.from===(trace.evidence?.registers?'register-read':'issue')&&link.to===node.id).peak===Math.max(0,...counts.values());
+                    return links.find(link=>link.from===(trace.structure.registerRead||trace.evidence?.registers?'register-read':'issue')&&link.to===node.id).peak===Math.max(0,...counts.values());
                 });
             const pipeCount=pipes.length===sonata.executionNodes.reduce((sum,n)=>sum+n.pipeCount,0);
             const pipeAxes=pipes.every(p=>p.outlet[0]>p.inlet[0] && p.outlet[1]===p.inlet[1] && p.outlet[2]===p.inlet[2]);
@@ -161,16 +162,16 @@ module.exports = async function reviewDesktop(window, screenshots) {
                     &&Math.abs(visual.rail.reduce((sum,s)=>sum+s.share,0)-1)<1e-9;
             });
             sonata.captureAt(trace.demo.screenshotCycle);
-            const renameWords=sonata.renameMapWords;
-            if(renameWords.length!==32)throw new Error(sonata.trace.key+': rename table disappeared or lost an entry');
+            const renameWords=sonata.renameMapWords,registers=trace.evidence?.registers;
+            if(renameWords.length!==(registers?.rows.length??0))throw new Error(sonata.trace.key+': rename table differs from register evidence');
             for(const word of renameWords){
                 const {start,end}=word.layout;
                 if(start[0]!==end[0]||start[1]!==end[1]||end[2]<=start[2])throw new Error(sonata.trace.key+': rename entry is not perpendicular to instruction flow');
             }
-            if(trace.evidence.registers.kind==='configuration'&&renameWords.some(w=>w.known||w.active||w.cells.some(c=>c.value!==null)))throw new Error('Unrecorded rename mappings were invented');
+            if(registers?.kind==='configuration'&&renameWords.some(w=>w.known||w.active||w.cells.some(c=>c.value!==null)))throw new Error('Unrecorded rename mappings were invented');
             const source = sonata.trace.ops, cycle = sonata.cycle;
             const active = source.filter(o => o[2] <= cycle && (o[4] ? o[11] ?? o[3] : o[3]) > cycle);
-            const issue = active.filter(o => o[7] != null && cycle >= o[7] && cycle < (o[8] ?? (o[4] ? o[11] ?? o[3] : o[3])));
+            const issue = active.filter(o => o[7] != null && cycle >= o[7] && cycle < (o[8] ?? o[9] ?? (o[4] ? o[11] ?? o[3] : o[3])));
             const rob = active.filter(o => o[7] != null && cycle >= o[7]);
             const stats = sonata.stats;
             const fifo=sonata.rob;
@@ -220,7 +221,11 @@ module.exports = async function reviewDesktop(window, screenshots) {
         );
         assert.equal(result.topDownMatches, true, `${key}: Top-down display must match the window analysis`);
         assert.equal(result.fifoMatches, true, `${key}: circular FIFO view`);
-        if (key !== "memory-tide") {
+        if (key === "namd-flow") {
+            assert.match(result.simulator, /Onikiri2/);
+            assert.match(result.workload, /NAMD/);
+            assert.match(await js("document.getElementById('run-processor').textContent"), /STRAIGHT/);
+        } else if (key !== "memory-tide") {
             assert.match(result.simulator, /gem5 v25\.1\.0\.1/);
             assert.match(result.workload, /CoreMark/);
         } else {
@@ -238,6 +243,12 @@ module.exports = async function reviewDesktop(window, screenshots) {
     }
     await js(
         "(async()=>{await sonata.loadTrace('branch-storm'); sonata.captureAt(sonata.trace.demo.screenshotCycle)})()"
+    );
+    await waitFor(
+        `(()=>{const c=sonata.camera;return Math.abs(c.radius-c.targetRadius)<1e-8
+            &&c.focus.every((v,i)=>Math.abs(v-c.targetFocus[i])<1e-8)})()`,
+        "Desktop camera did not settle after switching from the large sample",
+        30000
     );
     const feedBefore = await js("sonata.instructionFeed");
     assert.ok(feedBefore.length > 0, "Incoming instruction ribbon is empty");
@@ -361,8 +372,22 @@ module.exports = async function reviewDesktop(window, screenshots) {
     }
     await js("sonata.captureAt(sonata.flushEvents[0]+2.1)");
     const fragments = await js("sonata.codeFragments");
+    function assertFragmentsStable(actual, expected, message) {
+        assert.equal(actual.length, expected.length, message);
+        for (const [index, fragment] of actual.entries()) {
+            const before = expected[index];
+            // カメラの補間に残る浮動小数点の差だけを許し、文字・状態・演出値は厳密に比較する。
+            for (const key of ["position", "origin", "screen", "originScreen"])
+                assert.ok(
+                    fragment[key].every((v, axis) => Math.abs(v - before[key][axis]) < 1e-6),
+                    message
+                );
+            const state = ({ position, origin, screen, originScreen, ...value }) => value;
+            assert.deepEqual(state(fragment), state(before), message);
+        }
+    }
     await settle();
-    assert.deepEqual(await js("sonata.codeFragments"), fragments, "Paused unraveling letters moved");
+    assertFragmentsStable(await js("sonata.codeFragments"), fragments, "Paused unraveling letters moved");
     fs.writeFileSync(
         path.join(screenshots, "sonata-code-unravel.png"),
         (await window.webContents.capturePage()).toPNG()
@@ -370,7 +395,7 @@ module.exports = async function reviewDesktop(window, screenshots) {
     await js("sonata.captureAt(sonata.flushEvents[0]+sonataReplay.codeRewindDuration)");
     assert.deepEqual(await js("sonata.codeFragments"), [], "Detached letters remained after refill");
     await js("sonata.captureAt(sonata.flushEvents[0]+2.1)");
-    assert.deepEqual(
+    assertFragmentsStable(
         await js("sonata.codeFragments"),
         fragments,
         "Seeking did not restore identical unraveling letters"
