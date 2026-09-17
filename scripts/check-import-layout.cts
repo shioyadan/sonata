@@ -6,6 +6,9 @@ import path = require("node:path");
 import type { BrowserWindow } from "electron";
 import type browserTest = require("./browser-test.cts");
 const { createBrowserTest, waitFor: waitUntil } = require("./load-test.cjs")("browser-test.cts") as typeof browserTest;
+const reviewFrontGroups = require("./load-test.cjs")(
+    "check-front-groups.cts"
+) as typeof import("./check-front-groups.cts");
 
 async function reviewLayout(
     window: BrowserWindow,
@@ -18,6 +21,7 @@ async function reviewLayout(
         waitUntil(() => evaluate(condition), message);
     const bounds = window.getBounds();
     try {
+        await reviewFrontGroups(window, screenshots, importFile);
         const mixedFile = [
             { name: "ldr w0, [x1]", complete: 12000 },
             { name: "ldr w2, [x3]", complete: 6000 },

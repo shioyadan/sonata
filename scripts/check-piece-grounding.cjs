@@ -221,10 +221,11 @@ const heights = { [paper]: half, [puck]: 0.32 };
 const session = { style: styles[paper], reducedMotion: true };
 const paths = createPaths({
     session,
-    replay: { ops: [op], trace: { firstCycle: 0, fetchWidth: 2 } },
+    replay: { ops: [op], trace: { firstCycle: 0, fetchWidth: 2 }, frontend: { stages: new Map() } },
     scene: {
         nodes: new Map(["front", "next"].map((id, i) => [id, { id, x: i * 2, h: 1, z: 0, w: 1, d: 1 }])),
-        commitSlot: () => ({ inlet: [3, 1, 0], outlet: [4, 1, 0] })
+        commitSlot: () => ({ inlet: [3, 1, 0], outlet: [4, 1, 0] }),
+        inputPosition: () => [-15.6, 0.8, 0]
     }
 });
 paths.setGround(ground);

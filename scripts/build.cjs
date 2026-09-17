@@ -120,7 +120,7 @@ function build() {
         "trace-evidence.cts",
         "top-down.cts"
     ];
-    const workerFiles = [...workerOnly, "memory.cts", "replay-model.cts", "geometry.cts"];
+    const workerFiles = [...workerOnly, "memory.cts", "replay-model.cts", "frontend.cts", "geometry.cts"];
     const worker = bundle(root, "src/trace-worker.cts", [
         ...workerFiles.map((file) => path.join(root, "src", file)),
         path.join(root, "vendor/konata-core/browser.cjs")

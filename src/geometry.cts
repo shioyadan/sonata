@@ -56,14 +56,18 @@ interface PathScene {
     memoryWaitPosition(slot: number): Vec3;
     robCell(index: number, height: number): Vec3;
     executionLane(node: PathNode, index: number): Lane;
-    renameInstructionPosition(index: number): Vec3;
-    frontInstructionPosition(node: PathNode, index: number): Vec3;
+    frontInstructionPosition(node: PathNode, row: number, lane: number): Vec3;
     commitSlot(index: number | undefined): Lane;
     issueRowExit(index: number): Vec3;
+    inputPosition(): Vec3;
 }
 interface PathReplay<T extends PathOperation = PathOperation> {
     ops: T[];
     trace: { firstCycle: number; fetchWidth: number };
+    frontend: {
+        stages: Map<string, { capacity: number }>;
+        position(id: number, node: string, time: number): { row: number; lane: number } | null;
+    };
 }
 interface PathSession {
     style: { palette: Record<string, Vec3>; surface?: { paper?: true; aluminum?: true } };
@@ -465,10 +469,9 @@ function createPaths<T extends PathOperation>({
             const travel = stage.entryCycles != null ? (n.latency ?? 1) * 0.78 : stage.end - stage.start - arrival;
             const progress = clamp((t - stage.start - arrival) / Math.max(0.001, travel));
             return lane.inlet.map((v, i) => mix(v, lane.outlet[i], progress)) as Vec3;
-        } else if (n.instructionRows !== undefined) {
-            return scene.frontInstructionPosition(n, stage.displaySlot ?? 0);
-        } else if (n.names?.includes("Rn")) {
-            return scene.renameInstructionPosition(stage.displaySlot ?? 0);
+        } else if (replay.frontend.stages.has(n.id)) {
+            const seat = replay.frontend.position(op.id, n.id, t)!;
+            return scene.frontInstructionPosition(n, seat.row, seat.lane);
         } else {
             z +=
                 ((op.index % Math.max(2, replay.trace.fetchWidth)) - (Math.max(2, replay.trace.fetchWidth) - 1) / 2) *
@@ -512,7 +515,9 @@ function createPaths<T extends PathOperation>({
         if (progress >= 1) return target;
         const index = op.stages.indexOf(stage),
             previous = op.stages[index - 1];
-        const source: Vec3 = previous ? location(op, previous, previous.end - 0.001) : [-15.5, 0.8, target[2]];
+        const source: Vec3 = previous
+            ? location(op, previous, previous.end - 0.001)
+            : [scene.inputPosition()[0] + 0.1, 0.8, target[2]];
         if (previous?.node === "issue") {
             const exit = scene.issueRowExit(op.issueSlot ?? 0),
                 port =

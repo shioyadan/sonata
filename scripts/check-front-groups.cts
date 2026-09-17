@@ -1,0 +1,110 @@
+"use strict";
+// 実File入力から、Fetchの束・段をまたぐlane・退出後の前詰めを描画まで確認する。
+import assert = require("node:assert/strict");
+import fs = require("node:fs");
+import path = require("node:path");
+import type { BrowserWindow } from "electron";
+import type browserTest = require("./browser-test.cts");
+const { createBrowserTest } = require("./load-test.cjs")("browser-test.cts") as typeof browserTest;
+
+async function reviewFrontGroups(
+    window: BrowserWindow,
+    screenshots: string,
+    importFile: (name: string, bytes: string | Uint8Array) => Promise<void>
+) {
+    const test = createBrowserTest(window);
+    const { evaluate } = test;
+    const timings = [
+        [1, 5, 8, 11],
+        [1, 6, 9, 12],
+        [2, 10, 12, 14],
+        [2, 10, 12, 14],
+        [3, 12, 14, 16],
+        [3, 12, 14, 16]
+    ];
+    const text = timings
+        .map(([fetch, decode, rename, dispatch], id) =>
+            [
+                `O3PipeView:fetch:${fetch * 1000}:0x${(4096 + id * 4).toString(16)}:0:${id + 1}: add x0, x1, x2`,
+                `O3PipeView:decode:${decode * 1000}`,
+                `O3PipeView:rename:${rename * 1000}`,
+                `O3PipeView:dispatch:${dispatch * 1000}`,
+                `O3PipeView:issue:${(dispatch + 1) * 1000}`,
+                `O3PipeView:complete:${(dispatch + 2) * 1000}`,
+                `O3PipeView:retire:${(20 + id) * 1000}`,
+                ""
+            ].join("\n")
+        )
+        .join("");
+    await importFile("fetch-groups.o3", text);
+    const records = await evaluate(({ sonata }) => sonata.trace.ops);
+    const origin = timings[0][0] - records[0][2];
+    assert.deepEqual(
+        records.map((op) => op[2]),
+        timings.map((row) => row[0] - origin)
+    );
+    const ids = records.map((op) => op[0]);
+    assert.equal(await evaluate(({ sonata }) => sonata.frontend.lanes), 2);
+    assert.deepEqual(await evaluate(({ sonata }) => sonata.frontend.groups.map((group) => group.ids)), [
+        ids.slice(0, 2),
+        ids.slice(2, 4),
+        ids.slice(4, 6)
+    ]);
+    const sample = async (time: number) => {
+        await test.sampleFrame(() => evaluate(({ sonata }, cycle) => sonata.captureAt(cycle), time - origin));
+        return evaluate(({ sonata }) => ({
+            cycle: sonata.cycle,
+            entries: sonata.frontend.entries,
+            particles: sonata.particles,
+            radius: sonata.instructionLayout.radius
+        }));
+    };
+    for (const style of ["neon", "aluminum", "paper"]) {
+        await evaluate((_page, style) => document.getElementById(`style-${style}`)!.click(), style);
+        const waiting = await sample(3.9);
+        assert.equal(waiting.cycle, 3.9 - origin);
+        assert.equal(waiting.radius, 0.12);
+        assert.equal(waiting.entries.length, 6);
+        const positions = ids.map((id) => waiting.particles.find((particle) => particle.id === id)!.pathPosition);
+        for (let group = 0; group < 3; group++) {
+            const [first, second] = positions.slice(group * 2, group * 2 + 2);
+            assert.equal(first[0], second[0], `Fetch group split into different rows in ${style}`);
+            assert.ok(second[2] - first[2] >= 0.24, `Program order reversed within a fetch group in ${style}`);
+            if (group) assert.ok(positions[(group - 1) * 2][0] > first[0], "A younger group overtook an older group");
+        }
+        const split = await sample(5.9);
+        const first = split.entries.find((entry) => entry.id === ids[0])!;
+        const second = split.entries.find((entry) => entry.id === ids[1])!;
+        assert.notEqual(first.node, second.node, "A fetch group forced simultaneous stage transitions");
+        assert.equal(first.lane, 0);
+        assert.equal(second.lane, 1, "A remaining group member was moved into the vacated lane");
+        assert.equal(split.particles.find((p) => p.id === ids[1])!.pathPosition[2], positions[1][2]);
+        const moving = await sample(7.0);
+        const moved = await sample(7.5);
+        const rowDuring = moving.entries.find((entry) => entry.id === ids[2])!.row;
+        const rowAfter = moved.entries.find((entry) => entry.id === ids[2])!.row;
+        assert.ok(rowDuring > 0 && rowDuring < 1, "Front-end compaction did not interpolate");
+        assert.equal(rowAfter, 0, "The oldest remaining group did not advance to the exit");
+        for (const time of [3.9, 5.9, 6.8, 6.9, 7, 7.2, 7.5, 9.8, 12.9]) {
+            const state = await sample(time);
+            assert.ok(state.particles.every((particle) => particle.pathPosition.every(Number.isFinite)));
+        }
+        const reverse = await sample(3.9);
+        assert.deepEqual(reverse.entries, waiting.entries, "Seeking backward changed the group layout");
+        assert.deepEqual(
+            reverse.particles.map((particle) => particle.pathPosition),
+            waiting.particles.map((particle) => particle.pathPosition)
+        );
+        await test.settle({ finish: true });
+        fs.writeFileSync(
+            path.join(screenshots, `frontend-groups-${style}.png`),
+            (await window.webContents.capturePage()).toPNG()
+        );
+    }
+    assert.deepEqual(
+        await evaluate(({ sonata }) => sonata.trace.ops),
+        records,
+        "Front-end grouping changed trace observations"
+    );
+}
+export = reviewFrontGroups;

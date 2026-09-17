@@ -252,6 +252,11 @@ const denseSource = createReplay({ samples: [denseTrace] }),
     denseScene = createScene({ replay: denseReplay, session: denseSession }),
     densePaths = createPaths({ scene: denseScene, replay: denseReplay, session: denseSession });
 denseScene.buildLayout();
+for (const op of denseReplay.ops) {
+    const entry = densePaths.positionAt(op, op.fetch);
+    assert.ok(entry[0] < denseScene.nodes.get("front-0").x - denseScene.nodes.get("front-0").w / 2);
+    assert.equal(entry[0], denseScene.inputPosition()[0] + 0.1, "Fetch entry detached from the instruction stream");
+}
 function checkSpacing(positions, node, label) {
     assert.equal(
         new Set(positions.map((position) => position.join())).size,

@@ -1070,6 +1070,8 @@ function start(gl: WebGL2RenderingContext) {
                 }));
             },
             get instructionLayout() {
+                const rename = scene.renameNode(),
+                    lanes = rename?.instructionRows ?? replay.frontend.lanes;
                 return {
                     radius: instructionRadius,
                     scheduler: Array.from({ length: replay.trace.structure.queueCapacity }, (_, row) =>
@@ -1078,10 +1080,36 @@ function start(gl: WebGL2RenderingContext) {
                     rob: Array.from({ length: replay.trace.structure.robCapacity }, (_, slot) =>
                         scene.robCell(slot, 0.19)
                     ),
-                    rename: Array.from({ length: scene.renameNode()?.instructionSlots ?? 0 }, (_, slot) =>
-                        scene.renameInstructionPosition(slot)
+                    rename: Array.from({ length: rename?.instructionSlots ?? 0 }, (_, slot) =>
+                        scene.renameInstructionPosition(Math.floor(slot / lanes), slot % lanes)
                     )
                 };
+            },
+            get frontend() {
+                return {
+                    lanes: replay.frontend.lanes,
+                    groups: replay.frontend.groups,
+                    stages: [...replay.frontend.stages].map(([id, descriptor]) => {
+                        const node = scene.nodes.get(id)!;
+                        return { id, ...descriptor, bounds: { x: node.x, z: node.z, w: node.w, d: node.d } };
+                    }),
+                    entries: replay.ops.flatMap((op) => {
+                        const stage = paths.stageAt(op, session.cycle);
+                        if (!stage || !replay.frontend.stages.has(stage.node)) return [];
+                        return [
+                            {
+                                id: op.id,
+                                node: stage.node,
+                                ...replay.frontend.position(op.id, stage.node, session.cycle)!
+                            }
+                        ];
+                    })
+                };
+            },
+            frontendPositionAt(id: number, node: string, time: number) {
+                const seat = replay.frontend.position(id, node, time),
+                    target = scene.nodes.get(node);
+                return seat && target ? scene.frontInstructionPosition(target, seat.row, seat.lane) : null;
             },
             get executionNodes() {
                 return replay.memory.executionNodes;

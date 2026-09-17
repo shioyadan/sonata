@@ -5,7 +5,7 @@ module.exports = async function reviewStageLayout(window) {
     const result = await window.webContents.executeJavaScript(`(()=>{
         const original=sonata.cycle,trace=sonata.trace,banks=sonata.schedulers,layout=sonata.instructionLayout;
         const grid={rows:banks.flatMap(bank=>bank.grid.rows),columns:banks.flatMap(bank=>bank.grid.columns)};
-        const entries=trace.ops.flatMap(op=>op[6].filter(s=>s[0]==='Rn').map(s=>({id:op[0],start:s[2],end:Math.min(s[3],op[4]?(op[11]??op[3]):op[3])}))).filter(e=>e.start<e.end);
+        const entries=trace.ops.flatMap(op=>op[6].filter(s=>s[0]==='Rn').map(s=>({id:op[0],node:s[1],start:s[2],end:Math.min(s[3],op[4]?(op[11]??op[3]):op[3])}))).filter(e=>e.start<e.end);
         // 入場の補間が終わった時点から、実トレースで最も多くの命令が滞在する場面を選ぶ。
         const candidates=entries.map(e=>Math.max(trace.firstCycle,e.start+.9)).filter(cycle=>cycle<=trace.lastCycle)
             .map(cycle=>({cycle,entries:entries.filter(e=>e.start<=cycle&&cycle<e.end)}));
@@ -32,12 +32,13 @@ module.exports = async function reviewStageLayout(window) {
             const poses=pieces=>JSON.stringify(pieces.map(({id,position,pathPosition})=>({id,position,pathPosition})));
             const before=poses(pieces);sonata.captureAt(peak.cycle+1);sonata.captureAt(peak.cycle);
             const returned=before===poses(sonata.particles.filter(p=>peak.entries.some(e=>e.id===p.id)));
-            // 全滞在区間を照合し、別時点の混雑でも同じ配置先を同時に使っていないことを確認する。
-            const positions=entries.map(e=>({ ...e,position:layout.rename[sonata.ops.find(op=>op.id===e.id).stages.find(s=>s.names.includes('Rn')&&s.start<=e.start&&s.end>=e.end).displaySlot]}));
+            // 同時滞在する各組を照合する。前詰めで動くので共有時刻の座標を使う。
             let overlaps=0;
-            for(let i=0;i<positions.length;i++)for(let j=i+1;j<positions.length;j++){
-                const a=positions[i],b=positions[j];
-                if(Math.max(a.start,b.start)<Math.min(a.end,b.end)&&Math.hypot(a.position[0]-b.position[0],a.position[2]-b.position[2])<=layout.radius*2)overlaps++;
+            for(let i=0;i<entries.length;i++)for(let j=i+1;j<entries.length;j++){
+                const a=entries[i],b=entries[j],start=Math.max(a.start,b.start),end=Math.min(a.end,b.end);
+                if(start>=end)continue;
+                const time=(start+end)/2,p=sonata.frontendPositionAt(a.id,a.node,time),q=sonata.frontendPositionAt(b.id,b.node,time);
+                if(Math.hypot(p[0]-q[0],p[2]-q[2])<=layout.radius*2)overlaps++;
             }
             return {key:trace.key,rows:grid.rows.length,columns:grid.columns.length,capacity:trace.structure.queueCapacity,banks:banks.length,
                 rowAligned:grid.rows.every((line,row)=>line[0][0]===layout.scheduler[row][0]&&line[0][2]===layout.scheduler[row][2]),
