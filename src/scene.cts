@@ -203,8 +203,8 @@ function createScene({ gpu, replay, session }: SceneOptions) {
         return [Math.min(-15.6, first.x - first.w / 2 - 1.4), 0.8, 0];
     }
 
-    function layoutBounds() {
-        const nodes = [...scene.nodes.values()];
+    function layoutBounds(includeQueues = true) {
+        const nodes = [...scene.nodes.values()].filter((node) => includeQueues || node.id !== "fetch-queue");
         return {
             left: Math.min(-14.7, ...nodes.map((n) => n.x - n.w / 2 - 0.5)),
             right: Math.max(14.7, ...nodes.map((n) => n.x + n.w / 2 + 0.5)),
@@ -228,7 +228,7 @@ function createScene({ gpu, replay, session }: SceneOptions) {
             return [n.x + (output ? 1 : -1) * (n.w / 2 + 0.12), p[1], p[2]];
         }
         return [
-            n.x + (output ? 1 : -1) * (n.w / 2 + 0.01),
+            n.x + (output || n.id === "fetch-queue" ? 1 : -1) * (n.w / 2 + 0.01),
             n.h + 0.26,
             n.z + offset * Math.min(0.3, (n.d - 0.6) / Math.max(1, count - 1))
         ];
@@ -331,14 +331,33 @@ function createScene({ gpu, replay, session }: SceneOptions) {
         return [...scene.nodes.values()].find((n) => n.names?.includes("Rn"));
     }
 
-    function frontInstructionPosition(
+    function frontendQueue(nodeID: string): SceneNode | null {
+        const node = scene.nodes.get(nodeID);
+        return node?.names?.includes("F") ? (scene.nodes.get("fetch-queue") ?? null) : null;
+    }
+
+    function frontSeat(
         node: Pick<SceneNode, "x" | "z" | "w" | "h" | "instructionRows">,
         row: number,
         lane: number
     ): Vector {
-        const n = node,
-            lanes = n.instructionRows ?? replay.frontend.lanes;
-        return [n.x + n.w / 2 - 0.24 - row * 0.32, n.h + 0.34, n.z + (lane - (lanes - 1) / 2) * 0.38];
+        const lanes = node.instructionRows ?? replay.frontend.lanes;
+        return [node.x + node.w / 2 - 0.24 - row * 0.32, node.h + 0.34, node.z + (lane - (lanes - 1) / 2) * 0.38];
+    }
+
+    function frontInstructionPosition(
+        node: Pick<SceneNode, "id" | "x" | "z" | "w" | "h" | "instructionRows">,
+        row: number,
+        lane: number
+    ): Vector {
+        return frontSeat(frontendQueue(node.id) ?? node, row, lane);
+    }
+
+    function frontEntryPosition(
+        node: Pick<SceneNode, "id" | "x" | "z" | "w" | "h" | "instructionRows">,
+        lane: number
+    ): Vector | null {
+        return frontendQueue(node.id) ? frontSeat(node, 0, lane) : null;
     }
 
     function renameInstructionPosition(row: number, lane: number): Vector {
@@ -523,6 +542,8 @@ function createScene({ gpu, replay, session }: SceneOptions) {
         scene.nodes = new Map();
         scene.connections = [];
         const front = replay.trace.structure.frontNodes;
+        const fetchIndex = front.findIndex((node) => node.names.includes("F")),
+            fetchID = fetchIndex >= 0 && fetchIndex + 1 < front.length ? front[fetchIndex].id : null;
         scene.transferProfile = sonataReplay.measureTransfers(replay.ops, {
             firstCycle: replay.trace.firstCycle,
             lastCycle: replay.trace.lastCycle,
@@ -556,7 +577,7 @@ function createScene({ gpu, replay, session }: SceneOptions) {
             if (replay.trace.evidence.registers.kind === "configuration")
                 rn.detail = `${rn.mapWords} LOGICAL · MAP NOT LOGGED`;
         }
-        // 同じfetchサイクルの横並びを全前段で保ち、待機グループ数だけX方向へ広げる。
+        // 同じfetchサイクルの横並びを全前段で保つ。Fの待機分は別の台へ置く。
         const frontendLanes = Math.max(
             replay.frontend.lanes,
             ...front.map((descriptor) =>
@@ -574,7 +595,7 @@ function createScene({ gpu, replay, session }: SceneOptions) {
             );
             node.instructionRows = frontendLanes;
             node.instructionSlots = node.instructionGroups * frontendLanes;
-            node.w = Math.max(node.w, (node.instructionGroups - 1) * 0.32 + 0.48);
+            if (node.id !== fetchID) node.w = Math.max(node.w, (node.instructionGroups - 1) * 0.32 + 0.48);
             node.d = Math.max(node.d, (frontendLanes - 1) * 0.38 + 0.48);
         }
         const capacity = replay.trace.structure.queueCapacity;
@@ -607,6 +628,29 @@ function createScene({ gpu, replay, session }: SceneOptions) {
             const node = scene.nodes.get(descriptor.id)!;
             node.x = Math.min(node.x, right - node.w / 2);
             right = node.x - node.w / 2 - 0.4;
+        }
+        if (fetchID) {
+            const fetch = scene.nodes.get(fetchID)!,
+                next = scene.nodes.get(front[fetchIndex + 1].id)!,
+                width = Math.max(1.2, (fetch.instructionGroups! - 1) * 0.32 + 0.48),
+                depth = Math.max(0.9, (frontendLanes - 1) * 0.38 + 0.48),
+                exit = (fetch.x + fetch.w / 2 + next.x - next.w / 2) / 2;
+            // 出口を本体へ固定し、待機の増加では台の左端だけを伸ばす。
+            // Fの記録には実機の待機場所がないため、表示専用の領域と明示する。
+            const queue = makeNode(
+                "fetch-queue",
+                "FETCH QUEUE",
+                exit - width / 2,
+                Math.min(fetch.z - fetch.d / 2, next.z - next.d / 2) - 0.8 - depth / 2,
+                width,
+                depth,
+                0.22,
+                session.style.palette.integer,
+                "DISPLAY BUFFER"
+            );
+            queue.instructionGroups = fetch.instructionGroups;
+            queue.instructionRows = frontendLanes;
+            queue.instructionSlots = fetch.instructionSlots;
         }
         // INT / BR を共有し、存在する実行ユニットを一定間隔で中央へ並べる。
         // STORE より下には LOAD と LOAD WAIT をまとめる。
@@ -737,7 +781,14 @@ function createScene({ gpu, replay, session }: SceneOptions) {
                       : `${replay.registerTags.length} OBSERVED · READ AT Rr`
             );
         }
-        front.slice(1).forEach((n, i) => addConnection(front[i].id, n.id, scene.nodes.get(front[i].id)!.color));
+        front.slice(1).forEach((n, i) => {
+            const from = front[i].id,
+                color = scene.nodes.get(from)!.color;
+            if (from === fetchID) {
+                addConnection(from, "fetch-queue", color);
+                addConnection("fetch-queue", n.id, color);
+            } else addConnection(from, n.id, color);
+        });
         addConnection(front.at(-1)!.id, "issue", session.style.palette.integer);
         if (hasRegisterRead) addConnection("issue", "register-read", session.style.palette.blue);
         for (const n of replay.memory.executionNodes) {
@@ -1453,6 +1504,15 @@ function createScene({ gpu, replay, session }: SceneOptions) {
             }
             box(tris, lines, x, -0.25, z, w + 0.25, 0.16, d + 0.25, color, 0.22, baseLevels.board);
             box(tris, lines, x, -0.05, z, w, h, d, color, 0.52, baseLevels.plinth);
+            if (id === "fetch-queue") {
+                for (let lane = 0; lane < node.instructionRows!; lane++) {
+                    const position = frontSeat(node, 0, lane),
+                        y = h - 0.04;
+                    line(lines, [x - w / 2 + 0.12, y, position[2]], [x + w / 2 - 0.12, y, position[2]], color, 0.2);
+                    flowChevron(lines, x + w / 2 - 0.24, y, position[2], 0.12, color, 0.32);
+                }
+                continue;
+            }
             // 天面の細かい刻みと側面のフィンで、光を載せる物体の質感を表す。
             for (let k = 0; k < 8; k++) {
                 const dz = z - d * 0.38 + (k * d * 0.76) / 7;
@@ -1557,7 +1617,7 @@ function createScene({ gpu, replay, session }: SceneOptions) {
             el.style.setProperty("--stage-color", rgb(n.color));
             const index = document.createElement("span");
             index.className = "stage-index";
-            index.textContent = String(++number).padStart(2, "0");
+            index.textContent = n.id === "fetch-queue" ? "" : String(++number).padStart(2, "0");
             const label = document.createElement("strong");
             label.textContent = n.label;
             el.dataset.compactLabel = "";
@@ -1575,6 +1635,9 @@ function createScene({ gpu, replay, session }: SceneOptions) {
                         ? "Rename table is present; mappings were not recorded in this trace. All entries remain unobserved."
                         : "Rename map: one bar per logical register, perpendicular to instruction flow. Blue writes a new mapping; red restores an older mapping.";
             }
+            if (n.id === "fetch-queue")
+                el.title =
+                    "Display buffer for instructions recorded in Fetch. Its size is not a hardware queue capacity.";
             if (n.id === "commit")
                 el.title = "One slot per instruction in this cycle's in-order commit group. Unused slots stay dark.";
             el.append(index, label, detail);
@@ -1612,6 +1675,8 @@ function createScene({ gpu, replay, session }: SceneOptions) {
         renameNode,
         renameInstructionPosition,
         frontInstructionPosition,
+        frontEntryPosition,
+        frontendQueue,
         inputPosition,
         layoutBounds,
         renameWordLayout,
