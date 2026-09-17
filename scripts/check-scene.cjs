@@ -109,9 +109,7 @@ function checkFrontendLayout(placement, replay) {
     }
     for (const [index, descriptor] of replay.trace.structure.frontNodes.entries()) {
         const node = placement.nodes.get(descriptor.id),
-            next = placement.nodes.get(replay.trace.structure.frontNodes[index + 1]?.id ?? "issue"),
-            queue = placement.frontendQueue(node.id),
-            surface = queue ?? node;
+            next = placement.nodes.get(replay.trace.structure.frontNodes[index + 1]?.id ?? "issue");
         assert.equal(node.instructionRows, replay.frontend.lanes, "A frontend stage changed fetch lanes");
         assert.equal(node.instructionSlots, node.instructionGroups * node.instructionRows);
         assert.ok(node.instructionGroups >= replay.frontend.stages.get(node.id).capacity);
@@ -119,24 +117,9 @@ function checkFrontendLayout(placement, replay) {
         const first = placement.frontInstructionPosition(node, 0, 0),
             last = placement.frontInstructionPosition(node, node.instructionGroups - 1, node.instructionRows - 1);
         for (const position of [first, last]) {
-            assert.ok(Math.abs(position[0] - surface.x) + 0.12 <= surface.w / 2 + 1e-9);
-            assert.ok(Math.abs(position[2] - surface.z) + 0.12 <= surface.d / 2 + 1e-9);
+            assert.ok(Math.abs(position[0] - node.x) + 0.12 <= node.w / 2 + 1e-9);
+            assert.ok(Math.abs(position[2] - node.z) + 0.12 <= node.d / 2 + 1e-9);
         }
-        if (queue) {
-            assert.equal(queue.detail, "DISPLAY BUFFER");
-            assert.ok(queue.z + queue.d / 2 < Math.min(node.z - node.d / 2, next.z - next.d / 2));
-            assert.ok(placement.connections.some((c) => c.from === node.id && c.to === queue.id));
-            assert.ok(placement.connections.some((c) => c.from === queue.id && c.to === next.id));
-            assert.equal(
-                placement.connections.some((c) => c.from === node.id && c.to === next.id),
-                false
-            );
-            for (const lane of [0, node.instructionRows - 1]) {
-                const entry = placement.frontEntryPosition(node, lane);
-                assert.ok(Math.abs(entry[0] - node.x) + 0.12 <= node.w / 2 + 1e-9);
-                assert.ok(Math.abs(entry[2] - node.z) + 0.12 <= node.d / 2 + 1e-9);
-            }
-        } else assert.equal(placement.frontEntryPosition(node, 0), null);
         assert.ok(first[0] >= last[0], "Younger fetch groups were nearer the frontend exit");
         assert.ok(first[2] <= last[2], "Instruction lanes reversed program order");
         if (node.instructionGroups > 1)
@@ -298,7 +281,7 @@ for (const [time, node] of [
 ]) {
     const positions = denseReplay.ops.map((op) => densePaths.positionAt(op, time));
     assert.equal(positions.filter(Boolean).length, 1200, `${node}: lost visible instructions`);
-    checkSpacing(positions, denseScene.frontendQueue(node) ?? denseScene.nodes.get(node), node);
+    checkSpacing(positions, denseScene.nodes.get(node), node);
 }
 checkSpacing(
     Array.from({ length: 2048 }, (_, slot) => denseScene.robCell(slot)),
@@ -358,61 +341,6 @@ denseSource.loadData({ ...denseTrace, ops: denseTrace.ops.slice(-16) }, { contin
 denseScene.buildLayout(true);
 assert.deepEqual(frontendBounds(), expandedFrontend, "A smaller window shrank the fetch-group layout");
 console.log("Dense scene: 1200 simultaneous instructions, 2048 ROB entries and 16 lanes passed");
-
-// Fの待機だけが増える窓でも、本体・入力・既存の前段を動かさない。
-const shortFetchTrace = {
-    ...denseTrace,
-    ops: denseTrace.ops.map((entry) => {
-        const op = structuredClone(entry);
-        op[6][0][3] = op[2] + 0.8;
-        op[6][1][2] = op[2] + 0.8;
-        return op;
-    })
-};
-const growthSource = createReplay({ samples: [shortFetchTrace] }),
-    growthReplay = growthSource.loadTrace("local-file"),
-    growthScene = createScene({ replay: growthReplay, session: denseSession });
-growthScene.buildLayout();
-const bodyShape = () =>
-    [...growthScene.nodes.values()]
-        .filter((node) => node.id !== "fetch-queue")
-        .map(({ id, x, z, w, d, h }) => ({ id, x, z, w, d, h }));
-const beforeBodies = bodyShape(),
-    beforeInput = growthScene.inputPosition(),
-    beforeBounds = growthScene.layoutBounds(false),
-    beforeQueue = { ...growthScene.frontendQueue("front-0") },
-    beforeExit = growthScene.frontInstructionPosition(growthScene.nodes.get("front-0"), 0, 0);
-assert.ok(beforeQueue.instructionGroups < denseTrace.ops.length / denseTrace.fetchWidth);
-growthSource.loadData(denseTrace, { continuityAt: 85 });
-growthScene.buildLayout(true);
-const afterQueue = growthScene.frontendQueue("front-0");
-assert.deepEqual(bodyShape(), beforeBodies, "Fetch waiting resized or moved a pipeline body");
-assert.deepEqual(growthScene.inputPosition(), beforeInput, "Fetch waiting moved the input stream");
-assert.deepEqual(growthScene.layoutBounds(false), beforeBounds, "Queue growth changed the main layout bounds");
-assert.ok(afterQueue.w > beforeQueue.w, "Extra waiting groups did not expand the display buffer");
-assert.equal(afterQueue.x + afterQueue.w / 2, beforeQueue.x + beforeQueue.w / 2, "Queue growth moved its exit");
-assert.deepEqual(
-    growthScene.frontInstructionPosition(growthScene.nodes.get("front-0"), 0, 0),
-    beforeExit,
-    "Queue growth moved the oldest group's seat"
-);
-checkFrontendLayout(growthScene, growthReplay);
-console.log("Fetch buffer: waiting growth preserved pipeline bodies, input, exit and camera bounds");
-
-const singleFrontTrace = {
-    ...denseTrace,
-    structure: { ...denseTrace.structure, frontNodes: [denseTrace.structure.frontNodes[0]] },
-    ops: denseTrace.ops.slice(0, 16).map((entry) => {
-        const op = structuredClone(entry);
-        op[6] = op[6].filter((stage) => stage[1] !== "front-1");
-        return op;
-    })
-};
-const singleReplay = createReplay({ samples: [singleFrontTrace] }).loadTrace("local-file"),
-    singleScene = createScene({ replay: singleReplay, session: denseSession });
-singleScene.buildLayout();
-assert.equal(singleScene.frontendQueue("front-0"), null, "A buffer was added without a following frontend stage");
-assert.equal(singleScene.nodes.has("fetch-queue"), false);
 
 const completedWithoutIssue = {
     ...denseTrace,
