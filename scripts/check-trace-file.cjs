@@ -1,7 +1,7 @@
 "use strict";
 // 実際のパーサーを通し、EOF・逐次入力・区間変換とセッションの取消を検査する。
 const assert = require("node:assert/strict");
-const { createFileSession } = require("../src/trace-file.cts");
+const { createFileSession, remoteInput } = require("../src/trace-file.cts");
 const { overviewTotals, overviewBin, controlledInput, mailbox, kanataOp, request } = require("./trace-test.cjs");
 
 async function checkEOF() {
@@ -474,7 +474,41 @@ async function checkFileStructure() {
     }
 }
 
+async function checkRemoteStream() {
+    const input = { url: "http://127.0.0.1:4173/trace1", name: "remote.kanata", size: 200 };
+    for (const invalid of [
+        { url: "file:///tmp/trace" },
+        { url: "https://user:secret@example.com/trace" },
+        { size: 0 },
+        { size: Infinity }
+    ])
+        assert.throws(() => remoteInput({ ...input, ...invalid }), /Invalid trace source/);
+    const original = globalThis.fetch;
+    const controller = new AbortController();
+    const stream = new ReadableStream();
+    try {
+        globalThis.fetch = async (url, options) => {
+            assert.equal(url.href, input.url);
+            assert.equal(options.signal, controller.signal);
+            assert.equal(options.redirect, "error", "Remote trace followed a redirect");
+            // 巨大ログをBlobやArrayBufferへ変換せず、同じbodyを解析器へ渡す。
+            return { ok: true, body: stream };
+        };
+        const remote = remoteInput(input);
+        assert.equal(remote.name, input.name);
+        assert.equal(remote.size, input.size);
+        assert.equal(await remote.stream(controller.signal), stream);
+        globalThis.fetch = async () => ({ ok: false, status: 404 });
+        await assert.rejects(remote.stream(controller.signal), /Could not load the trace.*404/);
+        globalThis.fetch = async () => ({ ok: true, body: null });
+        await assert.rejects(remote.stream(controller.signal), /no body/);
+    } finally {
+        globalThis.fetch = original;
+    }
+}
+
 async function check() {
+    await checkRemoteStream();
     await checkEOF();
     await checkStoreWaitSession();
     await checkSearchSession();

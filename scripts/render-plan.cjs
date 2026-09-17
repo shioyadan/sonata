@@ -1,7 +1,19 @@
 "use strict";
 const path = require("node:path");
 // 検査範囲の選択はElectron起動前に検証する。単独実行に無関係なsuiteを足さない。
-const full = ["demos", "desktop", "evidence", "mobile", "motion", "browser", "styles", "transfers", "memory", "import"];
+const full = [
+    "demos",
+    "desktop",
+    "evidence",
+    "mobile",
+    "motion",
+    "browser",
+    "styles",
+    "transfers",
+    "memory",
+    "import",
+    "launcher"
+];
 const sections = [
     ...full,
     "smoke",
@@ -12,7 +24,7 @@ const sections = [
     "import-layout"
 ];
 const aliases = {
-    smoke: ["demos", "smoke", "import-basic"],
+    smoke: ["demos", "smoke", "import-basic", "launcher"],
     mobile: ["mobile"],
     styles: ["styles"],
     browser: ["browser"],
@@ -22,7 +34,8 @@ const aliases = {
     motion: ["motion"],
     memory: ["memory"],
     transfers: ["transfers"],
-    demos: ["demos"]
+    demos: ["demos"],
+    launcher: ["launcher"]
 };
 // Electronは自身のスイッチをスクリプトの前にも残すため、実行ファイルの位置から引数を取る。
 function scriptArguments(argv, filename) {

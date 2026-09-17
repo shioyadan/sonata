@@ -386,7 +386,7 @@ function createNavigation({
             })
         );
     }
-    function reset(file?: File) {
+    function reset(file?: Pick<File, "name" | "size" | "lastModified">) {
         source = null;
         view = null;
         history = [];

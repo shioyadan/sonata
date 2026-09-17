@@ -38,6 +38,7 @@ function createTraceImport({
         endInteraction: refreshWindow
     });
     let worker: Worker | null = null;
+    let opening: AbortController | null = null;
     let source: files.Metadata | null = null;
     let serial = 0;
     let searchID = 0;
@@ -103,7 +104,16 @@ function createTraceImport({
         element("file-window-status").textContent = text;
         element("file-window-status").hidden = !text;
     }
+    function cancelOpening() {
+        opening?.abort();
+        if (!opening) return;
+        opening = null;
+        loading = false;
+        reading = "";
+        updateStatus();
+    }
     function close() {
+        cancelOpening();
         serial++;
         searchID++;
         const previous = worker;
@@ -393,6 +403,61 @@ function createTraceImport({
         progress.value = 0;
         reading = `Reading ${file.name}…`;
         updateStatus();
+        startReader({ type: "open", file }, file.name);
+    }
+    async function openLauncher() {
+        if (!["http:", "https:"].includes(location.protocol)) return;
+        reset("open");
+        pause();
+        const controller = new AbortController();
+        opening = controller;
+        loading = true;
+        progress.value = 0;
+        reading = "Opening launcher trace…";
+        updateStatus();
+        try {
+            // helperの固定endpointだけを使い、fragmentや応答中のURLは通信先にしない。
+            const response = await fetch(new URL("/trace-info", location.href), {
+                signal: controller.signal,
+                redirect: "error"
+            });
+            if (!response.ok) throw new Error(`Could not open the launcher trace. HTTP ${response.status}.`);
+            const info: unknown = await response.json();
+            if (opening !== controller) return;
+            if (
+                !info ||
+                typeof info !== "object" ||
+                !("name" in info) ||
+                typeof info.name !== "string" ||
+                !info.name ||
+                !("size" in info) ||
+                typeof info.size !== "number" ||
+                !Number.isSafeInteger(info.size) ||
+                info.size <= 0 ||
+                !("lastModified" in info) ||
+                typeof info.lastModified !== "number" ||
+                !Number.isSafeInteger(info.lastModified) ||
+                info.lastModified < 0
+            )
+                throw new Error("The launcher returned invalid trace metadata.");
+            opening = null;
+            navigation.reset({ name: info.name, size: info.size, lastModified: info.lastModified });
+            reading = `Reading ${info.name}…`;
+            updateStatus();
+            startReader(
+                {
+                    type: "open",
+                    remote: { name: info.name, size: info.size, url: new URL("/trace1", location.href).href }
+                },
+                info.name
+            );
+        } catch (error) {
+            if (opening !== controller) return;
+            reset("error");
+            fail(error instanceof Error ? error.message : String(error));
+        }
+    }
+    function startReader(request: Extract<files.WorkerRequest, { type: "open" }>, name: string) {
         const url = URL.createObjectURL(new Blob([globalThis.sonataTraceWorkerSource], { type: "text/javascript" }));
         let next: Worker;
         try {
@@ -416,7 +481,7 @@ function createTraceImport({
             const response = event.data;
             if (response.type === "progress") {
                 progress.value = response.progress.value;
-                reading = `${response.progress.phase === "reading" ? "Reading" : "Indexing"} ${file.name} · ${Math.floor(response.progress.value * 100)}%`;
+                reading = `${response.progress.phase === "reading" ? "Reading" : "Indexing"} ${name} · ${Math.floor(response.progress.value * 100)}%`;
                 updateStatus();
             } else if (response.type === "loaded") {
                 const previous = source;
@@ -458,7 +523,7 @@ function createTraceImport({
                 }
             }
         };
-        next.postMessage({ type: "open", file } satisfies files.WorkerRequest);
+        next.postMessage(request);
     }
     element("trace-open").addEventListener("click", () => input.click());
     input.addEventListener("change", () => {
@@ -490,6 +555,8 @@ function createTraceImport({
     return {
         close,
         openFile,
+        openLauncher,
+        cancelOpening,
         selectWindow,
         advance,
         seek,

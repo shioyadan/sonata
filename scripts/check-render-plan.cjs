@@ -11,9 +11,10 @@ assert.deepEqual(selectSections([]), [
     "styles",
     "transfers",
     "memory",
-    "import"
+    "import",
+    "launcher"
 ]);
-assert.deepEqual(selectSections(["--smoke"]), ["demos", "smoke", "import-basic"]);
+assert.deepEqual(selectSections(["--smoke"]), ["demos", "smoke", "import-basic", "launcher"]);
 for (const name of [
     "mobile",
     "styles",
@@ -24,7 +25,8 @@ for (const name of [
     "motion",
     "memory",
     "transfers",
-    "demos"
+    "demos",
+    "launcher"
 ])
     assert.deepEqual(selectSections([`--${name}`]), [name], `${name}: unrelated tests ran in a focused review`);
 assert.deepEqual(selectSections(["--sections=memory,import-streaming"]), ["memory", "import-streaming"]);
@@ -53,7 +55,7 @@ for (const argv of [
     ["electron", entry, "--smoke"],
     ["electron", "--no-sandbox", entry, "--smoke"]
 ])
-    assert.deepEqual(selectSections(scriptArguments(argv, entry)), ["demos", "smoke", "import-basic"]);
+    assert.deepEqual(selectSections(scriptArguments(argv, entry)), ["demos", "smoke", "import-basic", "launcher"]);
 assert.throws(() => scriptArguments(["electron", "--smoke"], entry), /not found/);
 
 console.log("Render scope selection and invalid-option rejection passed");

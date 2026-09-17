@@ -120,6 +120,7 @@ app.whenReady()
             memory: () => require("./check-memory-render.cjs")(window, screenshots),
             transfers: () => require("./check-stage-transfers.cjs").all(window),
             smoke: () => load("check-smoke.cts")(window, screenshots, begin),
+            launcher: () => load("check-launcher-render.cts")(window, screenshots, (url) => allowedURLs.add(url)),
             import: () => load("check-import.cts")(window, screenshots)
         };
         for (const group of ["basic", "navigation", "streaming", "playback", "layout"])
@@ -129,7 +130,7 @@ app.whenReady()
             const done = begin(name);
             // 直前のsuiteの選択・速度・画面幅に依存せず、単独でも同じ初期状態から検査する。
             window.setSize(1440, 1000);
-            if (!["demos", "motion", "browser", "styles"].includes(name)) {
+            if (!["demos", "motion", "browser", "styles", "launcher"].includes(name)) {
                 await loadPage(window, entry);
                 await waitFor(
                     () =>

@@ -890,15 +890,15 @@ function remoteInput(input: RemoteInput): core.TraceInput {
         !Number.isSafeInteger(input.size) ||
         input.size <= 0
     )
-        throw new Error("Invalid sample source.");
+        throw new Error("Invalid trace source.");
     return {
         name: input.name,
         size: input.size,
         type: "application/octet-stream",
         async stream(signal) {
             const response = await fetch(url, { signal, redirect: "error" });
-            if (!response.ok) throw new Error(`Could not load the sample. HTTP ${response.status}.`);
-            if (!response.body) throw new Error("The sample response has no body.");
+            if (!response.ok) throw new Error(`Could not load the trace. HTTP ${response.status}.`);
+            if (!response.body) throw new Error("The trace response has no body.");
             return response.body;
         }
     };

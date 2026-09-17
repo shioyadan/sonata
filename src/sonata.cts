@@ -251,6 +251,7 @@ function start(gl: WebGL2RenderingContext) {
             cancelDemo();
             return;
         }
+        fileImport.cancelOpening();
         const request = demoLoader.load(key);
         const revision = demoLoader.revision;
         retryDemo = "";
@@ -571,7 +572,8 @@ function start(gl: WebGL2RenderingContext) {
         else cancelDemo();
     }
     window.addEventListener("hashchange", readDemoLink);
-    readDemoLink();
+    if (new URLSearchParams(location.hash.slice(1)).get("trace") === "1") void fileImport.openLauncher();
+    else readDemoLink();
     return diagnostics;
     // シーンの DOM ラベル、情報パネルとタイムライン。
     // loadTrace → rebuildWorld → render が設定した状態・要素を参照する。
@@ -1323,6 +1325,7 @@ function start(gl: WebGL2RenderingContext) {
             setCycle: clock.setCycle,
             setPlaying: clock.setPlaying,
             loadTrace,
+            openLauncherTrace: fileImport.openLauncher,
             get fileImport() {
                 return {
                     source: fileImport.source,
