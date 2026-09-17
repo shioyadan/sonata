@@ -2,6 +2,7 @@
 // 記録時刻から再生状態を復元し、同梱デモを配置で使う構造へ準備する。
 import geometry = require("./geometry.cts");
 import memoryModel = require("./memory.cts");
+import frontendModel = require("./frontend.cts");
 const { stageTransition } = geometry;
 const feedRows = 24,
     feedLead = 0.7;
@@ -1098,26 +1099,6 @@ function prepareTrace(trace: TraceData, continuity?: { at: number; replay: Repla
         return ends.length;
     }
 
-    function allocateFrontSlots() {
-        const endsByNode = new Map<string, number[]>();
-        const entries = ops.flatMap((op) =>
-            op.stages.flatMap((stage, index) =>
-                stage.names.includes("Rn") || (trace.key === "local-file" && stage.node.startsWith("front-"))
-                    ? [{ op, stage, next: op.stages[index + 1] }]
-                    : []
-            )
-        );
-        // 同時に滞在する命令を別々に置く。退場の補間中も元の場所を再利用しない。
-        for (const { op, stage, next } of entries.sort((a, b) => a.stage.start - b.stage.start || a.op.id - b.op.id)) {
-            const ends = endsByNode.get(stage.node) ?? [];
-            endsByNode.set(stage.node, ends);
-            let slot = ends.findIndex((end) => end <= stage.start);
-            if (slot < 0) slot = ends.length;
-            stage.displaySlot = slot;
-            ends[slot] = Math.min(op.end, next ? next.start + stageTransition(next) : stage.end);
-        }
-    }
-
     const ops: Instruction[] = trace.ops.map((t, index) => {
         const [
             id,
@@ -1187,7 +1168,11 @@ function prepareTrace(trace: TraceData, continuity?: { at: number; replay: Repla
         };
     });
     const memory = memoryModel.prepareMemory(ops, trace);
-    allocateFrontSlots();
+    const frontend = frontendModel.prepareFrontend(
+        ops,
+        trace,
+        continuity ? { at: continuity.at, frontend: continuity.replay.frontend } : undefined
+    );
     const commitGroups = new Map();
     for (const op of ops
         .filter((o) => !o.flush && !o.unfinished)
@@ -1255,12 +1240,7 @@ function prepareTrace(trace: TraceData, continuity?: { at: number; replay: Repla
         trace = { ...trace, structure: { ...trace.structure, queueCapacity } };
     const schedulers: SchedulerLayout[] = [{ id: "issue", offset: 0, capacity: queueCapacity }];
     if (continuity || trace.key === "local-file") {
-        const displayNodes = [
-            ...trace.structure.frontNodes
-                .filter((node) => trace.key === "local-file" || node.names.includes("Rn"))
-                .map((node) => node.id),
-            "memory-wait"
-        ];
+        const displayNodes = ["memory-wait"];
         for (const node of displayNodes) {
             const uses = ops.flatMap((op) =>
                 op.stages.flatMap((stage, index): SlotUse[] => {
@@ -1281,7 +1261,7 @@ function prepareTrace(trace: TraceData, continuity?: { at: number; replay: Repla
                     ];
                 })
             );
-            const count = preserveSlots(uses, at, node.startsWith("front-") ? 4096 : 512);
+            const count = preserveSlots(uses, at, 512);
             if (node === "memory-wait" && count !== null) memory.waitSlots.load = count;
         }
         for (const node of memory.executionNodes.filter((node) => node.kind === "memory")) {
@@ -1406,6 +1386,7 @@ function prepareTrace(trace: TraceData, continuity?: { at: number; replay: Repla
         trace,
         ops,
         schedulers,
+        frontend,
         memory,
         commitGroups,
         feedOps,
@@ -1430,6 +1411,7 @@ interface SchedulerLayout {
 
 interface ReplayState {
     schedulers: SchedulerLayout[];
+    frontend: ReturnType<typeof frontendModel.prepareFrontend>;
     trace: TraceData;
     ops: Instruction[];
     memory: ReturnType<typeof memoryModel.prepareMemory>;

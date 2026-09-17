@@ -96,7 +96,7 @@ const immutable = JSON.stringify([initial, next]);
 const test = fixture(initial);
 const times = [8, 10.2, 10.8, 11.2, 11.8, 12.2, 13.2];
 const before = positions(test, times);
-const oldSlots = test.replay.ops.slice(1).map((op) => [op.id, op.issueSlot, op.robSlot, op.stages[1].displaySlot]);
+const oldSlots = test.replay.ops.slice(1).map((op) => [op.id, op.issueSlot, op.robSlot]);
 const unaligned = fixture(next);
 assert.notDeepEqual(
     unaligned.replay.ops.map((op) => op.robSlot),
@@ -111,7 +111,7 @@ assert.notDeepEqual(
 test.source.loadData(next, { continuityAt: 8 });
 equivalent(before, test, times, [1, 2, 3]);
 assert.deepEqual(
-    test.replay.ops.map((op) => [op.id, op.issueSlot, op.robSlot, op.stages[1].displaySlot]),
+    test.replay.ops.map((op) => [op.id, op.issueSlot, op.robSlot]),
     oldSlots
 );
 fifo(test.replay);
@@ -130,14 +130,17 @@ test.source.loadData(initial);
 test.source.loadData(next, { continuityAt: 100 });
 assert.deepEqual(test.replay.ops, unaligned.replay.ops);
 
-// 追加された古い命令も、継続命令のRn予約を奪わない。退場補間中も別の場所を使う。
+// 後着の古い命令はRnの順序を優先して挿入し、退場補間中も束の行を分ける。
 const retained = operation(11, 1, 4, 8, 12);
 const added = operation(10, 0, 3.5, 5, 6);
 const partial = fixture(trace([retained]));
-const rnBefore = positions(partial, [3.8, 4.4]);
+const rnBefore = partial.replay.frontend.position(11, "front-1", 3.8);
 partial.source.loadData(trace([added, retained]), { continuityAt: 3.8 });
-equivalent(rnBefore, partial, [3.8, 4.4], [11]);
-assert.notEqual(partial.replay.ops[0].stages[1].displaySlot, partial.replay.ops[1].stages[1].displaySlot);
+assert.equal(rnBefore.row, 0);
+assert.equal(partial.replay.frontend.position(10, "front-1", 3.8).row, 0);
+assert.equal(partial.replay.frontend.position(11, "front-1", 3.8).row, 1);
+const compacting = partial.replay.frontend.position(11, "front-1", 4.4).row;
+assert.ok(compacting > 0 && compacting < 1, "Rn did not advance smoothly after the older bundle left");
 const slotsBefore = partial.replay.ops.map((op) => op.issueSlot);
 assert.equal(new Set(slotsBefore).size, 2, "New instruction reused an occupied scheduler slot");
 fifo(partial.replay);
