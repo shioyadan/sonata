@@ -36,7 +36,7 @@ def build_archive(root, output):
             raise ValueError(f"Sample size differs from the catalog: {url}")
         samples[url] = content
     payload = {"sonata.html": html, **samples}
-    for name in ["sonata.sh", "scripts/launcher.py", "README.md", "LICENSE.md", "THIRD_PARTY_NOTICES.md"]:
+    for name in ["sonata.sh", "README.md", "LICENSE.md", "THIRD_PARTY_NOTICES.md"]:
         payload[name] = (root / name).read_bytes()
     manifest = {
         "version": 1,

@@ -108,7 +108,7 @@ SONATA_HOST=0.0.0.0 npm start
 
 ### 起動ヘルパーと配布ZIP
 
-`./sonata.sh [TRACE]` はBashから `scripts/launcher.py` を起動します。Python 3.9以降の標準機能で、本体・カタログのサンプル・指定したトレース1本だけを配信します。ソースでは `dist/sonata.html`、展開した配布版では隣の `sonata.html` を使い、自動ビルドはしません。待ち受けは `127.0.0.1`、ポート未指定時はbind時に空きを選び、`SONATA_PORT` で固定できます。`SONATA_HOST` はこのヘルパーでは使いません。
+`./sonata.sh [TRACE]` はBashから同じファイルに内包したPythonコードを実行します。起動・配信・更新はこの1ファイルで完結し、Python 3.9以降の標準機能で、本体・カタログのサンプル・指定したトレース1本だけを配信します。ソースでは `dist/sonata.html`、展開した配布版では隣の `sonata.html` を使い、自動ビルドはしません。待ち受けは `127.0.0.1`、ポート未指定時はbind時に空きを選び、`SONATA_PORT` で固定できます。`SONATA_HOST` はこのヘルパーでは使いません。
 
 指定トレースは固定の `/trace1` で元の圧縮バイト列を配信し、`/trace-info` にはbasename・サイズ・更新日時だけを返します。絶対パスやディレクトリ一覧は返しません。起動URLの `#trace=1` を受けたブラウザが同じoriginのこの2経路を使い、Fileと共通のWorkerで逐次解析します。任意URLをhashやメタ情報から組み立てず、読込みの取消し・ファイル切替では古い要求を無効化します。
 
@@ -119,7 +119,7 @@ npm run package
 npm run test:launcher
 ```
 
-`npm run package` は通常ビルドに続いてPython標準のzipfileで `dist/sonata-latest.zip` を作ります。Git・Node・Pythonが必要ですが、npm依存のインストールは不要です。ZIPには `sonata-latest/` の下に本体HTML、サンプル、`sonata.sh`、`scripts/launcher.py`、README、権利表示、`build.json` を含めます。`build.json` はHEADのコミット・時刻・日付と、各配布ファイルのサイズ・SHA256を記録します。同じ入力とコミットから同じZIPを作り、完成前に既存ZIPを上書きしません。ローカルの作業差分も梱包されるため、公開にはCIで検証したコミットの生成物を使います。
+`npm run package` は通常ビルドの後、開発用の `scripts/package.py` を実行します。Python標準のzipfileで `dist/sonata-latest.zip` を作ります。Git・Node・Pythonが必要ですが、npm依存のインストールは不要です。ZIPには `sonata-latest/` の下に本体HTML、サンプル、`sonata.sh`、README、権利表示、`build.json` を含めます。`build.json` はHEADのコミット・時刻・日付と、各配布ファイルのサイズ・SHA256を記録します。同じ入力とコミットから同じZIPを作り、完成前に既存ZIPを上書きしません。ローカルの作業差分も梱包されるため、公開にはCIで検証したコミットの生成物を使います。
 
 `--update` は配布版だけを更新します。既定の取得先は `https://shioyadan.github.io/sonata/sonata-latest.zip`、`SONATA_UPDATE_URL` は検証・別の配布先用です。新旧の情報と変更ファイルを示して確認し、ZIPの許可経路・サイズ・ハッシュを照合してから置換します。ソースのチェックアウト、破損・不完全なZIP、経路逸脱を拒否します。更新対象は配布ファイルだけで、途中の置換失敗は元に戻します。通常の `npm run build` は従来どおりNode標準機能だけで完結します。
 
