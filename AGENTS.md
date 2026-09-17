@@ -51,6 +51,7 @@ Node は `.nvmrc`、依存は `package-lock.json` を基準にする。必要な
 | TypeScript、型検査設定 | `npm run typecheck` と変更対象の実行時検証 |
 | 再生モデル、ビルド、ライセンス、データ、vendor | `npm test` |
 | プレビューサーバー | `npm run test:server` |
+| 起動ヘルパー、更新、配布ZIP | `npm run test:launcher` |
 | 描画、DOM、CSS、操作、描画検査スクリプト | `npm run test:render` |
 | モバイルだけの調整 | 作業中は `npm run test:mobile`、最終確認はデスクトップへの復帰も含む |
 | キーボード、ダイアログ、描画の障害対応 | 作業中は `npm run test:browser`、最終確認はこれらを含む `npm run test:render` |
@@ -58,7 +59,7 @@ Node は `.nvmrc`、依存は `package-lock.json` を基準にする。必要な
 
 画面のない Linux では `xvfb-run -a -s '-screen 0 1600x1100x24' npm run test:render` を使う。検証範囲と未検証の環境を区別して報告する。非同期の画面変化は、制限時間内で実状態を待ち、assertion を削って通さない。
 
-通常のpush / pull requestのCIは、モデル・ビルド・型・サーバーと `npm run test:smoke` の基本描画検査を行う。全描画検査はローカルで上表に従って実行し、CIでは手動実行の `full_render` を選んだ場合だけ行う。基本検査の成功を全描画検査の成功と扱わず、CIの予算を増やすためだけに通常検査の時間上限を延長しない。
+通常のpush / pull requestのCIは、モデル・ビルド・型・サーバー・起動ヘルパーと `npm run test:smoke` の基本描画検査を行う。全描画検査はローカルで上表に従って実行し、CIでは手動実行の `full_render` を選んだ場合だけ行う。基本検査の成功を全描画検査の成功と扱わず、CIの予算を増やすためだけに通常検査の時間上限を延長しない。
 
 ## 記録と公開
 

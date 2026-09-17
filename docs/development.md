@@ -106,6 +106,23 @@ SONATA_HOST=0.0.0.0 npm start
 
 端末のブラウザで開発マシンの IP アドレスとポート4173を開きます。
 
+### 起動ヘルパーと配布ZIP
+
+`./sonata.sh [TRACE]` はBashから `scripts/launcher.py` を起動します。Python 3.9以降の標準機能で、本体・カタログのサンプル・指定したトレース1本だけを配信します。ソースでは `dist/sonata.html`、展開した配布版では隣の `sonata.html` を使い、自動ビルドはしません。待ち受けは `127.0.0.1`、ポート未指定時はbind時に空きを選び、`SONATA_PORT` で固定できます。`SONATA_HOST` はこのヘルパーでは使いません。
+
+指定トレースは固定の `/trace1` で元の圧縮バイト列を配信し、`/trace-info` にはbasename・サイズ・更新日時だけを返します。絶対パスやディレクトリ一覧は返しません。起動URLの `#trace=1` を受けたブラウザが同じoriginのこの2経路を使い、Fileと共通のWorkerで逐次解析します。任意URLをhashやメタ情報から組み立てず、読込みの取消し・ファイル切替では古い要求を無効化します。
+
+```sh
+npm run build
+./sonata.sh /path/to/trace.log.gz
+npm run package
+npm run test:launcher
+```
+
+`npm run package` は通常ビルドに続いてPython標準のzipfileで `dist/sonata-latest.zip` を作ります。Git・Node・Pythonが必要ですが、npm依存のインストールは不要です。ZIPには `sonata-latest/` の下に本体HTML、サンプル、`sonata.sh`、`scripts/launcher.py`、README、権利表示、`build.json` を含めます。`build.json` はHEADのコミット・時刻・日付と、各配布ファイルのサイズ・SHA256を記録します。同じ入力とコミットから同じZIPを作り、完成前に既存ZIPを上書きしません。ローカルの作業差分も梱包されるため、公開にはCIで検証したコミットの生成物を使います。
+
+`--update` は配布版だけを更新します。既定の取得先は `https://shioyadan.github.io/sonata/sonata-latest.zip`、`SONATA_UPDATE_URL` は検証・別の配布先用です。新旧の情報と変更ファイルを示して確認し、ZIPの許可経路・サイズ・ハッシュを照合してから置換します。ソースのチェックアウト、破損・不完全なZIP、経路逸脱を拒否します。更新対象は配布ファイルだけで、途中の置換失敗は元に戻します。通常の `npm run build` は従来どおりNode標準機能だけで完結します。
+
 生トレースの再生成は `npm run demos:generate`（`scripts/generate-samples.cjs`）で行います。元ログの配置とprefixの保持方法は [データの再生成](../data/README.md#再生成) を参照してください。通常ビルド・表示だけの変更に元ログは不要です。
 
 ## 型検査
@@ -133,6 +150,8 @@ npm run typecheck
 | --- | --- |
 | CPUの状態・早送り計算 | `npm test -- model playback` |
 | 索引・逐次File・Worker要求 | `npm test -- trace-index trace-file trace-worker` |
+| 起動・Web配信・更新用ZIP | `npm run test:launcher` |
+| ヘルパーからの逐次読込み・取消 | `npm run test:render -- --sections=launcher` |
 | 起動・代表画面・基本File形式 | `npm run test:smoke` |
 | キー・カメラ・WebGL障害 | `npm run test:browser` |
 | 材質・接地・影・スタイル切替 | `npm run test:styles` |
@@ -149,6 +168,8 @@ npm run typecheck
 `scripts/check-scene.cjs` は旧5デモのCPU回帰fixtureの配置と命令経路を DOM / GPU なしで準備し、別のインスタンスへの状態混入と元データの変更を検出します。未読込み・空の一覧・読込み失敗時の状態保持と、再読込み後も配置が同じ参照を使えることも確認します。`scripts/check-bundle.cjs` は独立した JavaScript 環境で相対パス、変数スコープ、一度だけの実行、循環参照、不正な参照の拒否を確認します。`scripts/check-browser-test.cjs` はページ内関数の引数・Promise・例外の受け渡しと、フレーム待機・期限超過時の診断を別のJavaScript実行環境で確認します。条件・診断・描画の無応答、期限後の結果と例外、期限タイマーの回収も検査します。いずれも `npm test` に含まれます。
 
 Node の推奨バージョンは `.nvmrc` に固定し、セキュリティ修正版へ更新します。`npm run test:server` はローカルでサーバーを起動し、本体・全サンプルのGET / HEAD、ソースと一覧外のファイルの非公開、未対応メソッドと不正な URL の拒否、異常なリクエスト後も配信が継続することを確認します。
+
+`npm run test:launcher` はPythonでヘルパーの実HTTP配信と更新・取消・破損ZIPを検証し、更新用ZIPの内容・実行属性・ハッシュ・再現性を確認します。更新先は一時ディレクトリに作ったZIPへ置き換え、実サイトや利用中の配布物は変更しません。描画検査の `launcher` は実ヘルパーの指定トレースをブラウザで開き、圧縮・区間移動・取消しと古い応答の競合を確認します。全描画と基本検査の両方に含めます。
 
 `THIRD_PARTY_NOTICES.md` と `licenses/` の原文は、配布 HTML の **Licenses** パネルへ埋め込みます。デモの元プログラムやライセンスが変わった場合はこれらも更新し、`npm test` で全文の保持を確認してください。
 
@@ -216,9 +237,9 @@ Konata の解析コードを更新する場合は [vendor の手順](../vendor/k
 
 公開先は https://shioyadan.github.io/sonata/ です。初回公開前に GitHub リポジトリの **Settings → Pages → Build and deployment → Source** を **GitHub Actions** に設定してください。
 
-`.github/workflows/ci.yml` は `main` への push または手動実行でモデル・ビルド・サーバーと、選択された範囲の描画を検証し、成功した同じコミットから `dist/sonata.html` を生成して、Pages の `index.html` として、`dist/samples/` を隣の `samples/` として公開します。pull request は検証だけを行います。通常は基本描画検査、手動で `full_render` を選んだ場合は全描画検査が公開条件です。Pagesジョブの上限は5分です。公開するデータは検証済みのgzip5本に限定し、依存パッケージやソース、抜粋前の大きな元ログを公開用ディレクトリへコピーしません。
+`.github/workflows/ci.yml` は `main` への push または手動実行でモデル・ビルド・サーバー・起動ヘルパーと、選択された範囲の描画を検証します。成功した同じコミットから `npm run package` で配布物を生成し、`dist/sonata.html` をPagesの `index.html`、`dist/samples/` を隣の `samples/` として、`dist/sonata-latest.zip` も同じ場所へ公開します。pull request は検証だけを行います。通常は基本描画検査、手動で `full_render` を選んだ場合は全描画検査が公開条件です。Pagesジョブの上限は5分です。トレースは検証済みのgzip5本に限定し、依存パッケージやアプリのソース、抜粋前の大きな元ログを公開用ディレクトリへコピーしません。
 
-README 冒頭の **ライブデモ** はこの公開先へリンクします。push 後は GitHub Actions で対象コミットの `verify` と `pages` が成功したことを確認し、公開 URL の応答、生成 HTML の内容、カタログにあるgzip5本のサイズ・ハッシュを確認します。`verify` が失敗した場合は `pages` がスキップされ、初回は未公開、既存サイトがある場合は前の公開内容が維持されます。
+README 冒頭の **ライブデモ** はこの公開先へリンクします。push 後は GitHub Actions で対象コミットの `verify` と `pages` が成功したことを確認し、公開 URL の応答、生成 HTML の内容、カタログにあるgzip5本のサイズ・ハッシュ、更新用ZIPの `build.json` にあるコミットと内容を確認します。`verify` が失敗した場合は `pages` がスキップされ、初回は未公開、既存サイトがある場合は前の公開内容が維持されます。
 
 ## 任意トレースとCoreの更新
 

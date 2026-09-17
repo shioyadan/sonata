@@ -37,6 +37,8 @@ jobs:
         run: npm test
       - name: Check preview server and malformed requests
         run: npm run test:server
+      - name: Check launcher, local trace server and distribution updates
+        run: npm run test:launcher
       - name: Check basic desktop, mobile and offline playback
         if: ${{ github.event_name != 'workflow_dispatch' || !inputs.full_render }}
         timeout-minutes: 3
@@ -81,13 +83,14 @@ jobs:
       - uses: actions/setup-node@v6
         with:
           node-version-file: .nvmrc
-      # 検証済みのコミットを Node だけでビルドし、実行時の依存パッケージは含めない。
-      - name: Build the live demo and raw trace samples
+      # HTMLはNode標準機能、更新用ZIPはPython標準機能で作り、開発依存を配布しない。
+      - name: Build the live demo, raw samples and launcher archive
         run: |
-          npm run build
+          npm run package
           mkdir -p artifacts/pages
           cp dist/sonata.html artifacts/pages/index.html
           cp -R dist/samples artifacts/pages/samples
+          cp dist/sonata-latest.zip artifacts/pages/sonata-latest.zip
       - uses: actions/configure-pages@v6
       - uses: actions/upload-pages-artifact@v5
         with:

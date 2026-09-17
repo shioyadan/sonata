@@ -2,6 +2,8 @@
 
 `Open trace…` とファイルのドロップで、Konataと同じKanata / Onikiri、gem5 O3PipeViewを読み込みます。Kanataの形式不一致だけをgem5へ渡し、壊れた圧縮データや読込みエラーを形式不一致として握りつぶしません。gzipとZstandardはストリーム展開します。URL入力やファイルのアップロードは行いません。
 
+`./sonata.sh TRACE` のURLは `#trace=1` で起動し、同一originの `/trace-info` から名前・サイズ・更新時刻を得て、固定の `/trace1` をWorkerへ渡します。応答をBlobへ一括取得せず、Fileと同じ逐次解析・区間操作を使います。metadata取得中の取消や新しいFile・デモへの切替えはAbortと要求の所有者で管理し、遅い応答を採用しません。hashやmetadataから任意のURLを開く機能は持たせず、`file://` では取得しません。ページの再読込みで指定トレースを再解析します。
+
 ## 保存と表示の境界
 
 - `src/trace-import.cts` はFile選択、進捗、取消、区間要求と先読みを所有します。

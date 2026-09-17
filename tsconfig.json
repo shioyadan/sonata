@@ -18,6 +18,7 @@
     "scripts/check-navigation.cts",
     "scripts/check-file-playback.cts",
     "scripts/browser-test.cts",
-    "scripts/check-demo-loading.cts"
+    "scripts/check-demo-loading.cts",
+    "scripts/check-launcher-render.cts"
   ]
 }

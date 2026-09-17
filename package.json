@@ -14,9 +14,11 @@
   },
   "scripts": {
     "build": "node scripts/build.cjs",
+    "package": "node scripts/build.cjs && python3 scripts/package.py",
     "start": "node scripts/serve.cjs",
     "test": "node scripts/test.cjs",
     "test:server": "node scripts/check-server.cjs",
+    "test:launcher": "python3 scripts/check-launcher.py && python3 scripts/check-package.py",
     "test:render": "electron --no-sandbox scripts/render.cjs",
     "test:smoke": "electron --no-sandbox scripts/render.cjs --smoke",
     "test:mobile": "electron --no-sandbox scripts/render.cjs --mobile",

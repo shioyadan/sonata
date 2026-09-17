@@ -6,6 +6,7 @@
 /task/
 /coverage/
 /.cache/
+__pycache__/
 .env
 .env.*
 !.env.example
