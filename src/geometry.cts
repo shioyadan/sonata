@@ -65,7 +65,11 @@ interface PathReplay<T extends PathOperation = PathOperation> {
     ops: T[];
     trace: { firstCycle: number; fetchWidth: number };
     frontend: {
+        readonly fetchNode: string | null;
+        readonly fetchCapacity: number;
         stages: Map<string, { capacity: number }>;
+        admission(id: number): { start: number; end: number } | null;
+        passage(id: number): { index: number; count: number } | null;
         position(id: number, node: string, time: number): { row: number; lane: number } | null;
     };
 }
@@ -447,6 +451,64 @@ function createPaths<T extends PathOperation>({
     replay: PathReplay<T>;
     session: PathSession;
 }) {
+    function entryTime(op: PathOperation, stage: PathStage) {
+        const admission = stage.node === replay.frontend.fetchNode ? replay.frontend.admission(op.id) : null;
+        const start = admission?.start ?? stage.start;
+        return {
+            start,
+            end: admission ? Math.min(stage.end, start + stageTransition(stage)) : start + stageTransition(stage)
+        };
+    }
+
+    function entrySource(op: PathOperation, stage: PathStage, target: Vec3): Vec3 {
+        const previous = op.stages[op.stages.indexOf(stage) - 1];
+        // 満杯で待った命令は、前段の駒と重複させず入力側の文字帯から入れる。
+        if (previous && entryTime(op, stage).start === stage.start) {
+            const admission = previous.node === replay.frontend.fetchNode ? replay.frontend.admission(op.id) : null;
+            return location(op, previous, Math.max(previous.end - 0.001, admission?.start ?? -Infinity));
+        }
+        return inputSource(op, stage, target, entryTime(op, stage).start);
+    }
+
+    function inputSource(op: PathOperation, stage: PathStage, target: Vec3, time: number): Vec3 {
+        let offset = 0;
+        if (stage.node === replay.frontend.fetchNode) {
+            const node = scene.nodes.get(stage.node)!,
+                seat = replay.frontend.position(op.id, stage.node, time)!;
+            offset =
+                scene.frontInstructionPosition(node, seat.row, seat.lane)[0] -
+                scene.frontInstructionPosition(node, 0, seat.lane)[0];
+        }
+        // 同時に複数束が入る場合も、入力側から束間の間隔を保つ。
+        return [scene.inputPosition()[0] + 0.1 + offset, 0.8, target[2]];
+    }
+
+    function fetchPass(op: PathOperation, stage: PathStage, time: number) {
+        const previous = op.stages[op.stages.indexOf(stage) - 1];
+        if (!previous || previous.node !== replay.frontend.fetchNode) return null;
+        const admission = replay.frontend.admission(op.id);
+        if (!admission || !Number.isFinite(admission.start) || admission.start < admission.end) return null;
+        // 同時刻の入場・退出もFを飛ばさず、次段の進入補間内でFを経由する。
+        // 固定枠より多い束は枠数ずつ時間を分け、同じF座標へ一斉に集めない。
+        const passage = replay.frontend.passage(op.id),
+            batch = Math.floor((passage?.index ?? 0) / replay.frontend.fetchCapacity),
+            batches = Math.ceil((passage?.count ?? 1) / replay.frontend.fetchCapacity),
+            duration = Math.min(stage.end - stage.start, stageTransition(stage)) / batches;
+        const via = location(op, previous, admission.end),
+            target = location(op, stage, time),
+            start = stage.start + duration * batch,
+            end = start + duration,
+            middle = (start + end) / 2,
+            entering = time < middle;
+        return {
+            from: entering ? inputSource(op, previous, via, admission.end) : via,
+            to: entering ? via : target,
+            groundFrom: via,
+            start: entering ? start : middle,
+            end: entering ? middle : end
+        };
+    }
+
     function location(op: PathOperation, stage: PathStage, t: number): Vec3 {
         const n = scene.nodes.get(stage.node) || scene.nodes.get("issue")!;
         let x = n.x,
@@ -509,15 +571,19 @@ function createPaths<T extends PathOperation>({
         }
         const stage = stageAt(op, t);
         if (!stage) return null;
+        const entry = entryTime(op, stage);
+        if (t < entry.start) return null;
         const target = location(op, stage, t);
-        const transition = stageTransition(stage);
-        const progress = (t - stage.start) / transition;
+        const progress = (t - entry.start) / Math.max(Number.EPSILON, entry.end - entry.start);
         if (progress >= 1) return target;
         const index = op.stages.indexOf(stage),
             previous = op.stages[index - 1];
-        const source: Vec3 = previous
-            ? location(op, previous, previous.end - 0.001)
-            : [scene.inputPosition()[0] + 0.1, 0.8, target[2]];
+        const pass = fetchPass(op, stage, t);
+        if (pass)
+            return t < pass.start
+                ? null
+                : route(pass.from, pass.to, smooth((t - pass.start) / (pass.end - pass.start)));
+        const source = entrySource(op, stage, target);
         if (previous?.node === "issue") {
             const exit = scene.issueRowExit(op.issueSlot ?? 0),
                 port =
@@ -623,17 +689,30 @@ function createPaths<T extends PathOperation>({
         }
         const stage = stageAt(op, t);
         if (!stage) return null;
-        const progress = (t - stage.start) / stageTransition(stage);
+        const entry = entryTime(op, stage);
+        if (t < entry.start) return null;
+        const progress = (t - entry.start) / Math.max(Number.EPSILON, entry.end - entry.start);
         if (progress >= 1) return null;
+        const pass = fetchPass(op, stage, t);
+        if (pass)
+            return t < pass.start || t >= pass.end
+                ? null
+                : {
+                      from: pass.groundFrom,
+                      to: pass.to,
+                      start: pass.start,
+                      end: pass.end,
+                      progress: smooth((t - pass.start) / (pass.end - pass.start))
+                  };
         const previous = op.stages[op.stages.indexOf(stage) - 1],
             to = location(op, stage, t);
         // 入場には最初のステージの高さを使う。途中の土台を経由させない。
         return {
-            from: previous ? location(op, previous, previous.end - 0.001) : to,
+            from: previous && entry.start === stage.start ? entrySource(op, stage, to) : to,
             to,
             progress: smooth(clamp(progress)),
-            start: stage.start,
-            end: stage.start + stageTransition(stage)
+            start: entry.start,
+            end: entry.end
         };
     }
 

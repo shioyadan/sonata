@@ -808,6 +808,8 @@ function createActivity({ camera, clock, scene, gpu, paths, replay, session }: A
 
     // 流入する命令列と squash 時の巻き戻し。
     const stream: StreamState = { feedVisible: [], codeFragments: [], feedState: null };
+    let feedSource: sonataReplay.Replay["feedOps"] | null = null;
+    let feedByID = new Map<number, sonataReplay.Replay["feedOps"][number]>();
     function feedPath(u: number): Vector {
         const a = [-7.4, 1.1, 9.4],
             b = [-8.2, 1.25, 7.4],
@@ -854,125 +856,154 @@ function createActivity({ camera, clock, scene, gpu, paths, replay, session }: A
                 alpha: stream.feedState.flowAlpha,
                 shift: (1 - stream.feedState.recovery) * 0.25
             });
-        // 流入する命令列は記録された fetch 順の先読み表示で、別のキューではない。
-        // フラッシュ中は実際に取り消された行を履歴の層として再表示する。
-        for (const layer of layers)
+        if (feedSource !== replay.feedOps) {
+            feedSource = replay.feedOps;
+            feedByID = new Map(feedSource.map((op) => [op.id, op]));
+        }
+        // 満杯のFにまだ入れない命令を入口側へ残し、空いた行だけを先読みに使う。
+        // ID索引と待機時刻索引を使い、描画する24行より多く組み立てない。
+        const pending = replay.frontend.pending(session.cycle, feedRows),
+            pendingIDs = new Set(pending);
+        const rows = layers.flatMap((layer) => {
+            const entries =
+                layer.kind === "fetch"
+                    ? pending.map((id, index) => ({
+                          op: feedByID.get(id)!,
+                          distance: (index + 0.5) / feedRows + layer.shift,
+                          layer
+                      }))
+                    : [];
             for (
                 let index = Math.floor(layer.cursor);
+                entries.length < feedRows &&
                 index < Math.min(replay.feedOps.length, Math.ceil(layer.cursor) + feedRows);
                 index++
             ) {
-                const distance = (index + 0.5 - layer.cursor) / feedRows + layer.shift;
+                const op = replay.feedOps[index];
+                if (layer.kind === "fetch" && pendingIDs.has(op.id)) continue;
+                const distance =
+                    (index + 0.5 - layer.cursor + (layer.kind === "fetch" ? pending.length : 0)) / feedRows +
+                    layer.shift;
                 if (distance <= 0 || distance >= 1) continue;
-                const op = replay.feedOps[index],
-                    canceled = layer.kind === "rewind" && canceledIDs.has(op.id);
-                if (layer.kind === "rewind" && stream.feedState.phase !== "rewind" && !canceled) continue;
-                const u = 1 - distance,
-                    dissolve = canceled ? stream.feedState.dissolve : 0;
-                const p = feedPath(u),
-                    screen = camera.project(p);
-                const worldPerPixel = (2 * screen[2] * Math.tan(0.66 / 2)) / gpu.cssHeight;
-                const scale = smooth(distance / 0.3),
-                    alpha = smooth((1 - distance) / 0.15) * (0.32 + 0.68 * u) * layer.alpha;
-                const color = canceled ? session.style.palette.red : paths.instructionColor(op, session.cycle),
-                    text = op.feedText!,
-                    cell = 0.146 * scale,
-                    height = 0.38 * scale;
-                // 先細りする帯の左端に、すべての命令の開始位置を揃える。
-                const left = -3.0 * scale,
-                    rightEdge = left + text.length * cell;
-                for (let j = 0; j < text.length; j++) {
-                    const code = text.charCodeAt(j) - 32;
-                    if (code <= 0 || code >= 95) continue;
-                    const x = left + j * cell,
-                        col = code % 16,
-                        row = Math.floor(code / 16);
-                    const origin = offset(p, x + cell / 2, 0);
-                    // 保持している命令列から、実際に取り消された文字を剥がす。移動量は
-                    // CSS ピクセルで定め、カメラ距離や高 DPI によらず分離が見えるようにする。
-                    const stagger = hash(op.id + j * 17) * 0.18,
-                        travel = smooth((dissolve - stagger) / (1 - stagger));
-                    let fragment = origin,
-                        rotation = 0,
-                        glyphWidth = cell,
-                        glyphHeight = height,
-                        opacity = (canceled ? layer.alpha * (0.7 + 0.3 * u) : alpha) * (j < 8 ? 0.5 : 1);
-                    if (canceled && travel > 0) {
-                        const home = camera.project(origin),
-                            spread = clamp(gpu.cssWidth * 0.065, 35, 75);
-                        // 文字群は共通の方向へ穏やかに漂わせ、広く激しく飛び散らせない。
-                        const drift = (0.2 + hash(op.id + 31) * 0.4 + (hash(op.id + j * 31) - 0.5) * 0.5) * spread;
-                        const targetX = clamp(home[0] + drift, 16, gpu.cssWidth - 16);
-                        const targetY = clamp(
-                            home[1] - 12 - hash(op.id + j * 43) * 38,
-                            gpu.cssWidth < 700 ? 120 : 175,
-                            gpu.cssHeight - 60
-                        );
-                        fragment = offset(
-                            origin,
-                            (targetX - home[0]) * worldPerPixel * travel,
-                            (home[1] - targetY) * worldPerPixel * travel
-                        );
-                        rotation = (hash(op.id + j * 59) - 0.5) * 1.0 * travel;
-                        const lift = smooth(travel / 0.3);
-                        glyphWidth = mix(cell, Math.max(cell, 0.146 * 0.85), lift);
-                        glyphHeight = mix(height, Math.max(height, 0.38 * 0.85), lift);
-                        stream.codeFragments.push({
-                            id: op.id,
-                            index: j,
-                            character: text[j],
-                            origin,
-                            position: fragment,
-                            opacity,
-                            rotation,
-                            travel
-                        });
-                    }
-                    const cos = Math.cos(rotation),
-                        sin = Math.sin(rotation);
-                    const corners = [
-                        [-0.5, 0.5],
-                        [0.5, 0.5],
-                        [0.5, -0.5],
-                        [-0.5, -0.5]
-                    ].map(([dx, dy]) =>
-                        offset(
-                            fragment,
-                            dx * glyphWidth * cos - dy * glyphHeight * sin,
-                            dx * glyphWidth * sin + dy * glyphHeight * cos
-                        )
-                    );
-                    const uv = [
-                        [col / 16, row / 6],
-                        [(col + 1) / 16, row / 6],
-                        [(col + 1) / 16, (row + 1) / 6],
-                        [col / 16, (row + 1) / 6]
-                    ];
-                    const vertices = canceled && travel > 0 ? unravel : type;
-                    for (const k of [0, 1, 2, 0, 2, 3]) vertices.push(...corners[k], ...color, opacity, ...uv[k]);
-                }
-                const intact = 1 - smooth(dissolve / 0.25);
-                scene.line(lines, offset(p, left - 0.17, 0), offset(p, left - 0.08, 0), color, alpha * 0.8 * intact);
-                if (canceled) {
-                    scene.line(
-                        lines,
-                        offset(p, left, 0),
-                        offset(p, rightEdge, 0),
-                        session.style.palette.red,
-                        alpha * 0.45 * intact
-                    );
-                }
-                scene.point(points, p, color, scale < 0.5 ? 6 : 2, alpha * 0.45 * intact);
-                stream.feedVisible.push({
-                    id: op.id,
-                    fetch: op.fetch,
-                    label: op.label,
-                    position: p,
-                    progress: u,
-                    layer: layer.kind,
-                    canceled
+                entries.push({
+                    op,
+                    distance,
+                    layer
                 });
             }
+            return entries;
+        });
+        // フラッシュ中は実際に取り消された行を、従来どおり履歴の層として再表示する。
+        for (const { op, distance, layer } of rows) {
+            if (distance <= 0 || distance >= 1) continue;
+            const canceled = layer.kind === "rewind" && canceledIDs.has(op.id);
+            if (layer.kind === "rewind" && stream.feedState.phase !== "rewind" && !canceled) continue;
+            const u = 1 - distance,
+                dissolve = canceled ? stream.feedState.dissolve : 0;
+            const p = feedPath(u),
+                screen = camera.project(p);
+            const worldPerPixel = (2 * screen[2] * Math.tan(0.66 / 2)) / gpu.cssHeight;
+            const scale = smooth(distance / 0.3),
+                alpha = smooth((1 - distance) / 0.15) * (0.32 + 0.68 * u) * layer.alpha;
+            const color = canceled ? session.style.palette.red : paths.instructionColor(op, session.cycle),
+                text = op.feedText!,
+                cell = 0.146 * scale,
+                height = 0.38 * scale;
+            // 先細りする帯の左端に、すべての命令の開始位置を揃える。
+            const left = -3.0 * scale,
+                rightEdge = left + text.length * cell;
+            for (let j = 0; j < text.length; j++) {
+                const code = text.charCodeAt(j) - 32;
+                if (code <= 0 || code >= 95) continue;
+                const x = left + j * cell,
+                    col = code % 16,
+                    row = Math.floor(code / 16);
+                const origin = offset(p, x + cell / 2, 0);
+                // 保持している命令列から、実際に取り消された文字を剥がす。移動量は
+                // CSS ピクセルで定め、カメラ距離や高 DPI によらず分離が見えるようにする。
+                const stagger = hash(op.id + j * 17) * 0.18,
+                    travel = smooth((dissolve - stagger) / (1 - stagger));
+                let fragment = origin,
+                    rotation = 0,
+                    glyphWidth = cell,
+                    glyphHeight = height,
+                    opacity = (canceled ? layer.alpha * (0.7 + 0.3 * u) : alpha) * (j < 8 ? 0.5 : 1);
+                if (canceled && travel > 0) {
+                    const home = camera.project(origin),
+                        spread = clamp(gpu.cssWidth * 0.065, 35, 75);
+                    // 文字群は共通の方向へ穏やかに漂わせ、広く激しく飛び散らせない。
+                    const drift = (0.2 + hash(op.id + 31) * 0.4 + (hash(op.id + j * 31) - 0.5) * 0.5) * spread;
+                    const targetX = clamp(home[0] + drift, 16, gpu.cssWidth - 16);
+                    const targetY = clamp(
+                        home[1] - 12 - hash(op.id + j * 43) * 38,
+                        gpu.cssWidth < 700 ? 120 : 175,
+                        gpu.cssHeight - 60
+                    );
+                    fragment = offset(
+                        origin,
+                        (targetX - home[0]) * worldPerPixel * travel,
+                        (home[1] - targetY) * worldPerPixel * travel
+                    );
+                    rotation = (hash(op.id + j * 59) - 0.5) * 1.0 * travel;
+                    const lift = smooth(travel / 0.3);
+                    glyphWidth = mix(cell, Math.max(cell, 0.146 * 0.85), lift);
+                    glyphHeight = mix(height, Math.max(height, 0.38 * 0.85), lift);
+                    stream.codeFragments.push({
+                        id: op.id,
+                        index: j,
+                        character: text[j],
+                        origin,
+                        position: fragment,
+                        opacity,
+                        rotation,
+                        travel
+                    });
+                }
+                const cos = Math.cos(rotation),
+                    sin = Math.sin(rotation);
+                const corners = [
+                    [-0.5, 0.5],
+                    [0.5, 0.5],
+                    [0.5, -0.5],
+                    [-0.5, -0.5]
+                ].map(([dx, dy]) =>
+                    offset(
+                        fragment,
+                        dx * glyphWidth * cos - dy * glyphHeight * sin,
+                        dx * glyphWidth * sin + dy * glyphHeight * cos
+                    )
+                );
+                const uv = [
+                    [col / 16, row / 6],
+                    [(col + 1) / 16, row / 6],
+                    [(col + 1) / 16, (row + 1) / 6],
+                    [col / 16, (row + 1) / 6]
+                ];
+                const vertices = canceled && travel > 0 ? unravel : type;
+                for (const k of [0, 1, 2, 0, 2, 3]) vertices.push(...corners[k], ...color, opacity, ...uv[k]);
+            }
+            const intact = 1 - smooth(dissolve / 0.25);
+            scene.line(lines, offset(p, left - 0.17, 0), offset(p, left - 0.08, 0), color, alpha * 0.8 * intact);
+            if (canceled) {
+                scene.line(
+                    lines,
+                    offset(p, left, 0),
+                    offset(p, rightEdge, 0),
+                    session.style.palette.red,
+                    alpha * 0.45 * intact
+                );
+            }
+            scene.point(points, p, color, scale < 0.5 ? 6 : 2, alpha * 0.45 * intact);
+            stream.feedVisible.push({
+                id: op.id,
+                fetch: op.fetch,
+                label: op.label,
+                position: p,
+                progress: u,
+                layer: layer.kind,
+                canceled
+            });
+        }
         // 行を入口に集め、その先の表示は既存の fetch 粒子へ引き継ぐ。
         const recent = replay.fetchGroups.find(
             (g) => session.cycle >= g.time - feedLead && session.cycle < g.time + 0.3

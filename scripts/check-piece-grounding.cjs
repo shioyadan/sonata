@@ -221,7 +221,11 @@ const heights = { [paper]: half, [puck]: 0.32 };
 const session = { style: styles[paper], reducedMotion: true };
 const paths = createPaths({
     session,
-    replay: { ops: [op], trace: { firstCycle: 0, fetchWidth: 2 }, frontend: { stages: new Map() } },
+    replay: {
+        ops: [op],
+        trace: { firstCycle: 0, fetchWidth: 2 },
+        frontend: { fetchNode: null, fetchCapacity: 4, stages: new Map(), admission: () => null, passage: () => null }
+    },
     scene: {
         nodes: new Map(["front", "next"].map((id, i) => [id, { id, x: i * 2, h: 1, z: 0, w: 1, d: 1 }])),
         commitSlot: () => ({ inlet: [3, 1, 0], outlet: [4, 1, 0] }),
@@ -291,6 +295,118 @@ for (const shape of [paper, puck]) {
     paths.setGround(ground);
     assert.deepEqual(paths.groundedPiece(structuredClone(op), 2), initial, `${shape}: reloading changed the pose`);
 }
+
+// 満杯で遅らせたFetchは入力で待ち、元のDecode時刻までにFへ入る。
+const delayed = { ...op, id: 10 },
+    immediate = { ...op, id: 11 },
+    canceled = { ...op, id: 12, end: 4, flush: true, stages: [op.stages[0]] },
+    afterNp = {
+        ...op,
+        id: 13,
+        stages: [{ node: "np", start: 0, end: 1 }, { ...op.stages[0], start: 1 }, op.stages[1]]
+    };
+const admissions = new Map([
+    [delayed.id, { start: 3.8, end: 4 }],
+    [immediate.id, { start: 4, end: 4 }],
+    [canceled.id, { start: Infinity, end: 4 }],
+    [afterNp.id, { start: 3.8, end: 4 }]
+]);
+const originalStages = JSON.stringify([delayed, immediate, canceled, afterNp]);
+const admittedPaths = createPaths({
+    session,
+    replay: {
+        ops: [delayed, immediate, canceled, afterNp],
+        trace: { firstCycle: 0, fetchWidth: 2 },
+        frontend: {
+            fetchNode: "front",
+            fetchCapacity: 4,
+            stages: new Map([["front", { capacity: 4 }]]),
+            admission: (id) => admissions.get(id),
+            passage: () => null,
+            position: () => ({ row: 0, lane: 0 })
+        }
+    },
+    scene: {
+        nodes: new Map(["front", "next", "np"].map((id, i) => [id, { id, x: i * 2, h: 1, z: 0, w: 1, d: 1 }])),
+        frontInstructionPosition: (node) => [node.x, node.h + 0.34, node.z],
+        inputPosition: () => [-15.6, 0.8, 0]
+    }
+});
+admittedPaths.setGround(ground);
+for (const current of [delayed, afterNp]) {
+    assert.equal(admittedPaths.positionAt(current, 3.7), null, "Fetch admission rendered an early piece");
+    near(admittedPaths.positionAt(current, 3.8)[0], -15.5, "Fetch admission did not start at the input");
+    assert.ok(admittedPaths.positionAt(current, 3.9)[0] < 0, "Short Fetch admission skipped movement");
+    near(admittedPaths.positionAt(current, 4 - 1e-7)[0], 0, "Fetch admission missed the recorded Decode time");
+    near(admittedPaths.positionAt(current, 4)[0], 0, "Decode did not start at the admitted Fetch position");
+    for (const shape of [paper, puck]) {
+        session.style = styles[shape];
+        const piece = admittedPaths.groundedPiece(current, 3.9);
+        near(piece.transfer.start, 3.8, "Grounding used the recorded start instead of display admission");
+        near(piece.transfer.end, 4, "Grounding delayed Decode");
+        near(piece.position[0], piece.pathPosition[0], "Delayed admission changed horizontal grounding");
+        near(piece.position[1], 0.4 + 0.12 * heights[shape], "Delayed admission changed support height");
+        admittedPaths.groundedPiece(current, 4.3);
+        assert.deepEqual(admittedPaths.groundedPiece(current, 3.9), piece, "Reverse seek changed admission");
+    }
+}
+assert.ok(admittedPaths.positionAt(afterNp, 0.9), "Stage preceding Fetch disappeared");
+assert.equal(admittedPaths.occupancy(3.7).active.length, 4, "Display admission changed recorded occupancy");
+for (const time of [0.5, 3.9, 4, 4.5, 5.9])
+    assert.equal(admittedPaths.positionAt(canceled, time), null, "Pending squash appeared on the Fetch platform");
+assert.equal(admittedPaths.positionAt(immediate, 3.99), null);
+near(admittedPaths.positionAt(immediate, 4)[0], -15.5, "Same-cycle entry did not start at input");
+near(admittedPaths.positionAt(immediate, 4.41)[0], 0, "Same-cycle entry did not pass through Fetch");
+near(admittedPaths.positionAt(immediate, 4.82)[0], 2, "Same-cycle entry delayed Decode movement");
+for (const time of [4.01, 4.3, 4.41, 4.6, 4.81]) {
+    const piece = admittedPaths.groundedPiece(immediate, time);
+    assert.ok(piece.position.every(Number.isFinite), "Same-cycle Fetch produced an invalid grounded position");
+    assert.ok(piece.transfer, "Same-cycle Fetch lost its grounding bridge");
+}
+// 同cycleに枠数を超えて通過する束も、Fでは4束ずつ分けて重ねない。
+const simultaneous = Array.from({ length: 6 }, (_, index) => ({ ...op, id: 20 + index }));
+const passing = createPaths({
+    session,
+    replay: {
+        ops: simultaneous,
+        trace: { firstCycle: 0, fetchWidth: 1 },
+        frontend: {
+            fetchNode: "front",
+            fetchCapacity: 4,
+            stages: new Map([
+                ["front", { capacity: 4 }],
+                ["next", { capacity: 6 }]
+            ]),
+            admission: () => ({ start: 4, end: 4 }),
+            passage: (id) => ({ index: id - 20, count: 6 }),
+            position: (id, node) => ({ row: node === "front" ? (id - 20) % 4 : id - 20, lane: 0 })
+        }
+    },
+    scene: {
+        nodes: new Map(["front", "next"].map((id, i) => [id, { id, x: i * 10, h: 1, z: 0, w: 2, d: 1 }])),
+        frontInstructionPosition: (node, row) => [node.x - row * 0.32, node.h + 0.34, node.z],
+        inputPosition: () => [-15.6, 0.8, 0]
+    }
+});
+for (let time = 4.001; time < 4.82; time += 0.01) {
+    const positions = simultaneous.map((current) => passing.positionAt(current, time)).filter(Boolean);
+    for (let i = 0; i < positions.length; i++)
+        for (let j = i + 1; j < positions.length; j++)
+            assert.ok(
+                Math.hypot(...positions[i].map((value, axis) => value - positions[j][axis])) >= 0.24,
+                `Same-cycle Fetch groups overlap at ${time}`
+            );
+}
+for (const [index, current] of simultaneous.entries()) {
+    const midpoint = 4 + Math.floor(index / 4) * 0.41 + 0.205;
+    near(passing.positionAt(current, midpoint)[0], -(index % 4) * 0.32, "Batched entry skipped Fetch");
+    near(passing.positionAt(current, 4.82)[0], 10 - index * 0.32, "Batched entry did not reach Decode");
+}
+assert.equal(
+    JSON.stringify([delayed, immediate, canceled, afterNp]),
+    originalStages,
+    "Admission changed source timing"
+);
 console.log(
     "Piece grounding: paper box, beveled metal puck and clearance sphere; slopes; ledges; fixed sliding; shape caches; deterministic seeks"
 );
