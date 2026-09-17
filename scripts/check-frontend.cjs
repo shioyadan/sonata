@@ -275,21 +275,48 @@ for (let id = 4; id < 12; id++) {
 inspect(wave.replay, [19.9, 20, 20.1, 20.6, 21, 21.6]);
 
 // 次段が同時刻に全束を受け入れる記録は、入口→F→次段の0滞在通過にする。
-const instant = prepare(trace(Array.from({ length: 20 }, (_, id) => operation(300 + id, id, 30, 40 + id))));
+const instantInput = trace(Array.from({ length: 20 }, (_, id) => operation(300 + id, id, 30, 40 + id)));
+const instantOriginal = JSON.stringify(instantInput);
+const instant = prepare(instantInput);
 for (let id = 4; id < 20; id++) assert.deepEqual(instant.replay.frontend.admission(300 + id), { start: 30, end: 30 });
 assert.equal(instant.replay.frontend.pending(29.9).length, 16);
 assert.deepEqual(instant.replay.frontend.pending(30), []);
 
-assert.equal(instant.replay.frontend.passage(300), null);
+assert.deepEqual(instant.replay.frontend.passage(300), { index: 0, count: 20 });
 assert.equal(instant.replay.frontend.passage(-1), null);
-for (let id = 4; id < 20; id++) {
-    assert.deepEqual(instant.replay.frontend.passage(300 + id), { index: id - 4, count: 16 });
-    assert.equal(position(instant.replay, 300 + id, 30, "front-0").row, (id - 4) % 4);
+for (let id = 0; id < 20; id++) {
+    assert.deepEqual(instant.replay.frontend.passage(300 + id), { index: id, count: 20 });
+    assert.equal(position(instant.replay, 300 + id, 30, "front-0").row, id % 4);
 }
+assert.equal(JSON.stringify(instantInput), instantOriginal, "Batched handoff changed recorded timing");
+// 同時刻にF内で終わる取消は、次段へ進む20束の通過順へ含めない。
+const stopped = operation(4000, 20, 30, 40, 30);
+stopped[4] = 1;
+stopped[11] = 30;
+stopped[6] = [["F", "front-0", 20, 30]];
+const mixedCancel = prepare(trace([...instantInput.ops, stopped]));
+assert.equal(mixedCancel.replay.frontend.passage(4000), null);
+assert.equal(mixedCancel.replay.frontend.passage(300).count, 20);
+assert.equal(mixedCancel.replay.frontend.passage(319).count, 20);
+
+// 将来の同時退出バッチを理由に、既にFで待つ束の前詰めを先取りしない。
+const movingResident = prepare(
+    trace(Array.from({ length: 6 }, (_, id) => operation(8000 + id, id, id === 0 ? 10 : 20, 30 + id)))
+);
+assert.deepEqual(movingResident.replay.frontend.passage(8001), { index: 0, count: 5 });
+assert.equal(position(movingResident.replay, 8001, 5, "front-0").row, 1);
+assert.ok(Math.abs(position(movingResident.replay, 8001, 10.225, "front-0").row - 0.5) < 1e-8);
+assert.equal(position(movingResident.replay, 8001, 10.45, "front-0").row, 0);
+
 // 束内のlaneと通過順を一緒に引き継ぎ、窓から先頭束が消えても再採番しない。
 const passingOps = Array.from({ length: 20 }, (_, id) => operation(700 + id, Math.floor(id / 2), 20, 30 + id));
 const passage = prepare(trace(passingOps, 0, 60));
-const passageBefore = passingOps.slice(8).map((op) => passage.replay.frontend.passage(op[0]));
+const passageBefore = passingOps.map((op) => passage.replay.frontend.passage(op[0]));
+passage.source.loadData(trace(passingOps.slice(2), 20.1, 60), { continuityAt: 20.1 });
+assert.deepEqual(
+    passingOps.slice(2).map((op) => passage.replay.frontend.passage(op[0])),
+    passageBefore.slice(2)
+);
 for (let id = 8; id < 20; id += 2) {
     assert.deepEqual(passage.replay.frontend.passage(700 + id), passage.replay.frontend.passage(701 + id));
     assert.equal(position(passage.replay, 700 + id, 20, "front-0").lane, 0);
@@ -298,11 +325,11 @@ for (let id = 8; id < 20; id += 2) {
 passage.source.loadData(trace(passingOps.slice(10), 20.2, 60), { continuityAt: 20.2 });
 assert.deepEqual(
     passingOps.slice(10).map((op) => passage.replay.frontend.passage(op[0])),
-    passageBefore.slice(2)
+    passageBefore.slice(10)
 );
 passage.source.loadData(trace(passingOps, 0, 60), { continuityAt: 20.2 });
 assert.deepEqual(
-    passingOps.slice(8).map((op) => passage.replay.frontend.passage(op[0])),
+    passingOps.map((op) => passage.replay.frontend.passage(op[0])),
     passageBefore
 );
 
@@ -352,7 +379,7 @@ laterSquash[4] = 1;
 laterSquash[11] = 30;
 const noFuture = prepare(trace([...cancellation.replay.trace.ops.slice(0, 4), laterSquash]));
 assert.deepEqual(noFuture.replay.frontend.admission(804), { start: 20, end: 20 });
-assert.deepEqual(noFuture.replay.frontend.passage(804), { index: 0, count: 1 });
+assert.deepEqual(noFuture.replay.frontend.passage(804), { index: 1, count: 2 });
 
 // 読込み途中でF終了が未確定でも、後から確定した退出で待機を解放できる。
 const incomplete = Array.from({ length: 4 }, (_, id) => {

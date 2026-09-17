@@ -234,24 +234,29 @@ class FrontendLayout {
             if (admitted > stage.start)
                 this.waiting.push({ id: op.id, start: stage.start, end: Math.min(admitted, end) });
         }
-        const passing = new Map<number, Set<number>>();
+        const handoffs = new Map<number, { ids: number[]; groups: Set<number>; instant: boolean }>();
         for (const op of ops) {
-            const range = this.admissions.get(op.id);
-            if (!range || !Number.isFinite(range.start) || range.start !== range.end) continue;
-            if (!passing.has(range.end))
-                passing.set(range.end, new Set(continuity?.frontend.passageGroups.get(range.end)));
-            passing.get(range.end)!.add(Math.floor(op.fetch));
+            const range = this.admissions.get(op.id),
+                index = op.stages.findIndex((stage) => stage.node === this.fetchNode),
+                next = op.stages[index + 1];
+            // F内で終わった命令を混ぜず、その時刻に次段へ進む全束を順に渡す。
+            if (!range || !Number.isFinite(range.start) || next?.start !== range.end || next.start >= op.end) continue;
+            if (!handoffs.has(range.end)) handoffs.set(range.end, { ids: [], groups: new Set(), instant: false });
+            const handoff = handoffs.get(range.end)!;
+            handoff.ids.push(op.id);
+            handoff.groups.add(Math.floor(op.fetch));
+            handoff.instant ||= range.start === range.end;
         }
-        for (const [time, groups] of passing)
-            this.passageGroups.set(
-                time,
-                [...groups].sort((a, b) => a - b)
-            );
-        for (const op of ops) {
-            const range = this.admissions.get(op.id);
-            if (!range || range.start !== range.end) continue;
-            const groups = this.passageGroups.get(range.end);
-            if (groups) this.passages.set(op.id, { index: groups.indexOf(Math.floor(op.fetch)), count: groups.length });
+        for (const [time, handoff] of handoffs) {
+            const old = continuity?.frontend.passageGroups.get(time);
+            if (!handoff.instant && !old) continue;
+            const groups = [...new Set([...(old ?? []), ...handoff.groups])].sort((a, b) => a - b);
+            this.passageGroups.set(time, groups);
+            const indices = new Map(groups.map((cycle, index) => [cycle, index]));
+            for (const id of handoff.ids) {
+                const cycle = this.bundles[this.locations.get(id)!.group].fetchCycle;
+                this.passages.set(id, { index: indices.get(cycle)!, count: groups.length });
+            }
         }
         this.waiting.sort((a, b) => a.id - b.id);
         let end = -Infinity,
@@ -270,7 +275,7 @@ class FrontendLayout {
         return this.admissions.get(id) ?? null;
     }
 
-    // 同時刻の0滞在通過は束ごとの順番を渡し、次段への補間内で重ねず通す。
+    // 0滞在通過が混ざる時刻では、既存F束の退出も含む順番で追い越しを防ぐ。
     passage(id: number): { index: number; count: number } | null {
         return this.passages.get(id) ?? null;
     }
@@ -290,8 +295,10 @@ class FrontendLayout {
         const place = this.locations.get(id);
         if (!place) return null;
         if (node === this.fetchNode) {
-            const passage = this.passages.get(id);
-            if (passage) return { row: passage.index % this.fetchCapacity, lane: place.lane };
+            const passage = this.passages.get(id),
+                admission = this.admissions.get(id);
+            if (passage && admission?.start === admission?.end)
+                return { row: passage.index % this.fetchCapacity, lane: place.lane };
             const reservation = this.fetchReservations.get(this.bundles[place.group].fetchCycle);
             if (!reservation) return null;
             const at = Math.min(
