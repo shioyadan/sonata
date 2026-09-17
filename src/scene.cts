@@ -51,6 +51,7 @@ interface SceneNode {
     mapWords?: number;
     instructionSlots?: number;
     instructionRows?: number;
+    instructionGroups?: number;
     grid?: { rows: [Vector, Vector][]; columns: [Vector, Vector][] };
     element?: HTMLDivElement;
 }
@@ -203,7 +204,6 @@ function createScene({ gpu, replay, session }: SceneOptions) {
     }
 
     function layoutBounds() {
-        if (replay.trace.key !== "local-file") return { left: -14.7, right: 14.7, back: -7.1, front: 7.9 };
         const nodes = [...scene.nodes.values()];
         return {
             left: Math.min(-14.7, ...nodes.map((n) => n.x - n.w / 2 - 0.5)),
@@ -332,21 +332,17 @@ function createScene({ gpu, replay, session }: SceneOptions) {
     }
 
     function frontInstructionPosition(
-        node: Pick<SceneNode, "x" | "z" | "h" | "instructionSlots" | "instructionRows">,
-        slot: number
+        node: Pick<SceneNode, "x" | "z" | "w" | "h" | "instructionRows">,
+        row: number,
+        lane: number
     ): Vector {
         const n = node,
-            rows = n.instructionRows ?? Math.max(2, replay.trace.fetchWidth),
-            columns = Math.ceil(n.instructionSlots! / rows);
-        return [
-            n.x + (Math.floor(slot / rows) - (columns - 1) / 2) * 0.32,
-            n.h + 0.34,
-            n.z + ((slot % rows) - (rows - 1) / 2) * 0.38
-        ];
+            lanes = n.instructionRows ?? replay.frontend.lanes;
+        return [n.x + n.w / 2 - 0.24 - row * 0.32, n.h + 0.34, n.z + (lane - (lanes - 1) / 2) * 0.38];
     }
 
-    function renameInstructionPosition(slot: number): Vector {
-        return frontInstructionPosition(renameNode()!, slot);
+    function renameInstructionPosition(row: number, lane: number): Vector {
+        return frontInstructionPosition(renameNode()!, row, lane);
     }
 
     function renameWordLayout(index: number): {
@@ -560,37 +556,26 @@ function createScene({ gpu, replay, session }: SceneOptions) {
             if (replay.trace.evidence.registers.kind === "configuration")
                 rn.detail = `${rn.mapWords} LOGICAL · MAP NOT LOGGED`;
         }
-        if (rn && replay.trace.key !== "local-file")
-            rn.instructionSlots = Math.max(
-                1,
-                preserveCapacity && previous.get(rn.id)?.names?.join() === rn.names?.join()
-                    ? (previous.get(rn.id)?.instructionSlots ?? 1)
-                    : 1,
-                ...replay.ops.flatMap((op) =>
-                    op.stages.filter((s) => s.names.includes("Rn")).map((s) => (s.displaySlot ?? 0) + 1)
-                )
+        // 同じfetchサイクルの横並びを全前段で保ち、待機グループ数だけX方向へ広げる。
+        const frontendLanes = Math.max(
+            replay.frontend.lanes,
+            ...front.map((descriptor) =>
+                preserveCapacity && previous.get(descriptor.id)?.names?.join() === descriptor.names.join()
+                    ? (previous.get(descriptor.id)?.instructionRows ?? 1)
+                    : 1
+            )
+        );
+        for (const descriptor of front) {
+            const node = scene.nodes.get(descriptor.id)!,
+                old = previous.get(node.id);
+            node.instructionGroups = Math.max(
+                replay.frontend.stages.get(node.id)?.capacity ?? 1,
+                preserveCapacity && old?.names?.join() === node.names?.join() ? (old?.instructionGroups ?? 1) : 1
             );
-        if (replay.trace.key === "local-file") {
-            // 長く滞在する前段命令を同じfetchレーンへ重ねず、固定サイズの格子へ置く。
-            for (const descriptor of front) {
-                const node = scene.nodes.get(descriptor.id)!;
-                node.instructionSlots = Math.max(
-                    1,
-                    preserveCapacity ? (previous.get(node.id)?.instructionSlots ?? 1) : 1,
-                    ...replay.ops.flatMap((op) =>
-                        op.stages.filter((stage) => stage.node === node.id).map((stage) => (stage.displaySlot ?? 0) + 1)
-                    )
-                );
-                node.instructionRows = Math.max(
-                    2,
-                    replay.trace.fetchWidth,
-                    Math.ceil(Math.sqrt((node.instructionSlots * 0.32) / 0.38)),
-                    preserveCapacity ? (previous.get(node.id)?.instructionRows ?? 0) : 0
-                );
-                const columns = Math.ceil(node.instructionSlots / node.instructionRows);
-                node.w = Math.max(node.w, (columns - 1) * 0.32 + 0.48);
-                node.d = Math.max(node.d, (node.instructionRows - 1) * 0.38 + 0.48);
-            }
+            node.instructionRows = frontendLanes;
+            node.instructionSlots = node.instructionGroups * frontendLanes;
+            node.w = Math.max(node.w, (node.instructionGroups - 1) * 0.32 + 0.48);
+            node.d = Math.max(node.d, (frontendLanes - 1) * 0.38 + 0.48);
         }
         const capacity = replay.trace.structure.queueCapacity;
         const scheduler = makeNode(
@@ -617,13 +602,11 @@ function createScene({ gpu, replay, session }: SceneOptions) {
             Math.ceil(capacity / (scheduler.matrixBanks ?? 1)) * 0.14
         );
         scheduler.d = Math.max(scheduler.d, scheduler.matrixDepth / 0.84);
-        if (replay.trace.key === "local-file") {
-            let right = scheduler.x - scheduler.w / 2 - 0.3;
-            for (const descriptor of [...front].reverse()) {
-                const node = scene.nodes.get(descriptor.id)!;
-                node.x = Math.min(node.x, right - node.w / 2);
-                right = node.x - node.w / 2 - 0.4;
-            }
+        let right = scheduler.x - scheduler.w / 2 - 0.3;
+        for (const descriptor of [...front].reverse()) {
+            const node = scene.nodes.get(descriptor.id)!;
+            node.x = Math.min(node.x, right - node.w / 2);
+            right = node.x - node.w / 2 - 0.4;
         }
         // INT / BR を共有し、存在する実行ユニットを一定間隔で中央へ並べる。
         // STORE より下には LOAD と LOAD WAIT をまとめる。

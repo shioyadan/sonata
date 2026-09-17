@@ -101,6 +101,41 @@ function checkRobMarkerPath({ placement, replay }) {
     assert.deepEqual(placement.robMarker(capacity, 0.1), first);
     assert.deepEqual(placement.robMarker(-0.5, 0.1), wrap, "Reverse wrap took a different path");
 }
+function checkFrontendLayout(placement, replay) {
+    const bounds = placement.layoutBounds();
+    for (const node of placement.nodes.values()) {
+        assert.ok(node.x - node.w / 2 >= bounds.left && node.x + node.w / 2 <= bounds.right);
+        assert.ok(node.z - node.d / 2 >= bounds.back && node.z + node.d / 2 <= bounds.front);
+    }
+    for (const [index, descriptor] of replay.trace.structure.frontNodes.entries()) {
+        const node = placement.nodes.get(descriptor.id),
+            next = placement.nodes.get(replay.trace.structure.frontNodes[index + 1]?.id ?? "issue");
+        assert.equal(node.instructionRows, replay.frontend.lanes, "A frontend stage changed fetch lanes");
+        assert.equal(node.instructionSlots, node.instructionGroups * node.instructionRows);
+        assert.ok(node.instructionGroups >= replay.frontend.stages.get(node.id).capacity);
+        assert.ok(node.x + node.w / 2 < next.x - next.w / 2, "Expanded front units overlapped");
+        const first = placement.frontInstructionPosition(node, 0, 0),
+            last = placement.frontInstructionPosition(node, node.instructionGroups - 1, node.instructionRows - 1);
+        for (const position of [first, last]) {
+            assert.ok(Math.abs(position[0] - node.x) + 0.12 <= node.w / 2 + 1e-9);
+            assert.ok(Math.abs(position[2] - node.z) + 0.12 <= node.d / 2 + 1e-9);
+        }
+        assert.ok(first[0] >= last[0], "Younger fetch groups were nearer the frontend exit");
+        assert.ok(first[2] <= last[2], "Instruction lanes reversed program order");
+        if (node.instructionGroups > 1)
+            assert.ok(
+                first[0] - placement.frontInstructionPosition(node, 1, 0)[0] >= 0.32 - 1e-9,
+                "Fetch groups overlapped in X"
+            );
+        if (node.instructionRows > 1)
+            assert.ok(
+                placement.frontInstructionPosition(node, 0, 1)[2] - first[2] >= 0.38 - 1e-9,
+                "Fetch lanes overlapped in Z"
+            );
+    }
+    const firstNode = placement.nodes.get(replay.trace.structure.frontNodes[0].id);
+    assert.ok(placement.inputPosition()[0] < firstNode.x - firstNode.w / 2, "Input moved inside the frontend");
+}
 const matteStyles = ["aluminum", "paper"];
 assert.deepEqual(Object.keys(styles), ["neon", ...matteStyles], "Available styles or their order changed");
 for (const style of matteStyles) assert.equal(styles[style].matte, true, `${style} did not use grounded instructions`);
@@ -126,6 +161,7 @@ for (const [index, sample] of samples.entries()) {
     assert.equal(first.replay.ops.length, sample.ops.length);
     assert.ok(first.placement.nodes.size > 0);
     checkRobMarkerPath(first);
+    checkFrontendLayout(first.placement, first.replay);
     if (sample.structure.robCapacity <= 224)
         assert.equal(first.placement.nodes.get("rob").d, 8, "Ordinary ROB depth changed");
     const registers = first.placement.nodes.get("register-read");
@@ -267,33 +303,38 @@ checkSpacing(
     denseScene.nodes.get("commit"),
     "16 commit lanes"
 );
-const nodes = [...denseScene.nodes.values()],
-    bounds = denseScene.layoutBounds();
-for (const node of nodes) {
-    assert.ok(node.x - node.w / 2 >= bounds.left && node.x + node.w / 2 <= bounds.right);
-    assert.ok(node.z - node.d / 2 >= bounds.back && node.z + node.d / 2 <= bounds.front);
-}
-for (const [index, front] of denseTrace.structure.frontNodes.entries()) {
-    const node = denseScene.nodes.get(front.id),
-        next = denseScene.nodes.get(denseTrace.structure.frontNodes[index + 1]?.id ?? "issue");
-    assert.ok(node.x + node.w / 2 < next.x - next.w / 2, "Expanded front units overlapped");
-}
-const firstNode = denseScene.nodes.get("front-0");
-assert.ok(denseScene.inputPosition()[0] < firstNode.x - firstNode.w / 2, "Input moved inside the expanded frontend");
+checkFrontendLayout(denseScene, denseReplay);
 const positions = denseReplay.ops.map((op) => densePaths.positionAt(op, 95)),
-    slots = denseReplay.ops.map((op) => op.stages[1].displaySlot);
+    seats = denseReplay.ops.map((op) => denseReplay.frontend.position(op.id, "front-1", 95));
+for (let index = 0; index < positions.length - 1; index++) {
+    const current = positions[index],
+        next = positions[index + 1];
+    if (denseReplay.ops[index].fetch === denseReplay.ops[index + 1].fetch) {
+        assert.equal(current[0], next[0], "Same-fetch instructions were split across rows");
+        assert.ok(current[2] < next[2], "Same-fetch instructions reversed program order");
+    } else assert.ok(current[0] > next[0], "Fetch groups reversed age order");
+}
 denseSource.loadData({ ...denseTrace, firstCycle: 90, lastCycle: 218 }, { continuityAt: 95 });
 denseScene.buildLayout(true);
 assert.deepEqual(
-    denseReplay.ops.map((op) => op.stages[1].displaySlot),
-    slots,
-    "Window continuity reassigned frontend seats"
+    denseReplay.ops.map((op) => denseReplay.frontend.position(op.id, "front-1", 95)),
+    seats,
+    "Window continuity reassigned fetch groups"
 );
 assert.deepEqual(
     denseReplay.ops.map((op) => densePaths.positionAt(op, 95)),
     positions,
     "Window continuity moved frontend instructions"
 );
+const frontendBounds = () =>
+    denseTrace.structure.frontNodes.map(({ id }) => {
+        const node = denseScene.nodes.get(id);
+        return [node.x, node.w, node.d, node.instructionRows, node.instructionGroups];
+    });
+const expandedFrontend = frontendBounds();
+denseSource.loadData({ ...denseTrace, ops: denseTrace.ops.slice(-16) }, { continuityAt: 95 });
+denseScene.buildLayout(true);
+assert.deepEqual(frontendBounds(), expandedFrontend, "A smaller window shrank the fetch-group layout");
 console.log("Dense scene: 1200 simultaneous instructions, 2048 ROB entries and 16 lanes passed");
 
 const completedWithoutIssue = {
