@@ -40,6 +40,17 @@
       "rawSha256": "31af9d3798e9770e17d53073010b9bf4308fdbdf7572466fc573d6bbfb77a246",
       "bytes": 736198,
       "sha256": "5d44b40d811ebd0a17c9cc8b2ee41770a6bef82ece3ab007bb734ecd764acb90"
+    },
+    {
+      "file": "onikiri-namd.log.gz",
+      "source": "namd_sim0_straight.c0.txt.gz",
+      "sourceEncoding": "gzip",
+      "sourceBytes": 5139778603,
+      "sourceSha256": "1f562e8d9da8a6c7abdc9ea15504910deb3f1d9dae49fe90e449aee39fbb6807",
+      "prefixBytes": 6247427,
+      "rawSha256": "67e0683796b3dcda2a147dbfdcbb5f078dd1c27dba88cfcf7864f60c1c5e46fc",
+      "bytes": 1449757,
+      "sha256": "aac6974e8c5788fc2af16868ac8fc2715a2f865eeb71ba9de2b22da69517c7fc"
     }
   ]
 }

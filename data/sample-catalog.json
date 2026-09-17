@@ -259,5 +259,55 @@
       "wordBits": 64,
       "integerRegisters": 256
     }
+  },
+  {
+    "key": "namd-flow",
+    "label": "06 · NAMD flow",
+    "url": "samples/onikiri-namd.log.gz",
+    "name": "namd_sim0_straight.c0.txt.gz",
+    "firstCycle": 9780,
+    "lastCycle": 10035,
+    "initialCycle": 9780,
+    "source": "Onikiri2 STRAIGHT · SPEC CPU NAMD",
+    "provenance": {
+      "simulator": "Onikiri2",
+      "workload": "SPEC CPU · NAMD",
+      "processor": "STRAIGHT ISA · simulation",
+      "configuration": "The trace provider identified Onikiri2, the STRAIGHT ISA and the SPEC CPU NAMD workload. SPEC CPU edition, input, simulator revision and CPU configuration are not retained.",
+      "note": "Recorded dispatch, FP execution and Xbm branch-misprediction stages are preserved. This excerpt includes 92 squashed instructions at cycle 9796, dispatch recovery and later FP commits. Capacity estimates come from observed activity; no architectural register map is supplied.",
+      "workloadKnown": true,
+      "evidence": [
+        "User confirmation: SPEC CPU NAMD simulated on STRAIGHT with Onikiri2",
+        "namd_sim0_straight.c0.txt.gz"
+      ]
+    },
+    "description": "STRAIGHT instructions dispatch in bursts, recover from branch mispredictions and complete FP work.",
+    "theme": "DISPATCH + FP + RECOVERY",
+    "bookmarks": [
+      {
+        "cycle": 9785,
+        "label": "Dispatch burst",
+        "type": "highlight"
+      },
+      {
+        "cycle": 9796,
+        "label": "Branch misprediction · 92 squashed",
+        "type": "flush"
+      },
+      {
+        "cycle": 9802,
+        "label": "Dispatch resumes",
+        "type": "highlight"
+      },
+      {
+        "cycle": 10000,
+        "label": "FP result commits",
+        "type": "highlight"
+      }
+    ],
+    "screenshotCycle": 9997.4,
+    "config": {
+      "machineOrder": "out-of-order"
+    }
   }
 ]
