@@ -9,7 +9,7 @@ import childProcess = require("node:child_process");
 import url = require("node:url");
 const { pathToFileURL } = url;
 import type { BrowserWindow } from "electron";
-const { createBrowserTest, waitFor } = require("./load-test.cjs")(
+const { createBrowserTest, waitFor, loadPage } = require("./load-test.cjs")(
     "browser-test.cts"
 ) as typeof import("./browser-test.cts");
 
@@ -146,7 +146,7 @@ async function reviewLauncher(window: BrowserWindow, screenshots: string, allowU
     try {
         const offline = pathToFileURL(html).href;
         allowURL(offline);
-        await window.loadURL(`${offline}#trace=1`);
+        await loadPage(window, `${offline}#trace=1`);
         await ready();
         assert.equal((await state()).loaded, false, "A file URL tried to open a launcher trace");
         assert.equal((await state()).busy, false);
@@ -163,7 +163,7 @@ async function reviewLauncher(window: BrowserWindow, screenshots: string, allowU
             fs.writeFileSync(file, bytes);
             const href = await start(file);
             if (extension === "gz") {
-                await window.loadURL(new URL(href).origin + "/");
+                await loadPage(window, new URL(href).origin + "/");
                 await ready();
                 assert.equal((await state()).loaded, false, "Normal startup fetched a trace eagerly");
                 assert.deepEqual(
@@ -176,7 +176,7 @@ async function reviewLauncher(window: BrowserWindow, screenshots: string, allowU
                     []
                 );
             }
-            await window.loadURL(href);
+            await loadPage(window, href);
             await ready();
             await until(
                 (s) => s.name === name && Boolean(s.complete) && !s.busy,
@@ -199,7 +199,7 @@ async function reviewLauncher(window: BrowserWindow, screenshots: string, allowU
                     path.join(screenshots, "launcher-gzip.png"),
                     (await window.webContents.capturePage()).toPNG()
                 );
-                await window.loadURL(href);
+                await loadPage(window, href);
                 await ready();
                 await until(
                     (s) => s.name === name && Boolean(s.complete) && !s.busy,
