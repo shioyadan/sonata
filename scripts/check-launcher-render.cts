@@ -30,9 +30,7 @@ async function reviewLauncher(window: BrowserWindow, screenshots: string, allowU
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), "sonata-launcher-render-"));
     const distribution = path.join(directory, "dist");
     fs.mkdirSync(distribution);
-    fs.mkdirSync(path.join(directory, "scripts"));
     fs.copyFileSync(path.join(root, "sonata.sh"), path.join(directory, "sonata.sh"));
-    fs.copyFileSync(path.join(root, "scripts/launcher.py"), path.join(directory, "scripts/launcher.py"));
     const html = path.join(distribution, "sonata.html");
     fs.copyFileSync(process.env.SONATA_HTML || path.join(root, "dist/sonata.html"), html);
     const text =

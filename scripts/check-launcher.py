@@ -5,7 +5,6 @@ from contextlib import contextmanager
 import datetime
 import hashlib
 import http.client
-import importlib.util
 import json
 import os
 from pathlib import Path
@@ -18,6 +17,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import types
 import unittest
 from unittest import mock
 import warnings
@@ -25,17 +25,19 @@ import zipfile
 
 sys.dont_write_bytecode = True
 ROOT = Path(__file__).resolve().parent.parent
-SPEC = importlib.util.spec_from_file_location("sonata_launcher", ROOT / "scripts/launcher.py")
-LAUNCHER = importlib.util.module_from_spec(SPEC)
-SPEC.loader.exec_module(LAUNCHER)
+SOURCE = re.search(
+    r"3<<'SONATA_PYTHON'\n(.*)\nSONATA_PYTHON\n?\Z",
+    (ROOT / "sonata.sh").read_text(encoding="utf-8"), re.DOTALL,
+)
+assert SOURCE, "sonata.sh must contain its Python implementation"
+LAUNCHER = types.ModuleType("sonata_launcher")
+exec(compile(SOURCE[1], str(ROOT / "sonata.sh"), "exec"), vars(LAUNCHER))
 HTML = '<!doctype html>\n<title>{}</title>\nglobalThis.sonataDemoCatalog=[{{"key":"demo","url":"samples/demo.log.gz"}}];\n'
 
 
 def distribution(root, commit="a", timestamp=100):
-    (root / "scripts").mkdir(parents=True)
-    (root / "samples").mkdir()
+    (root / "samples").mkdir(parents=True)
     shutil.copy2(ROOT / "sonata.sh", root / "sonata.sh")
-    shutil.copy2(ROOT / "scripts/launcher.py", root / "scripts/launcher.py")
     (root / "sonata.html").write_text(HTML.format(commit), encoding="utf-8")
     (root / "samples/demo.log.gz").write_bytes(b"\x1f\x8b" + commit.encode())
     for name in ("README.md", "LICENSE.md", "THIRD_PARTY_NOTICES.md"):
@@ -125,6 +127,7 @@ class LauncherTest(unittest.TestCase):
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name)
         self.installed = distribution(self.root / "installed copy")
+        self.assertFalse((self.installed / "scripts").exists(), "The helper must work without a scripts directory")
 
     def test_http_trace_and_isolation(self):
         trace = self.root / "命令 trace.gz"
@@ -157,7 +160,7 @@ class LauncherTest(unittest.TestCase):
                 self.assertEqual(status, 200)
                 self.assertEqual(headers["Content-Type"], "application/gzip")
                 self.assertNotIn("Content-Encoding", headers)
-            for path in ("/trace2", "/samples/", "/samples/private.log.gz", "/README.md", "/scripts/launcher.py",
+            for path in ("/trace2", "/samples/", "/samples/private.log.gz", "/README.md", "/sonata.sh",
                          "/../sonata.html", "/%2e%2e/sonata.html", "/.git/config"):
                 self.assertEqual(request(port, path)[0], 404, path)
             for path in ("/%zz", "/%FF", "http://[bad/", "http://elsewhere/"):
@@ -258,6 +261,28 @@ class LauncherTest(unittest.TestCase):
         result = run(self.installed, "--update")
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("only an extracted distribution", result.stderr)
+
+    def test_invalid_embedded_python_keeps_installed_files(self):
+        payload = distribution(self.root / "payload", "b", 200)
+        script = payload / "sonata.sh"
+        original = script.read_text(encoding="utf-8")
+        manifest_path = payload / "build.json"
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        before = snapshot(self.installed)
+        for content, message in [
+            ("#!/usr/bin/env bash\nexit 0\n", "Missing Python implementation"),
+            (original.replace("def main(root):", "def main(root)"), "(sonata.sh, line "),
+        ]:
+            script.write_text(content, encoding="utf-8")
+            data = script.read_bytes()
+            manifest["files"]["sonata.sh"] = {"bytes": len(data), "sha256": hashlib.sha256(data).hexdigest()}
+            manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+            result = run(self.installed, "--update", input="yes\n",
+                         SONATA_UPDATE_URL=archive(payload, self.root / "invalid-python.zip"))
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn(message, result.stderr)
+            self.assertNotIn("Install this update", result.stderr)
+            self.assertEqual(snapshot(self.installed), before)
 
     def test_rollback_and_symlink_destination(self):
         payload = distribution(self.root / "payload", "b", 200)

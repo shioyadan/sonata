@@ -28,8 +28,8 @@
 | `src/sonata.css` | 共通書式、再生操作、情報パネル |
 | `src/scene.css` | シーン上のラベル、操作部、凡例 |
 | `src/appearance.css` | 画面サイズへの対応とスタイル別の配色 |
-| `sonata.sh` / `scripts/launcher.py` | 配布HTML・サンプル・指定トレースのローカル配信、配布版の更新 |
-| `scripts/package.py` | 生成済みHTMLとヘルパーのZIP化、ビルド識別とハッシュの記録 |
+| `sonata.sh` | Pythonコードを内包した起動ヘルパー。配布HTML・サンプル・指定トレースのローカル配信、配布版の更新 |
+| `scripts/package.py` | 開発時の配布ZIP生成、ビルド識別とハッシュの記録 |
 
 外観を変えるときは、まず `scene.cts` 冒頭のプリセットと `appearance.css` の配色を編集します。固定部品の形は `scene.cts`、動く表示は `activity.cts`、材質の計算は `shaders.cts`、描画順は `renderer.cts` が担当します。共通の配置や再生モデルへ外観のための時刻変更を持ち込まないでください。明るいUIは `data-theme=light` で共用し、`data-style` はスタイル固有の調整に使います。具体的な材質・接地の仕様は [外観の仕様](visual-styles.md) を参照してください。
 

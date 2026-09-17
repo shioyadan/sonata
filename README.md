@@ -34,7 +34,7 @@ npm run build
 
 ### 起動ヘルパーと更新
 
-Linux・macOS・WSLでは、BashとPython **3.9以降**で起動ヘルパーを使えます。上の手順でビルドするか、[配布ZIP](https://shioyadan.github.io/sonata/sonata-latest.zip)を展開して、そのディレクトリで実行してください。ZIP版の起動・更新にはNodeやnpmは不要です。
+Linux・macOS・WSLでは、BashとPython **3.9以降**で起動ヘルパーを使えます。起動・配信・更新の処理は `sonata.sh` 1本にまとまっています。上の手順でビルドするか、[配布ZIP](https://shioyadan.github.io/sonata/sonata-latest.zip)を展開して、そのディレクトリで実行してください。ZIP版の起動・更新にはNodeやnpmは不要です。
 
 ```sh
 ./sonata.sh /path/to/trace.log.zst

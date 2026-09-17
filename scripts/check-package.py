@@ -24,11 +24,10 @@ class PackageTest(unittest.TestCase):
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name) / "source with spaces"
         self.root.mkdir()
-        for directory in ["dist/samples", "scripts", "work"]:
+        for directory in ["dist/samples", "work"]:
             (self.root / directory).mkdir(parents=True)
         self.content = {
             "sonata.sh": b"#!/usr/bin/env bash\nexit 0\n",
-            "scripts/launcher.py": b'print("Sonata")\n',
             "README.md": "起動方法\n".encode(),
             "LICENSE.md": b"License text\n",
             "THIRD_PARTY_NOTICES.md": b"Third-party text\n",
