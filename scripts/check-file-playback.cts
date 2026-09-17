@@ -222,10 +222,19 @@ async function reviewFilePlayback(window: BrowserWindow) {
             }
         );
         const position = await evaluate(({ sonata }) => {
-            return { cycle: sonata.cycle, playing: sonata.playing, count: sonata.particles.length };
+            return {
+                cycle: sonata.cycle,
+                playing: sonata.playing,
+                visible: sonata.particles.map((particle) => particle.id),
+                pending: sonata.frontend.pending,
+                active: sonata.stats.active
+            };
         });
         assert.equal(position.playing, true, "Dense global navigation stopped playback");
-        assert.equal(position.count, 1200, "Dense navigation lost live instructions");
+        assert.equal(position.active, 1200, "Dense navigation changed recorded occupancy");
+        const accounted = [...position.visible, ...position.pending];
+        assert.equal(accounted.length, 1200, "Dense navigation lost visible or pending instructions");
+        assert.equal(new Set(accounted).size, 1200, "Dense navigation displayed pending instructions twice");
         await waitFor(
             async () => evaluate(({ sonata }, cycle) => sonata.cycle > cycle, position.cycle),
             "Playback froze after dense global navigation"

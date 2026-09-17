@@ -51,11 +51,14 @@ module.exports = async function reviewDesktop(window, screenshots) {
                 sonata.captureAt(t);
                 const feed=sonata.instructionFeed;
                 const event=sonata.codeRewind;
-                return feed.length<=48 && new Set(feed.map(row=>row.layer+':'+row.id)).size===feed.length && feed.every(row=>{
+                const pending=new Set(sonata.frontend.pending);
+                return feed.length<=(event.phase==='flow'?24:48)
+                    &&sonata.particles.every(p=>!pending.has(p.id))
+                    &&new Set(feed.map(row=>row.layer+':'+row.id)).size===feed.length && feed.every(row=>{
                     const source=trace.ops.find(op=>op[0]===row.id);
                     const preview=trace.feedPreview?.find(op=>op.id===row.id);
                     return (source||preview) && row.label===(source?.[5]??preview.label) && row.fetch===(source?.[2]??preview.fetch) && row.position.every(Number.isFinite)
-                        && (row.layer==='fetch'?row.fetch>t:event.time!==null)
+                        && (row.layer==='fetch'?row.fetch>t||pending.has(row.id):event.time!==null)
                         && (!row.canceled || source && source[4]&&(source[11]??source[3])===event.time);
                 });
             });
@@ -120,10 +123,19 @@ module.exports = async function reviewDesktop(window, screenshots) {
                 return particle?.state==='waiting' && (node==='issue'?particle.brightness>=.4&&particle.brightness<=.6:particle.brightness<.35);
             });
             const sequenceColors=['integer','memory','branch','fp'].every(kind=>{
-                const op=sonata.ops.find(o=>o.kind===kind&&o.fetch>trace.firstCycle&&o.end< trace.lastCycle&&o.end>o.fetch+3);
-                if(!op)return kind==='fp';
+                const candidates=sonata.ops.filter(o=>o.kind===kind&&o.fetch>trace.firstCycle&&o.end<trace.lastCycle&&o.end>o.fetch+3);
+                if(!candidates.length)return kind==='fp';
+                // Fへの表示入場直後と3サイクル後に、同じ命令色を確認する。
+                let first;
+                const op=candidates.find(o=>{
+                    sonata.captureAt(o.fetch+.001);
+                    first=sonata.frontend.entries.find(e=>e.id===o.id)?.entry??o.fetch;
+                    const fetch=o.stages.find(s=>s.node===sonata.frontend.fetchNode);
+                    return Number.isFinite(first)&&first+.1<(fetch?.end??o.end)&&first+3<o.end;
+                });
+                if(!op)return false;
                 const target={integer:[.29,1,.81],memory:[1,.60,.22],branch:[.62,.43,1],fp:[.3,.7,1]}[kind];
-                return [op.fetch+.1,Math.min(op.end-.1,op.fetch+3)].every(t=>{
+                return [first+.1,first+3].every(t=>{
                     sonata.captureAt(t);const p=sonata.particles.find(p=>p.id===op.id);
                     return p&&p.color.every((v,i)=>Math.abs(v-target[i])<1e-9);
                 });
@@ -172,7 +184,11 @@ module.exports = async function reviewDesktop(window, screenshots) {
         assert.equal(result.stats.active, result.expected.active, `${key}: active occupancy`);
         assert.equal(result.matching, true, `${key}: checkpoint occupancy or particle positions`);
         assert.equal(result.commitMatches, true, `${key}: commit slots must match the actual in-order commit group`);
-        assert.equal(result.feedMatches, true, `${key}: incoming stream must use actual upcoming trace instructions`);
+        assert.equal(
+            result.feedMatches,
+            true,
+            `${key}: incoming stream must use actual upcoming or pending Fetch instructions`
+        );
         assert.equal(result.pipeCount, true, `${key}: execution pipe count`);
         assert.equal(result.pipeAxes, true, `${key}: pipes must run left to right`);
         assert.equal(result.pipeMotion, true, `${key}: instructions must move forward inside the displayed pipe`);
@@ -192,7 +208,11 @@ module.exports = async function reviewDesktop(window, screenshots) {
             true,
             `${key}: waiting instructions must be dimmer than executing instructions`
         );
-        assert.equal(result.sequenceColors, true, `${key}: instruction type colors must persist from fetch onward`);
+        assert.equal(
+            result.sequenceColors,
+            true,
+            `${key}: instruction type colors must persist from Fetch display entry onward`
+        );
         assert.equal(
             result.matrixMatches,
             true,

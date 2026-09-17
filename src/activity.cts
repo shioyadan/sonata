@@ -865,6 +865,8 @@ function createActivity({ camera, clock, scene, gpu, paths, replay, session }: A
         const pending = replay.frontend.pending(session.cycle, feedRows),
             pendingIDs = new Set(pending);
         const rows = layers.flatMap((layer) => {
+            // 待機行の後ろへ滑り込ませず、先読みとの間も一行分空ける。
+            const cursor = layer.kind === "fetch" && pending.length ? Math.floor(layer.cursor) : layer.cursor;
             const entries =
                 layer.kind === "fetch"
                     ? pending.map((id, index) => ({
@@ -882,8 +884,7 @@ function createActivity({ camera, clock, scene, gpu, paths, replay, session }: A
                 const op = replay.feedOps[index];
                 if (layer.kind === "fetch" && pendingIDs.has(op.id)) continue;
                 const distance =
-                    (index + 0.5 - layer.cursor + (layer.kind === "fetch" ? pending.length : 0)) / feedRows +
-                    layer.shift;
+                    (index + 0.5 - cursor + (layer.kind === "fetch" ? pending.length : 0)) / feedRows + layer.shift;
                 if (distance <= 0 || distance >= 1) continue;
                 entries.push({
                     op,

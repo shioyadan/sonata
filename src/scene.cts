@@ -536,7 +536,7 @@ function createScene({ gpu, replay, session }: SceneOptions) {
                 n.names.join(" / "),
                 mix(hasRegisterRead ? -12.5 : -11.4, hasRegisterRead ? -7.8 : -6.7, i / Math.max(1, front.length - 1)),
                 0,
-                Math.min(1.65, 4.4 / Math.max(1, front.length - 1)),
+                n.id === replay.frontend.fetchNode ? 1.65 : Math.min(1.65, 4.4 / Math.max(1, front.length - 1)),
                 2.7,
                 0.6 + i * 0.1,
                 session.style.palette.integer,
@@ -556,7 +556,8 @@ function createScene({ gpu, replay, session }: SceneOptions) {
             if (replay.trace.evidence.registers.kind === "configuration")
                 rn.detail = `${rn.mapWords} LOGICAL · MAP NOT LOGGED`;
         }
-        // 同じfetchサイクルの横並びを全前段で保ち、待機グループ数だけX方向へ広げる。
+        // Fは固定数の束だけを表示し、入り切らない分は入力側で表示を待たせる。
+        // 他の前段は同じfetchサイクルの横並びと、必要な待機行数を保つ。
         const frontendLanes = Math.max(
             replay.frontend.lanes,
             ...front.map((descriptor) =>
@@ -568,10 +569,15 @@ function createScene({ gpu, replay, session }: SceneOptions) {
         for (const descriptor of front) {
             const node = scene.nodes.get(descriptor.id)!,
                 old = previous.get(node.id);
-            node.instructionGroups = Math.max(
-                replay.frontend.stages.get(node.id)?.capacity ?? 1,
-                preserveCapacity && old?.names?.join() === node.names?.join() ? (old?.instructionGroups ?? 1) : 1
-            );
+            node.instructionGroups =
+                node.id === replay.frontend.fetchNode
+                    ? replay.frontend.fetchCapacity
+                    : Math.max(
+                          replay.frontend.stages.get(node.id)?.capacity ?? 1,
+                          preserveCapacity && old?.names?.join() === node.names?.join()
+                              ? (old?.instructionGroups ?? 1)
+                              : 1
+                      );
             node.instructionRows = frontendLanes;
             node.instructionSlots = node.instructionGroups * frontendLanes;
             node.w = Math.max(node.w, (node.instructionGroups - 1) * 0.32 + 0.48);

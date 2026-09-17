@@ -253,9 +253,16 @@ const denseSource = createReplay({ samples: [denseTrace] }),
     densePaths = createPaths({ scene: denseScene, replay: denseReplay, session: denseSession });
 denseScene.buildLayout();
 for (const op of denseReplay.ops) {
-    const entry = densePaths.positionAt(op, op.fetch);
+    const admission = denseReplay.frontend.admission(op.id);
+    if (admission.start > op.fetch)
+        assert.equal(densePaths.positionAt(op, op.fetch), null, "A full Fetch stage admitted an instruction early");
+    if (admission.start >= admission.end) continue;
+    const entry = densePaths.positionAt(op, admission.start);
     assert.ok(entry[0] < denseScene.nodes.get("front-0").x - denseScene.nodes.get("front-0").w / 2);
-    assert.equal(entry[0], denseScene.inputPosition()[0] + 0.1, "Fetch entry detached from the instruction stream");
+    assert.ok(
+        entry[0] <= denseScene.inputPosition()[0] + 0.1 && entry[0] >= denseScene.inputPosition()[0] - 0.9,
+        "Fetch entry escaped the fixed input span"
+    );
 }
 function checkSpacing(positions, node, label) {
     assert.equal(
@@ -279,8 +286,11 @@ for (const [time, node] of [
     [95, "front-1"],
     [500, "rob"]
 ]) {
-    const positions = denseReplay.ops.map((op) => densePaths.positionAt(op, time));
-    assert.equal(positions.filter(Boolean).length, 1200, `${node}: lost visible instructions`);
+    const positions = denseReplay.ops.map((op) => densePaths.positionAt(op, time)).filter(Boolean);
+    const expected = node === denseReplay.frontend.fetchNode ? 4 * 16 : 1200;
+    assert.equal(positions.length, expected, `${node}: visible instruction count differs`);
+    if (node === denseReplay.frontend.fetchNode)
+        assert.equal(denseReplay.frontend.pending(time).length, 1200 - expected, "Overflow was not held upstream");
     checkSpacing(positions, denseScene.nodes.get(node), node);
 }
 checkSpacing(
@@ -341,6 +351,48 @@ denseSource.loadData({ ...denseTrace, ops: denseTrace.ops.slice(-16) }, { contin
 denseScene.buildLayout(true);
 assert.deepEqual(frontendBounds(), expandedFrontend, "A smaller window shrank the fetch-group layout");
 console.log("Dense scene: 1200 simultaneous instructions, 2048 ROB entries and 16 lanes passed");
+
+// Fの待機束が増える区間へ移っても、本体や入力位置を変えない。
+const shortFetchTrace = {
+    ...denseTrace,
+    ops: denseTrace.ops.map((entry) => {
+        const op = structuredClone(entry);
+        op[6][0][3] = op[2] + 0.8;
+        op[6][1][2] = op[2] + 0.8;
+        return op;
+    })
+};
+const fixedSource = createReplay({ samples: [shortFetchTrace] }),
+    fixedReplay = fixedSource.loadTrace("local-file"),
+    fixedScene = createScene({ replay: fixedReplay, session: denseSession });
+fixedScene.buildLayout();
+const bodies = () => [...fixedScene.nodes.values()].map(({ id, x, z, w, d, h }) => ({ id, x, z, w, d, h }));
+const beforeBodies = bodies(),
+    beforeInput = fixedScene.inputPosition(),
+    beforeBounds = fixedScene.layoutBounds();
+fixedSource.loadData(denseTrace, { continuityAt: 85 });
+fixedScene.buildLayout(true);
+assert.deepEqual(bodies(), beforeBodies, "Extra Fetch waiting resized or moved a pipeline body");
+assert.deepEqual(fixedScene.inputPosition(), beforeInput, "Extra Fetch waiting moved the input stream");
+assert.deepEqual(fixedScene.layoutBounds(), beforeBounds, "Extra Fetch waiting changed the camera bounds");
+assert.equal(fixedScene.nodes.has("fetch-queue"), false, "Overflow created another growing platform");
+assert.equal(fixedScene.nodes.get("front-0").instructionGroups, 4);
+checkFrontendLayout(fixedScene, fixedReplay);
+const fixedFetchWidth = fixedScene.nodes.get("front-0").w;
+fixedSource.loadData({
+    ...denseTrace,
+    structure: {
+        ...denseTrace.structure,
+        frontNodes: [
+            ...denseTrace.structure.frontNodes,
+            { id: "front-2", names: ["Rn"] },
+            { id: "front-3", names: ["Ds"] }
+        ]
+    }
+});
+fixedScene.buildLayout(true);
+assert.equal(fixedScene.nodes.get("front-0").w, fixedFetchWidth, "Observed new stages resized the Fetch body");
+console.log("Fixed Fetch: waiting growth preserved stage bodies, input and camera bounds");
 
 const completedWithoutIssue = {
     ...denseTrace,

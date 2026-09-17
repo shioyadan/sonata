@@ -368,7 +368,7 @@ function start(gl: WebGL2RenderingContext) {
         $("bloom-value").textContent = session.style.matte ? "Not used" : `${Math.round(session.bloom * 100)}%`;
         $("trails").title = session.style.matte ? "Show the selected instruction's trail" : "Show instruction trails";
         // 時計・選択・カメラを保持し、描画用の資源だけを更新する。
-        rebuildWorld();
+        rebuildWorld(true);
         drawTimeline();
         render();
         updateUI();
@@ -831,6 +831,11 @@ function start(gl: WebGL2RenderingContext) {
             stream.feedState!.time !== null
                 ? `${stream.feedState!.count} SQUASHED · ${feedPhase === "refill" ? "RESUMING FLOW" : "WRONG PATH"}`
                 : "TRACE SEQUENCE ↗ FETCH";
+        const pendingFetch = replay.frontend.pending(session.cycle).length;
+        if (pendingFetch && !rewinding) feedDetail.textContent += ` · ${pendingFetch} WAITING FOR DISPLAY`;
+        feedDetail.title = pendingFetch
+            ? "Fetch was recorded; entry into the visible Fetch slots waits for room. Trace times are unchanged."
+            : "";
         $("memory-notice").hidden = activity.activeNotifications.length === 0;
         $("memory-notice-detail").textContent =
             activity.activeNotifications.length === 1
@@ -1088,6 +1093,9 @@ function start(gl: WebGL2RenderingContext) {
             get frontend() {
                 return {
                     lanes: replay.frontend.lanes,
+                    fetchNode: replay.frontend.fetchNode,
+                    fetchCapacity: replay.frontend.fetchCapacity,
+                    pending: replay.frontend.pending(session.cycle),
                     groups: replay.frontend.groups,
                     stages: [...replay.frontend.stages].map(([id, descriptor]) => {
                         const node = scene.nodes.get(id)!;
@@ -1096,10 +1104,16 @@ function start(gl: WebGL2RenderingContext) {
                     entries: replay.ops.flatMap((op) => {
                         const stage = paths.stageAt(op, session.cycle);
                         if (!stage || !replay.frontend.stages.has(stage.node)) return [];
+                        const admission = replay.frontend.admission(op.id);
                         return [
                             {
                                 id: op.id,
                                 node: stage.node,
+                                entry: admission?.start ?? null,
+                                pending:
+                                    stage.node === replay.frontend.fetchNode &&
+                                    admission !== null &&
+                                    session.cycle < admission.start,
                                 ...replay.frontend.position(op.id, stage.node, session.cycle)!
                             }
                         ];
