@@ -16,7 +16,7 @@
 | `memory-tide` | `rsd/mshr.log` | 3964–4091 | RSD / RISC-V、IntRegImm テストの起動処理。シミュレータの版は未確認 |
 | `rename-rush` | `gem5-traces/detailed/arm64/trace.log` | 404–531 | gem5 v25.1.0.1 / ARM64 O3、CoreMark 1 iteration |
 | `x86-recovery` | `gem5-traces/detailed/x86/trace.log` | 1596–1723 | gem5 v25.1.0.1 / x86 O3、CoreMark 1 iteration |
-| `namd-flow` | `namd_sim0_straight.c0.txt.gz` | 9780–10035 | Onikiri2 / STRAIGHT ISA、SPEC CPUのNAMD。版・入力・CPU設定は未確認 |
+| `namd-flow` | `namd_sim0_straight.c0.txt.gz` | 19691–19818 | Onikiri2 / STRAIGHT ISA、SPEC CPUのNAMD。版・入力・CPU設定は未確認 |
 
 | 配布ファイル | 利用するデモ | 元ログの保持範囲 |
 | --- | --- | --- |
@@ -24,7 +24,7 @@
 | `gem5-arm-registers.log.gz` | `rename-rush` | 先頭7,398,575 bytes |
 | `gem5-x86-registers.log.gz` | `x86-recovery` | 先頭23,764,168 bytes |
 | `rsd-memory.log.gz` | `memory-tide` | 全4,321,125 bytes |
-| `onikiri-namd.log.gz` | `namd-flow` | gzip原本を展開した先頭6,247,427 bytes |
+| `onikiri-namd.log.gz` | `namd-flow` | gzip原本を展開した先頭27,978,257 bytes |
 
 表示区間より前の記録を残すことで、Coreのcycle起点・ID/RID・詳細ログから得る初期レジスタ状態・注釈の原文行番号を保持します。表示区間より後にも対象命令の終了記録を含め、抜粋境界で完了命令を未完了へ変えないようにします。JSONから疑似ログを組み立てたり、途中の行を削って時刻やIDを補正したりしません。
 
@@ -34,7 +34,9 @@ RSDのログはプロセッサRSDから取得されたものです。`D$-miss`�
 
 公開前の照合で、元ログ全体の108種類の命令アドレスと命令内容が、RSDの `Asm/IntRegImm` テストの実行ファイルと一致しました。同梱デモの表示命令は `rsd-loader.c` の `_load`（データコピーとBSS初期化）です。gem5の4デモの命令アドレスは、CoreMarkの行列処理・リスト初期化・リスト整列の関数に対応します。命令列の出典、照合したリビジョン、再配布時に保持する権利表示は [第三者ライセンス](../THIRD_PARTY_NOTICES.md) を参照してください。
 
-NAMDは、提供者によりSTRAIGHT ISAをOnikiri2でシミュレーションしたSPEC CPUのトレースと確認されています。SPEC CPUの版・入力、ログ生成時のOnikiri2のリビジョン・CPU設定は未確認です。`D` のdispatchと `Xbm` の分岐予測ミスはOnikiri2の段階定義に従います。選択区間に生存する2,617命令の終了記録を含む、10058サイクルまでの原文prefixを保持します。レジスタの対応・値は記録されておらず、他のデモのISAやCPU容量を流用しません。
+NAMDは、提供者によりSTRAIGHT ISAをOnikiri2でシミュレーションしたSPEC CPUのトレースと確認されています。SPEC CPUの版・入力、ログ生成時のOnikiri2のリビジョン・CPU設定は未確認です。`D` のdispatchと `Xbm` の分岐予測ミスはOnikiri2の段階定義に従います。選択区間に生存する1,904命令と、前後の補助範囲を含む2,495命令の終了記録を保持し、原文prefixは表示サイクル19858まで続きます。レジスタの対応・値は記録されておらず、他のデモのISAやCPU容量を流用しません。
+
+この区間はdispatchの継続を優先して選び、128サイクル中108サイクルで計1,496命令（うちFP 423命令）のdispatch開始を記録しています。予測ミスは19782の1回で、524命令が取り消され、19788にdispatchが再開します。dispatch開始のない最長区間はこの回復中の5サイクルです。ミスを繰り返す区間や、初期化中の整数処理だけが連続する区間との違いを原文で確認しています。
 
 実行条件の根拠となるREADME / configの相対位置や提供者の確認事項は、`sample-catalog.json` の `provenance.evidence` に残しています。それらの元ファイルは配布HTMLやgzipには含めません。通常のアプリ配布はライセンス全文をHTMLに含め、**Licenses** から読める状態を保ちます。
 
@@ -65,6 +67,6 @@ SONATA_TRACE_ROOT=/path/to/trace-inputs npm run demos:generate -- onikiri-namd.l
 
 `check-raw-samples.cjs` はCoreでgzipを解析し、旧5デモ計2,857命令のID・RID・fetch・retire・flush・命令文字列が変わっていないことを確認します。Top-downや構造推定は同じ有界な実行時解析を使います。分岐回復の支持例が不足する場合は原因を断定せず、旧fixtureの分類へ合わせるために抜粋外の情報を補いません。
 
-新しいNAMDサンプルは、gzip内のI/L/S/R行から独立に読み取った原文と、Coreが返す前後の補助範囲を含む2,917命令のID・時刻・終了状態・段開始を照合します。予測ミスと92命令の取消、Fetch／dispatch再開、FP演算の完了・commitも原文から確認します。
+NAMDサンプルは、gzip内のI/L/S/R行から独立に読み取った原文と、Coreが返す前後の補助範囲を含む2,495命令のID・時刻・終了状態・段開始を照合します。dispatchの継続性、1回の予測ミスと524命令の取消、Fetch／dispatch再開、FP演算の完了・commitも原文から確認します。
 
 候補区間の探索用 `npm run demos:select` と旧fixture生成用 `scripts/generate-demos.ts` は開発用に残しています。通常ビルドや生トレースの再圧縮には使いません。探索結果は `artifacts/trace-selection.json` に保存され、入力が見つからない候補はエラーを記録して次へ進みます。

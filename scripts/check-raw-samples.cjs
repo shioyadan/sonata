@@ -22,7 +22,7 @@ const legacy = JSON.parse(
 const digest = (bytes) => createHash("sha256").update(bytes).digest("hex");
 
 function checkNamd(entry, bytes, window, model) {
-    assert.deepEqual([entry.firstCycle, entry.lastCycle, entry.initialCycle], [9780, 10035, 9780]);
+    assert.deepEqual([entry.firstCycle, entry.lastCycle, entry.initialCycle], [19691, 19818, 19691]);
     assert.equal(entry.provenance.simulator, "Onikiri2");
     assert.equal(entry.provenance.workload, "SPEC CPU · NAMD");
     assert.match(entry.provenance.processor, /STRAIGHT/);
@@ -58,24 +58,47 @@ function checkNamd(entry, bytes, window, model) {
         }
     }
     const operations = [...recorded.values()];
-    const dispatches = (at) => operations.filter((op) => op.stages.some((s) => s.name === "D" && s.cycle === at));
-    assert.equal(dispatches(9785).length, 16);
-    assert.equal(dispatches(9802).length, 16);
-    assert.equal(operations.filter((op) => op.fetch === 9797).length, 16);
+    const dispatches = new Map();
+    const predictionMisses = [];
+    let fpDispatches = 0;
+    for (const op of operations) {
+        for (const stage of op.stages) {
+            if (stage.cycle < entry.firstCycle || stage.cycle > entry.lastCycle) continue;
+            if (stage.name === "D") {
+                dispatches.set(stage.cycle, (dispatches.get(stage.cycle) ?? 0) + 1);
+                if (/\bF[A-Z]+\./.test(op.label)) fpDispatches++;
+            } else if (stage.name === "Xbm") predictionMisses.push(stage);
+        }
+    }
+    let gap = 0;
+    let longestGap = 0;
+    for (let cycle = entry.firstCycle; cycle <= entry.lastCycle; cycle++) {
+        gap = dispatches.has(cycle) ? 0 : gap + 1;
+        longestGap = Math.max(longestGap, gap);
+    }
+    // 件数だけでは長い空白を見落とすため、Dが始まるサイクル数と最長の途切れも固定する。
     assert.deepEqual(
-        recorded.get(18776).stages.find((s) => s.name === "Xbm"),
+        [dispatches.size, [...dispatches.values()].reduce((sum, count) => sum + count, 0), longestGap, fpDispatches],
+        [108, 1496, 5, 423]
+    );
+    assert.equal(predictionMisses.length, 1, "The continuous NAMD sample gained another prediction miss");
+    assert.deepEqual(
+        recorded.get(62019).stages.find((s) => s.name === "Xbm"),
         {
             name: "Xbm",
-            cycle: 9796,
-            line: 370961
+            cycle: 19782,
+            line: 1760981
         }
     );
-    assert.equal(window.ops.filter((op) => op[4] && op[3] === 9796).length, 92);
-    const multiply = model.ops.find((op) => op.id === 18745);
+    assert.equal(window.ops.filter((op) => op[4] && op[3] === 19782).length, 524);
+    assert.equal(operations.filter((op) => op.fetch === 19783).length, 16);
+    assert.equal(dispatches.get(19788), 12);
+    const multiply = model.ops.find((op) => op.id === 61265);
     assert.deepEqual(
         [multiply.kind, multiply.execution, multiply.fetch, multiply.completion, multiply.end, multiply.flush],
-        ["fp", "exec-fp", 9782, 9996, 10000, false]
+        ["fp", "exec-fp", 19691, 19718, 19731, false]
     );
+    assert.ok(multiply.stages.some((stage) => stage.node === "commit" && stage.start === 19729));
     for (const node of ["exec-fp", "front-2"])
         assert.ok(
             model.ops.some((op) =>

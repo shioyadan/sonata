@@ -106,7 +106,7 @@ Aluminum / Paper の命令は、待機・移動・実行を通して同じ大き
 | Miss & recover | RSD / RISC-V | IntRegImm テストの起動処理、キャッシュミスと予測ミス |
 | Rename rush | gem5 ARM64 O3 | CoreMark、記録されたリネームと物理レジスタの読み書き |
 | x86 recovery | gem5 x86 O3 | CoreMark、micro-op とレジスタ復元 |
-| NAMD flow | Onikiri2 / STRAIGHT ISA | SPEC CPUのNAMD、FP演算・ディスパッチと予測ミス後の再開 |
+| NAMD flow | Onikiri2 / STRAIGHT ISA | SPEC CPUのNAMD、継続したディスパッチとFP演算、1回の予測ミスからの再開 |
 
 実行条件は各デモの **Run details** と [デモの出自](data/README.md) に記載しています。データに記録された時刻・依存関係と、推定した構造や光の演出を区別しています。Top-down はトレースから推定した分類を、現在から過去8サイクルの窓で表示します。分類を支える構造や分岐回復の観測例が不足する場合は、その原因を断定しません。実装上の解釈は [可視化の仕様](docs/visualization.md) を参照してください。
 

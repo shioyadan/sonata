@@ -265,47 +265,47 @@
     "label": "06 · NAMD flow",
     "url": "samples/onikiri-namd.log.gz",
     "name": "namd_sim0_straight.c0.txt.gz",
-    "firstCycle": 9780,
-    "lastCycle": 10035,
-    "initialCycle": 9780,
+    "firstCycle": 19691,
+    "lastCycle": 19818,
+    "initialCycle": 19691,
     "source": "Onikiri2 STRAIGHT · SPEC CPU NAMD",
     "provenance": {
       "simulator": "Onikiri2",
       "workload": "SPEC CPU · NAMD",
       "processor": "STRAIGHT ISA · simulation",
       "configuration": "The trace provider identified Onikiri2, the STRAIGHT ISA and the SPEC CPU NAMD workload. SPEC CPU edition, input, simulator revision and CPU configuration have not been verified.",
-      "note": "Recorded dispatch, FP execution and Xbm branch-misprediction stages are preserved. This excerpt includes 92 squashed instructions at cycle 9796, dispatch recovery and later FP commits. Capacity estimates come from observed activity; no architectural register map is supplied.",
+      "note": "Dispatch is recorded in 108 of these 128 cycles, with 423 FP instructions dispatched. One branch misprediction at cycle 19782 squashes 524 instructions; dispatch resumes at 19788. Capacity estimates come from observed activity; no architectural register map is supplied.",
       "workloadKnown": true,
       "evidence": [
         "User confirmation: SPEC CPU NAMD simulated on STRAIGHT with Onikiri2",
         "namd_sim0_straight.c0.txt.gz"
       ]
     },
-    "description": "STRAIGHT instructions dispatch in bursts, recover from branch mispredictions and complete FP work.",
-    "theme": "DISPATCH + FP + RECOVERY",
+    "description": "Steady dispatch feeds integer and FP work, with one branch misprediction and recovery.",
+    "theme": "STEADY DISPATCH + FP",
     "bookmarks": [
       {
-        "cycle": 9785,
-        "label": "Dispatch burst",
+        "cycle": 19720,
+        "label": "Steady dispatch + FP execution",
         "type": "highlight"
       },
       {
-        "cycle": 9796,
-        "label": "Branch misprediction · 92 squashed",
+        "cycle": 19731,
+        "label": "FP result commits",
+        "type": "highlight"
+      },
+      {
+        "cycle": 19782,
+        "label": "Branch misprediction · 524 squashed",
         "type": "flush"
       },
       {
-        "cycle": 9802,
+        "cycle": 19788,
         "label": "Dispatch resumes",
-        "type": "highlight"
-      },
-      {
-        "cycle": 10000,
-        "label": "FP result commits",
         "type": "highlight"
       }
     ],
-    "screenshotCycle": 9997.4,
+    "screenshotCycle": 19720.4,
     "config": {
       "machineOrder": "out-of-order"
     }

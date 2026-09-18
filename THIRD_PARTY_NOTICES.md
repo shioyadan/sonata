@@ -58,7 +58,7 @@ RSD から得た `mshr.log` の一部を表示用データに加工していま�
 - 元ログ: `namd_sim0_straight.c0.txt.gz`
 - 提供者による確認: SPEC CPUのNAMDを、Onikiri2でSTRAIGHT ISA向けにシミュレーションした記録。
 
-元ログの連続した先頭部分をKanata形式のままgzipで同梱し、9,780–10,035サイクルを表示します。時刻・命令ID・命令文字列は変更していません。元プログラムのソースや実行ファイル本体は同梱しません。SPEC CPUの世代、NAMDの版・入力、シミュレータのリビジョン・CPU設定は未確認です。
+元ログの連続した先頭部分をKanata形式のままgzipで同梱し、19,691–19,818サイクルを表示します。時刻・命令ID・命令文字列は変更していません。元プログラムのソースや実行ファイル本体は同梱しません。SPEC CPUの世代、NAMDの版・入力、シミュレータのリビジョン・CPU設定は未確認です。
 
 Sonata本体のBSDライセンスを、NAMDの元プログラムや命令列へ適用するものではありません。この実行トレースの再配布条件は未確認です。[SPEC CPU2006の権利表示](https://www.spec.org/cpu2006/Docs/legal.html)と[CPU2017のライセンス一覧](https://www.spec.org/cpu2017/Docs/licenses.html)は元製品の条件を示す資料であり、この短いトレースの再配布許諾を確認した根拠としては扱いません。SPECはStandard Performance Evaluation Corporationの登録商標です。このデモは可視化用であり、SPECの性能結果や認証として提供するものではありません。
 
