@@ -2,6 +2,7 @@
 
 // 展示の時計は可視フレームからだけ進め、非表示タブ用のタイマーを持たない。
 type ExhibitionPhase = "off" | "transition" | "loading" | "playing" | "exploring" | "waiting";
+type PresentationReason = "start" | "resume" | "next";
 interface ExhibitionSnapshot {
     readonly active: boolean;
     readonly phase: ExhibitionPhase;
@@ -13,7 +14,7 @@ interface Options {
     keys: readonly string[];
     load(key: string): Promise<boolean>;
     cancelLoad(): void;
-    present(): void;
+    present(reason: PresentationReason): void;
     changed(state: ExhibitionSnapshot): void;
 }
 
@@ -25,6 +26,7 @@ function createExhibition(options: Options) {
     let remaining = 0;
     let error: string | null = null;
     let revision = 0;
+    let presentationReason: PresentationReason = "start";
 
     function snapshot(): ExhibitionSnapshot {
         return {
@@ -43,9 +45,10 @@ function createExhibition(options: Options) {
         // Promiseの失効とは別に、Workerや通信を呼び出し元で解放する。
         if (phase === "loading") options.cancelLoad();
     }
-    function transition(next: number) {
+    function transition(next: number, reason: PresentationReason) {
         invalidate();
         index = next;
+        presentationReason = reason;
         phase = "transition";
         remaining = 0.4;
         error = null;
@@ -69,6 +72,7 @@ function createExhibition(options: Options) {
         phase = "loading";
         remaining = 30;
         const request = revision;
+        const reason = presentationReason;
         changed();
         if (request !== revision || phase !== "loading") return;
         try {
@@ -82,7 +86,7 @@ function createExhibition(options: Options) {
             phase = "playing";
             remaining = 0;
             error = null;
-            options.present();
+            options.present(reason);
             if (request === revision && phase === "playing") changed();
         } catch (cause) {
             if (request !== revision || (phase !== "loading" && phase !== "playing")) return;
@@ -94,7 +98,7 @@ function createExhibition(options: Options) {
         if (!keys.length) return;
         failed.clear();
         const requested = key === undefined ? index : keys.indexOf(key);
-        transition(requested < 0 ? 0 : requested);
+        transition(requested < 0 ? 0 : requested, "start");
     }
     function stop() {
         if (phase === "off") return;
@@ -120,10 +124,10 @@ function createExhibition(options: Options) {
         if (phase !== "exploring") return;
         const current = key === undefined ? -1 : keys.indexOf(key);
         failed.clear();
-        transition(current >= 0 ? current : index);
+        transition(current >= 0 ? current : index, "resume");
     }
     function loop() {
-        if (phase === "playing") transition(nextIndex());
+        if (phase === "playing") transition(nextIndex(), "next");
     }
     function tick(seconds: number, blocked = false) {
         if (phase === "off" || phase === "playing" || !Number.isFinite(seconds) || seconds < 0) return;
@@ -146,7 +150,7 @@ function createExhibition(options: Options) {
             failedLoad("Loading the sample timed out. Retrying another sample.");
         } else if (phase === "waiting") {
             if (failed.size === keys.length) failed.clear();
-            transition(nextIndex());
+            transition(nextIndex(), "next");
         }
     }
     return {

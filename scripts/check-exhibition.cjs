@@ -14,7 +14,7 @@ function harness(keys = ["a", "b", "c"]) {
     const requests = [];
     const changes = [];
     let activeRequest = null;
-    let presentations = 0;
+    const presentations = [];
     let cancellations = 0;
     const mode = createExhibition({
         keys,
@@ -40,8 +40,8 @@ function harness(keys = ["a", "b", "c"]) {
             cancellations++;
             activeRequest = null;
         },
-        present() {
-            presentations++;
+        present(reason) {
+            presentations.push(reason);
         },
         changed(state) {
             changes.push(state);
@@ -51,8 +51,9 @@ function harness(keys = ["a", "b", "c"]) {
         mode,
         requests,
         changes,
+        reasons: presentations,
         get presentations() {
-            return presentations;
+            return presentations.length;
         },
         get cancellations() {
             return cancellations;
@@ -102,6 +103,7 @@ async function main() {
         await settle();
     }
     assert.equal(tour.presentations, 4);
+    assert.deepEqual(tour.reasons, ["start", "next", "next", "next"]);
 
     // 入力中は読み直さず、手を離してから30秒の猶予を取り直す。
     tour.mode.interact();
@@ -119,12 +121,17 @@ async function main() {
     tour.mode.tick(29.9);
     assert.equal(tour.mode.phase, "transition");
     assert.equal(tour.mode.key, "b");
+    tour.mode.tick(0.4);
+    tour.requests.at(-1).resolve(true);
+    await settle();
+    assert.equal(tour.reasons.at(-1), "resume", "Idle return must retain the presentation chosen while exploring");
     tour.mode.interact();
     tour.mode.resume();
     tour.mode.tick(0.4);
     tour.requests.at(-1).resolve(true);
     await settle();
     assert.equal(tour.mode.phase, "playing");
+    assert.deepEqual(tour.reasons.slice(-2), ["resume", "resume"]);
 
     // 停止・操作・再開始より古い非同期完了は、再生や画面を取り戻してはいけない。
     for (const action of ["stop", "interact", "restart"]) {
@@ -148,6 +155,7 @@ async function main() {
             stale.requests[1].resolve(true);
             await settle();
             assert.equal(stale.presentations, 1);
+            assert.deepEqual(stale.reasons, [action === "interact" ? "resume" : "start"]);
         }
         stale.mode.stop();
         stale.mode.tick(1000);
@@ -171,6 +179,30 @@ async function main() {
     staleRejection.requests[0].reject(new Error("Late network failure"));
     await settle();
     assert.equal(staleRejection.mode.error, null);
+
+    // 次デモの取得を操作で中断したら、遅れた完了に次回巡回の演出を実行させない。
+    const interrupted = harness();
+    interrupted.mode.start();
+    interrupted.mode.tick(0.4);
+    interrupted.requests[0].resolve(true);
+    await settle();
+    interrupted.mode.loop();
+    interrupted.mode.tick(0.4);
+    const nextRequest = interrupted.requests[1];
+    interrupted.mode.interact("a");
+    interrupted.mode.resume();
+    interrupted.mode.tick(0.4);
+    interrupted.requests[2].resolve(true);
+    await settle();
+    nextRequest.resolve(true);
+    await settle();
+    assert.deepEqual(interrupted.reasons, ["start", "resume"]);
+    interrupted.mode.loop();
+    interrupted.mode.tick(0.4);
+    interrupted.requests[3].resolve(true);
+    await settle();
+    assert.deepEqual(interrupted.reasons, ["start", "resume", "next"]);
+    interrupted.mode.stop();
 
     // 応答しない取得を取消し、全件失敗なら短い再試行を延々繰り返さない。
     const retry = harness();
@@ -200,6 +232,7 @@ async function main() {
     retry.requests[2].reject(new Error("Sample unavailable"));
     await settle();
     assert.equal(retry.mode.error, "Sample unavailable");
+    assert.deepEqual(retry.reasons, [], "Failed or timed-out samples must not trigger presentation changes");
     retry.mode.tick(29);
     assert.equal(retry.mode.phase, "waiting");
     assert.equal(retry.requests.length, 3);
@@ -209,6 +242,7 @@ async function main() {
     retry.requests[3].resolve(true);
     await settle();
     assert.equal(retry.mode.error, null);
+    assert.deepEqual(retry.reasons, ["next"], "Continuing after failed samples must use the next-sample presentation");
     retry.mode.loop();
     assert.equal(retry.mode.key, "b", "A recovered connection must retry previously failed samples");
     retry.mode.stop();
