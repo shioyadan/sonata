@@ -64,9 +64,12 @@ body[data-trace-loading="true"] .world > :not(#trace-loading) {
 }
 
 /* 展示中の説明と操作は、シーンや切替フェードから独立して表示する。 */
-.exhibition-panel {
+:root {
     --exhibition-surface: #101820ed;
     --exhibition-muted: #a5b8c2;
+}
+
+.exhibition-panel {
     position: fixed;
     inset: 0;
     z-index: 10;
@@ -89,8 +92,26 @@ body[data-trace-loading="true"] .world > :not(#trace-loading) {
     color: var(--text);
 }
 
-#exhibition-count {
+.exhibition-caption-meta {
+    display: flex;
+    align-items: baseline;
+    flex-wrap: wrap;
+    gap: 6px 18px;
     color: var(--exhibition-muted);
+}
+
+#exhibition-count {
+    color: inherit;
+}
+
+#exhibition-cycle-label {
+    font: 9px monospace;
+    letter-spacing: 0.7px;
+    font-variant-numeric: tabular-nums;
+}
+
+#exhibition-cycle {
+    margin-left: 6px;
 }
 
 #exhibition-title {
@@ -164,11 +185,137 @@ body.exhibiting
         .touch-hint,
         .gesture-hint,
         .cinema-caption,
-        .bound-scene,
         .trace-welcome,
         .legend .link-key
     ) {
     display: none;
+}
+
+/* 通常の配置を保ったまま、展示中だけ同じ Top-down を指標パネルにまとめる。 */
+#scene-telemetry {
+    display: contents;
+}
+
+body.exhibiting #scene-telemetry {
+    position: absolute;
+    top: max(80px, calc(env(safe-area-inset-top) + 68px));
+    right: max(28px, env(safe-area-inset-right));
+    z-index: 5;
+    display: block;
+    width: 320px;
+    padding: 14px 16px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--exhibition-surface);
+    color: var(--text);
+    pointer-events: none;
+}
+
+body.exhibiting:not([data-exhibition="playing"]) #scene-telemetry {
+    display: none;
+}
+
+body.exhibiting #bound-scene {
+    position: static;
+    display: block;
+    width: auto;
+    padding: 0;
+    background: none;
+    opacity: 1;
+}
+
+body.exhibiting .bound-scene-heading small {
+    font-size: 7px;
+    letter-spacing: 0;
+}
+
+body.exhibiting .bound-scene-key {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: space-between;
+    gap: 4px 6px;
+    font-size: 7px;
+    letter-spacing: 0;
+    opacity: 1;
+}
+
+body.exhibiting .bound-scene .bound-bar {
+    height: 4px;
+    opacity: 0.8;
+}
+
+.exhibition-throughput {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 12px;
+    margin-top: 12px;
+    padding-top: 10px;
+    border-top: 1px solid var(--border);
+}
+
+.exhibition-throughput span,
+.exhibition-throughput small,
+.exhibition-occupancy p {
+    display: block;
+    color: var(--exhibition-muted);
+    font: 8px monospace;
+    letter-spacing: 0.5px;
+}
+
+.exhibition-throughput small {
+    margin-top: 4px;
+    font-size: 7px;
+}
+
+#exhibition-ipc {
+    font: 25px monospace;
+    font-variant-numeric: tabular-nums;
+    letter-spacing: -1px;
+}
+
+.exhibition-occupancy {
+    margin-top: 12px;
+    padding-top: 10px;
+    border-top: 1px solid var(--border);
+}
+
+.exhibition-occupancy p {
+    margin: 0 0 9px;
+    font-size: 7px;
+}
+
+.exhibition-occupancy > div {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    gap: 5px 12px;
+    margin-top: 9px;
+    font: 10px monospace;
+    font-variant-numeric: tabular-nums;
+}
+
+.exhibition-occupancy progress {
+    grid-column: 1 / -1;
+    width: 100%;
+    height: 3px;
+    appearance: none;
+    border: 0;
+    border-radius: 2px;
+    overflow: hidden;
+    background: var(--border);
+    color: var(--cyan);
+}
+
+.exhibition-occupancy progress::-webkit-progress-bar {
+    background: var(--border);
+}
+
+.exhibition-occupancy progress::-webkit-progress-value {
+    background: var(--cyan);
+}
+
+.exhibition-occupancy progress::-moz-progress-bar {
+    background: var(--cyan);
 }
 
 body.exhibiting .world-bottom {

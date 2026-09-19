@@ -43,7 +43,12 @@
             hidden
         >
             <div class="exhibition-caption">
-                <span id="exhibition-count" class="eyebrow"></span>
+                <div class="exhibition-caption-meta">
+                    <span id="exhibition-count" class="eyebrow"></span>
+                    <span id="exhibition-cycle-label" hidden
+                        >CYCLE <output id="exhibition-cycle" aria-live="off"></output
+                    ></span>
+                </div>
                 <h2 id="exhibition-title"></h2>
                 <p id="exhibition-description"></p>
                 <p id="exhibition-status" role="status"></p>
@@ -105,27 +110,61 @@
                     ><button id="zoom-in" aria-label="Zoom in">+</button>
                 </div>
                 <p class="touch-hint">Pinch to zoom · Two fingers to move</p>
-                <section id="bound-scene" class="bound-scene" aria-label="Top-down analysis in the pipeline">
-                    <div class="bound-scene-heading">
-                        <span><i></i> TOP-DOWN</span><small id="bound-scene-window"></small>
-                    </div>
-                    <div class="bound-scene-main">
-                        <strong id="bound-scene-status"></strong
-                        ><span id="bound-scene-share"><span id="bound-scene-value"></span><small>%</small></span>
-                    </div>
-                    <p id="bound-scene-context"></p>
-                    <div id="bound-scene-bar" class="bound-bar" aria-hidden="true">
-                        <i data-bound="retiring"></i><i data-bound="inFlight"></i><i data-bound="badSpeculation"></i
-                        ><i data-bound="frontend"></i><i data-bound="backend"></i><i data-bound="unresolved"></i>
-                    </div>
-                    <div id="bound-scene-key" class="bound-scene-key" aria-hidden="true">
-                        <span data-bound="retiring">RET <b></b></span
-                        ><span data-bound="inFlight" hidden>FLT <b></b></span
-                        ><span data-bound="badSpeculation">SPEC <b></b></span
-                        ><span data-bound="frontend">FE <b></b></span><span data-bound="backend">BE <b></b></span
-                        ><span data-bound="unresolved" hidden>UNK <b></b></span>
-                    </div>
-                </section>
+                <div id="scene-telemetry">
+                    <section id="bound-scene" class="bound-scene" aria-label="Top-down analysis in the pipeline">
+                        <div class="bound-scene-heading">
+                            <span><i></i> TOP-DOWN</span><small id="bound-scene-window"></small>
+                        </div>
+                        <div class="bound-scene-main">
+                            <strong id="bound-scene-status"></strong
+                            ><span id="bound-scene-share"><span id="bound-scene-value"></span><small>%</small></span>
+                        </div>
+                        <p id="bound-scene-context"></p>
+                        <div id="bound-scene-bar" class="bound-bar" aria-hidden="true">
+                            <i data-bound="retiring"></i><i data-bound="inFlight"></i><i data-bound="badSpeculation"></i
+                            ><i data-bound="frontend"></i><i data-bound="backend"></i><i data-bound="unresolved"></i>
+                        </div>
+                        <div id="bound-scene-key" class="bound-scene-key" aria-hidden="true">
+                            <span data-bound="retiring">RET <b></b></span
+                            ><span data-bound="inFlight" hidden>FLT <b></b></span
+                            ><span data-bound="badSpeculation">SPEC <b></b></span
+                            ><span data-bound="frontend">FE <b></b></span><span data-bound="backend">BE <b></b></span
+                            ><span data-bound="unresolved" hidden>UNK <b></b></span>
+                        </div>
+                    </section>
+                    <section id="exhibition-metrics" aria-label="Live pipeline metrics" hidden>
+                        <div
+                            class="exhibition-throughput"
+                            title="Committed instructions per elapsed cycle over the previous 16 cycles in this excerpt"
+                        >
+                            <div><span>COMMITTED / CYCLE</span><small>PAST ≤16 CYC</small></div>
+                            <output id="exhibition-ipc" aria-live="off">0.00</output>
+                        </div>
+                        <div class="exhibition-occupancy">
+                            <p>USED / DISPLAYED ENTRIES</p>
+                            <div>
+                                <span id="exhibition-queue-label">Scheduler</span>
+                                <output id="exhibition-issue-count" aria-live="off"></output>
+                                <progress
+                                    id="exhibition-issue-meter"
+                                    max="1"
+                                    value="0"
+                                    aria-label="Scheduler occupancy"
+                                ></progress>
+                            </div>
+                            <div>
+                                <span id="exhibition-rob-label">ROB</span>
+                                <output id="exhibition-rob-count" aria-live="off"></output>
+                                <progress
+                                    id="exhibition-rob-meter"
+                                    max="1"
+                                    value="0"
+                                    aria-label="Reorder buffer occupancy"
+                                ></progress>
+                            </div>
+                        </div>
+                    </section>
+                </div>
                 <div class="world-heading">
                     <div class="motion-notice" id="motion-notice" hidden>
                         <span>Motion effects are off. Code rewind and unravel are off.</span>
