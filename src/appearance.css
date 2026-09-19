@@ -1320,10 +1320,12 @@ body.cinema .cinema-caption {
 /* 展示の説明面も選択中の材質に合わせ、背景色に依存せず読めるようにする。 */
 :root[data-theme="light"] {
     --exhibition-surface: #fcf8eff2;
+    --exhibition-wash: #f3eee1b3;
     --exhibition-muted: #756858;
 }
 :root[data-style="aluminum"] {
     --exhibition-surface: #f7f9faf2;
+    --exhibition-wash: #eaf0f4b3;
     --exhibition-muted: #63717c;
 }
 
@@ -1370,11 +1372,11 @@ body.exhibiting .world-bottom {
     body.exhibiting .bound-scene-main {
         margin: 6px 0;
     }
-    body.exhibiting .bound-scene-main strong {
-        font-size: 18px;
+    body.exhibiting #bound-scene .bound-scene-main strong {
+        font-size: 16px;
     }
     body.exhibiting #bound-scene-share {
-        font-size: 22px;
+        font-size: 20px;
     }
     body.exhibiting .bound-scene-key {
         margin-top: 6px;
