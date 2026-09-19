@@ -1422,9 +1422,10 @@ body.exhibiting .world-bottom {
     body.exhibiting .legend {
         gap: 8px 12px;
     }
-    body.exhibiting .flush-alert {
+    body.exhibiting #scene-events {
         top: 238px;
         left: max(16px, env(safe-area-inset-left));
+        width: min(320px, calc(100% - 32px));
     }
     body.exhibiting :is(.trace-event-notice, .memory-notice) {
         display: none;
@@ -1484,10 +1485,9 @@ body.exhibiting .world-bottom {
         top: 28px;
         right: 310px;
     }
-    body.exhibiting .flush-alert {
+    body.exhibiting #scene-events {
         top: 72px;
-        max-width: calc(100% - 368px);
-        white-space: normal;
+        width: min(320px, calc(100% - 368px));
     }
     .exhibition-caption {
         max-width: 570px;

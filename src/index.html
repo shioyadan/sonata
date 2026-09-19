@@ -191,7 +191,6 @@
                         </button>
                     </div>
                 </div>
-                <div id="trace-event-notice" class="trace-event-notice" hidden></div>
                 <div id="labels" aria-hidden="true"></div>
                 <div id="register-readouts" aria-hidden="true"></div>
                 <div id="register-writeback" class="register-writeback" hidden></div>
@@ -199,15 +198,18 @@
                     <span>INSTRUCTION STREAM</span><small>TRACE SEQUENCE <b>↗</b> FETCH</small>
                 </div>
                 <div id="rob-head-label" class="fifo-label" aria-hidden="true"></div>
-                <div id="recovery-branch" class="recovery-branch" hidden><strong></strong><small></small></div>
                 <div id="rob-tail-label" class="fifo-label tail-label" aria-hidden="true"></div>
                 <div id="memory-notice" class="memory-notice" role="status" hidden>
                     <strong>MEMORY READY</strong><span id="memory-notice-detail"></span>
                 </div>
-                <div class="flush-alert" id="flush-alert" role="status">
-                    <span class="alert-icon">↯</span>
-                    <div><strong>PIPELINE FLUSH</strong><span id="flush-detail"></span></div>
-                    <span class="alert-tag">WRONG PATH</span>
+                <div id="scene-events">
+                    <div class="flush-alert" id="flush-alert" role="status">
+                        <span class="alert-icon">↯</span>
+                        <div><strong>PIPELINE FLUSH</strong><span id="flush-detail"></span></div>
+                        <span class="alert-tag">WRONG PATH</span>
+                    </div>
+                    <div id="trace-event-notice" class="trace-event-notice" hidden></div>
+                    <div id="recovery-branch" class="recovery-branch" hidden><strong></strong><small></small></div>
                 </div>
                 <div class="world-bottom">
                     <div class="legend">

@@ -174,25 +174,28 @@ async function reviewExhibition(window: BrowserWindow, entry: string, screenshot
                 compact: matchMedia("(max-width: 760px), (max-width: 1000px) and (max-height: 600px)").matches,
                 collisions: (() => {
                     if (document.body.dataset.exhibition !== "playing") return [];
-                    const r = document.getElementById("scene-telemetry")!.getBoundingClientRect();
-                    return [
-                        ".exhibition-actions",
-                        ".exhibition-caption",
-                        ".world-bottom",
-                        ".flush-alert.visible"
-                    ].filter((selector) => {
-                        const el = document.querySelector(selector);
-                        if (!el) return false;
-                        const b = el.getBoundingClientRect();
-                        return (
-                            b.width > 0 &&
-                            b.height > 0 &&
-                            r.left < b.right &&
-                            r.right > b.left &&
-                            r.top < b.bottom &&
-                            r.bottom > b.top
-                        );
-                    });
+                    const overlays = [
+                        ...document.querySelectorAll(
+                            "#scene-telemetry,.exhibition-actions,.exhibition-caption,.world-bottom,.flush-alert.visible,#trace-event-notice > div,#recovery-branch:not([hidden])"
+                        )
+                    ]
+                        .map((el) => ({
+                            label: el.id || el.className || el.textContent,
+                            rect: el.getBoundingClientRect()
+                        }))
+                        .filter(({ rect }) => rect.width > 0 && rect.height > 0);
+                    return overlays.flatMap((a, i) =>
+                        overlays
+                            .slice(i + 1)
+                            .filter(
+                                (b) =>
+                                    a.rect.left < b.rect.right &&
+                                    a.rect.right > b.rect.left &&
+                                    a.rect.top < b.rect.bottom &&
+                                    a.rect.bottom > b.rect.top
+                            )
+                            .map((b) => `${a.label} / ${b.label}`)
+                    );
                 })(),
                 items: ids.map((id) => {
                     const el = document.getElementById(id)!;
@@ -407,6 +410,50 @@ async function reviewExhibition(window: BrowserWindow, entry: string, screenshot
     assert.equal((await state()).style, "neon", "Exiting lost the last manual style choice");
     assert.ok(!(await state()).hash.includes("exhibit=1"));
     assert.equal(await evaluate(() => (document.getElementById("speed") as HTMLSelectElement).value), "8");
+
+    // 記録されたcache miss・分岐予測ミス・flushが同時に出る場面を使う。
+    window.setSize(1440, 1000);
+    await evaluate(() => {
+        location.hash = "exhibit=1&demo=memory-tide";
+    });
+    await touring("memory-tide");
+    for (const [width, height] of [
+        [1440, 1000],
+        [667, 375]
+    ] as const) {
+        window.setSize(width, height);
+        await waitFor(
+            () => evaluate((_page, width) => innerWidth === width, width),
+            "Event layout resize did not finish"
+        );
+        await evaluate(({ sonata }) => sonata.captureAt(4068.2));
+        const events = await evaluate(({ $ }) => ({
+            text: $("trace-event-notice").textContent,
+            count: $("trace-event-notice").children.length,
+            visible: $("trace-event-notice").getBoundingClientRect().height > 0,
+            marker: $("recovery-branch").textContent,
+            markerVisible: $("recovery-branch").getBoundingClientRect().height > 0,
+            flush: $("flush-alert").classList.contains("visible") && $("flush-alert").getBoundingClientRect().height > 0
+        }));
+        assert.equal(events.count, 2);
+        assert.match(events.text!, /D-CACHE MISS/);
+        assert.match(events.text!, /BRANCH MISPREDICTION/);
+        assert.equal(events.visible, width === 1440);
+        assert.ok(events.markerVisible && events.flush);
+        assert.match(events.marker!, /MISPREDICT #4454.*ROB.*PRESERVED/);
+        await layout();
+        fs.writeFileSync(
+            path.join(screenshots, `exhibition-events-${width}.png`),
+            (await window.webContents.capturePage()).toPNG()
+        );
+    }
+    await evaluate(({ sonata, $ }) => {
+        $("exhibition-explore").click();
+        sonata.captureAt(4068.2);
+    });
+    assert.equal(await evaluate(({ $ }) => getComputedStyle($("trace-event-notice")).position), "absolute");
+    assert.notEqual(await evaluate(({ $ }) => $("recovery-branch").style.transform), "");
+    await exit();
 
     window.setSize(1440, 1000);
     // 全画面で起動済みの場合も、ブラウザがEscを消費した際のfullscreenchangeで終了する。

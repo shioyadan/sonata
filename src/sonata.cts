@@ -940,7 +940,10 @@ function start(gl: WebGL2RenderingContext) {
                   : (scene.nodes.get(paths.stageAt(branch.op, session.cycle)?.node!)?.label ?? "IN FLIGHT");
             marker.firstElementChild!.textContent = `${branch.inferred ? "RECOVERY BRANCH ≈" : "MISPREDICT"} #${branch.id}`;
             marker.lastElementChild!.textContent = `${location} · ${retiring ? "COMMITTED" : "PRESERVED"}`;
-            marker.style.transform = `translate(${clamp(p[0] - 8, 4, gpu.cssWidth - 235)}px,${clamp(p[1] - 72, 4, gpu.cssHeight - 45)}px)`;
+            marker.style.transform =
+                exhibition.phase === "playing"
+                    ? ""
+                    : `translate(${clamp(p[0] - 8, 4, gpu.cssWidth - 235)}px,${clamp(p[1] - 72, 4, gpu.cssHeight - 45)}px)`;
             marker.style.opacity = String(1 - smooth((session.cycle - (branch.until - 0.7)) / 0.7));
             marker.title = branch.inferred
                 ? "Candidate: branch immediately before the squashed instruction sequence; cause inferred from O3PipeView."
@@ -992,9 +995,11 @@ function start(gl: WebGL2RenderingContext) {
             const bounds = gpu.canvas.getBoundingClientRect();
             const occupied = [
                 ...document.querySelectorAll(
-                    ".view-controls,.mobile-run,.mobile-cycle,.touch-camera,.bound-scene,body.exhibiting #scene-telemetry"
+                    ".view-controls,.mobile-run,.mobile-cycle,.touch-camera,.bound-scene,body.exhibiting :is(#scene-telemetry,#scene-events)"
                 )
-            ].map((el) => el.getBoundingClientRect());
+            ]
+                .map((el) => el.getBoundingClientRect())
+                .filter((r) => r.width > 0 && r.height > 0);
             const priority = (n: sceneModel.Node) =>
                 (({ issue: 0, "register-read": 1, rob: 2 }) as Record<string, number>)[n.id] ?? 3;
             const candidates = [...scene.nodes.values()]

@@ -193,7 +193,8 @@ body.exhibiting
 }
 
 /* 通常の配置を保ったまま、展示中だけ同じ Top-down を指標パネルにまとめる。 */
-#scene-telemetry {
+#scene-telemetry,
+#scene-events {
     display: contents;
 }
 
@@ -211,7 +212,33 @@ body.exhibiting #scene-telemetry {
     pointer-events: none;
 }
 
-body.exhibiting:not([data-exhibition="playing"]) #scene-telemetry {
+body.exhibiting:not([data-exhibition="playing"]) :is(#scene-telemetry, #scene-events) {
+    display: none;
+}
+
+/* 展示のイベントは左に積み、右の指標と投影ラベルの重なりを避ける。 */
+body.exhibiting #scene-events {
+    position: absolute;
+    top: max(80px, calc(env(safe-area-inset-top) + 68px));
+    left: max(28px, env(safe-area-inset-left));
+    z-index: 4;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 8px;
+    width: 320px;
+    pointer-events: none;
+}
+
+body.exhibiting #scene-events > div {
+    position: static;
+    max-width: 100%;
+    margin: 0;
+    transform: none;
+    white-space: normal;
+}
+
+body.exhibiting .flush-alert:not(.visible) {
     display: none;
 }
 
@@ -1004,12 +1031,6 @@ body.cinema .cinema-caption span {
 body.cinema .flush-alert {
     top: 90px;
     left: 50%;
-}
-
-/* 展示の通知は右上の指標と重ねず、Cinema の中央配置を上書きする。 */
-body.exhibiting .flush-alert {
-    left: max(28px, env(safe-area-inset-left));
-    transform: none;
 }
 
 .front-label small {
