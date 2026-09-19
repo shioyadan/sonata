@@ -8,6 +8,10 @@ const { createBrowserTest, waitFor, loadPage } = require("./load-test.cjs")(
     "browser-test.cts"
 ) as typeof import("./browser-test.cts");
 
+declare global {
+    var exhibitionRandom: (() => number) | undefined;
+}
+
 async function reviewExhibition(window: BrowserWindow, entry: string, screenshots: string, basic = false) {
     const { evaluate, settle } = createBrowserTest(window);
     const state = () =>
@@ -18,6 +22,7 @@ async function reviewExhibition(window: BrowserWindow, entry: string, screenshot
             mode: sonata.camera.mode,
             loaded: sonata.hasTrace,
             cache: sonata.sampleCache,
+            style: sonata.visualStyle,
             hash: location.hash,
             status: document.getElementById("exhibition-status")!.textContent
         }));
@@ -31,6 +36,27 @@ async function reviewExhibition(window: BrowserWindow, entry: string, screenshot
     async function exit() {
         await evaluate(({ $ }) => $("exhibition-exit").click());
         assert.equal((await state()).active, false);
+    }
+    const keys = await evaluate(() => globalThis.sonataDemoCatalog.map((sample) => sample.key));
+    async function nextDemo(random: number) {
+        const before = await state();
+        const expected = keys[(keys.indexOf(before.trace) + 1) % keys.length];
+        await evaluate(({ sonata }, random) => {
+            globalThis.exhibitionRandom = Math.random;
+            Math.random = () => random;
+            sonata.setCycle(sonata.trace.lastCycle);
+        }, random);
+        try {
+            await touring(expected);
+            const after = await state();
+            assert.notEqual(after.style, before.style, "A new demo repeated the previous exhibition style");
+            return after;
+        } finally {
+            await evaluate(() => {
+                Math.random = globalThis.exhibitionRandom!;
+                delete globalThis.exhibitionRandom;
+            });
+        }
     }
     async function layout() {
         await settle();
@@ -86,6 +112,7 @@ async function reviewExhibition(window: BrowserWindow, entry: string, screenshot
         const select = $("speed") as HTMLSelectElement;
         select.value = "8";
         select.dispatchEvent(new Event("change"));
+        $("style-paper").click();
         const original = document.documentElement.requestFullscreen;
         document.documentElement.requestFullscreen = () => Promise.reject(new Error("Fullscreen denied by test"));
         $("exhibition-start").click();
@@ -93,29 +120,46 @@ async function reviewExhibition(window: BrowserWindow, entry: string, screenshot
     });
     await touring("rename-rush");
     assert.equal((await state()).mode, "cinema");
+    assert.equal((await state()).style, "paper", "Starting the tour discarded the selected style");
     assert.ok((await state()).hash.includes("exhibit=1"));
     await layout();
     if (basic) {
+        await nextDemo(0);
         await exit();
         assert.equal((await state()).playing, false);
+        assert.equal((await state()).style, "paper", "Exiting kept an automatically chosen style");
         assert.equal(await evaluate(() => (document.getElementById("speed") as HTMLSelectElement).value), "8");
-        return { startsWithoutFullscreen: true, exits: true, preservesSettings: true };
+        return { startsWithoutFullscreen: true, exits: true, preservesSettings: true, randomStyle: true };
     }
 
-    const keys = await evaluate(() => globalThis.sonataDemoCatalog.map((sample) => sample.key));
     const seen = [(await state()).trace];
-    for (let turn = 0; turn < keys.length; turn++) {
-        const expected = keys[(keys.indexOf((await state()).trace) + 1) % keys.length];
-        await evaluate(({ sonata }) => sonata.setCycle(sonata.trace.lastCycle));
-        await touring(expected);
-        seen.push(expected);
+    const seenStyles = new Set([(await state()).style]);
+    for (const [random, expectedStyle] of [
+        [0, "neon"],
+        [0.999, "paper"],
+        [0.999, "aluminum"],
+        [0, "neon"],
+        [0.999, "paper"],
+        [0, "neon"]
+    ] as const) {
+        const next = await nextDemo(random);
+        assert.equal(next.style, expectedStyle, "The exhibition ignored its random style choice");
+        seen.push(next.trace);
+        seenStyles.add(next.style);
     }
+    assert.deepEqual([...seenStyles].sort(), ["aluminum", "neon", "paper"]);
     assert.equal(new Set(seen).size, keys.length, "The tour skipped a sample");
     assert.deepEqual(
         [...(await state()).cache].sort(),
         [...keys].sort(),
         "A full tour did not retain its bounded cache"
     );
+    await exit();
+    assert.equal((await state()).style, "paper", "Exiting did not restore the manual style");
+    await evaluate(() => {
+        location.hash = "exhibit=1&demo=rename-rush";
+    });
+    await touring("rename-rush");
 
     // 触った操作は通し、保留中のドラッグやダイアログには自動復帰を割り込ませない。
     await evaluate(({ sonata, $ }) => {
@@ -140,6 +184,7 @@ async function reviewExhibition(window: BrowserWindow, entry: string, screenshot
         sonata.advanceExhibition(31);
     });
     await touring("rename-rush");
+    assert.equal((await state()).style, "paper", "Idle return changed the style of the same demo");
 
     // range/selectに残ったフォーカスだけで、無操作復帰を永久に止めない。
     await evaluate(({ sonata, $ }) => {
@@ -168,6 +213,7 @@ async function reviewExhibition(window: BrowserWindow, entry: string, screenshot
             $("exhibition-resume").click();
         }, style);
         await touring();
+        assert.equal((await state()).style, style, "Resuming changed a manually selected style");
         await layout();
         await waitFor(
             () => evaluate(({ sonata }) => Math.abs(sonata.camera.radius - sonata.camera.targetRadius) < 0.05),
@@ -210,6 +256,7 @@ async function reviewExhibition(window: BrowserWindow, entry: string, screenshot
         );
     });
     assert.equal((await state()).active, false, "Escape was ignored on a focused button");
+    assert.equal((await state()).style, "neon", "Exiting lost the last manual style choice");
     assert.ok(!(await state()).hash.includes("exhibit=1"));
     assert.equal(await evaluate(() => (document.getElementById("speed") as HTMLSelectElement).value), "8");
 
@@ -295,6 +342,7 @@ async function reviewExhibition(window: BrowserWindow, entry: string, screenshot
     await exit();
     return {
         allDemos: true,
+        randomStyles: true,
         boundedCache: true,
         idleRecovery: true,
         activeInteractionProtected: true,

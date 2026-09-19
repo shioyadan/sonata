@@ -414,6 +414,7 @@ function start(gl: WebGL2RenderingContext) {
         camera: CameraMode;
         auto: boolean;
         fullscreen: boolean;
+        style: sceneModel.StyleKey;
     } | null = null;
     let exhibitionFullscreen = false;
     let exhibitionWakeLock: WakeLockSentinel | null = null;
@@ -427,7 +428,13 @@ function start(gl: WebGL2RenderingContext) {
             return hasTrace && replay.trace.key === key;
         },
         cancelLoad: cancelDemo,
-        present() {
+        present(reason) {
+            if (reason === "next") {
+                const choices = (Object.keys(styles) as sceneModel.StyleKey[]).filter(
+                    (style) => style !== session.visualStyle
+                );
+                setVisualStyle(choices[Math.floor(Math.random() * choices.length)]);
+            }
             session.selectedID = null;
             session.speed = 4;
             $("speed").value = "4";
@@ -532,7 +539,8 @@ function start(gl: WebGL2RenderingContext) {
                 playing: session.playing,
                 camera: camera.cameraMode,
                 auto: camera.autoOrbit,
-                fullscreen: Boolean(document.fullscreenElement)
+                fullscreen: Boolean(document.fullscreenElement),
+                style: session.visualStyle
             };
         }
         cancelDemo();
@@ -554,6 +562,7 @@ function start(gl: WebGL2RenderingContext) {
             session.speed = saved.speed;
             $("speed").value = String(saved.speed);
             document.querySelector(".speed-unit")!.textContent = `${saved.speed} cycles / sec`;
+            setVisualStyle(saved.style);
             camera.setCamera(saved.camera);
             camera.toggleAuto(saved.auto);
             setPlaying(saved.playing);
@@ -651,11 +660,13 @@ function start(gl: WebGL2RenderingContext) {
     $("demo-cancel").addEventListener("click", cancelDemo);
     window.addEventListener("pagehide", cancelDemo);
     sampleStatus();
-    document
-        .querySelectorAll<HTMLButtonElement>("[data-style-choice]")
-        .forEach((button) =>
-            button.addEventListener("click", () => setVisualStyle(button.dataset.styleChoice as sceneModel.StyleKey))
-        );
+    document.querySelectorAll<HTMLButtonElement>("[data-style-choice]").forEach((button) =>
+        button.addEventListener("click", () => {
+            setVisualStyle(button.dataset.styleChoice as sceneModel.StyleKey);
+            // 巡回の乱択と手動選択を分け、展示を終えた後も利用者の選択を保つ。
+            if (exhibitionSettings) exhibitionSettings.style = session.visualStyle;
+        })
+    );
     $("play").addEventListener("click", () => setPlaying(!session.playing));
     $("previous").addEventListener("click", () => step(-1));
     $("next").addEventListener("click", () => step(1));
