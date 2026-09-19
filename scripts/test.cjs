@@ -8,6 +8,7 @@ const suites = {
     "store-evidence": "tsx",
     model: "types",
     playback: "types",
+    exhibition: "types",
     "sample-model": "types",
     continuity: "types",
     frontend: "types",
