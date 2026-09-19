@@ -1420,6 +1420,27 @@ body.exhibiting .world-bottom {
                 118px + env(safe-area-inset-bottom)
             );
     }
+    body[data-exhibition="exploring"] .mobile-run {
+        display: none;
+    }
+    body[data-exhibition="exploring"] #scene {
+        top: 110px;
+        height: calc(100% - 198px);
+    }
+    body[data-exhibition="exploring"]
+        :is(
+            .stage-label,
+            .physical-register-id,
+            .register-writeback,
+            .fifo-label,
+            .instruction-stream-label,
+            .recovery-branch
+        ) {
+        margin-top: 110px;
+    }
+    body[data-exhibition="exploring"] .flush-alert {
+        top: 110px;
+    }
 }
 
 @media (max-width: 1000px) and (max-height: 600px) and (min-width: 601px) {

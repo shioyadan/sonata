@@ -121,6 +121,8 @@ app.whenReady()
             transfers: () => require("./check-stage-transfers.cjs").all(window),
             smoke: () => load("check-smoke.cts")(window, screenshots, begin),
             launcher: () => load("check-launcher-render.cts")(window, screenshots, (url) => allowedURLs.add(url)),
+            exhibition: () => load("check-exhibition-render.cts")(window, entry, screenshots),
+            "exhibition-basic": () => load("check-exhibition-render.cts")(window, entry, screenshots, true),
             import: () => load("check-import.cts")(window, screenshots)
         };
         for (const group of ["basic", "navigation", "streaming", "playback", "layout"])

@@ -12,11 +12,13 @@ const full = [
     "transfers",
     "memory",
     "import",
-    "launcher"
+    "launcher",
+    "exhibition"
 ];
 const sections = [
     ...full,
     "smoke",
+    "exhibition-basic",
     "import-basic",
     "import-navigation",
     "import-streaming",
@@ -24,7 +26,7 @@ const sections = [
     "import-layout"
 ];
 const aliases = {
-    smoke: ["demos", "smoke", "import-basic", "launcher"],
+    smoke: ["demos", "smoke", "import-basic", "launcher", "exhibition-basic"],
     mobile: ["mobile"],
     styles: ["styles"],
     browser: ["browser"],
@@ -35,7 +37,8 @@ const aliases = {
     memory: ["memory"],
     transfers: ["transfers"],
     demos: ["demos"],
-    launcher: ["launcher"]
+    launcher: ["launcher"],
+    exhibition: ["exhibition"]
 };
 // Electronは自身のスイッチをスクリプトの前にも残すため、実行ファイルの位置から引数を取る。
 function scriptArguments(argv, filename) {

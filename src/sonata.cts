@@ -12,6 +12,7 @@ const { createGpu, createRenderer } = rendering;
 import cameraModel = require("./camera.cts");
 import createTraceImport = require("./trace-import.cts");
 import demos = require("./demo-loader.cts");
+import exhibitionModel = require("./exhibition.cts");
 const { createCamera } = cameraModel;
 type CameraMode = cameraModel.Mode;
 interface Session {
@@ -51,6 +52,7 @@ const gl = canvas.getContext("webgl2", { alpha: false, antialias: false, powerPr
 if (!gl) {
     $("fallback").hidden = false;
     document.querySelectorAll<HTMLButtonElement>("[data-style-choice]").forEach((button) => (button.disabled = true));
+    ($("exhibition-start") as HTMLButtonElement).disabled = true;
     $("renderer-status").textContent = "WebGL 2 unavailable";
 } else start(gl);
 
@@ -122,9 +124,16 @@ function start(gl: WebGL2RenderingContext) {
 
     function animate(now: number) {
         if (gpu.contextLost) return;
-        const dt = Math.min(0.075, Math.max(0, (now - clock.lastTime) / 1000));
+        const elapsed = Math.max(0, (now - clock.lastTime) / 1000);
+        // 展示中は描画負荷を抑える。探索へ戻れば通常のフレーム頻度に戻す。
+        if (exhibition.active && exhibition.phase !== "exploring" && elapsed < 1 / 30 - 0.001) {
+            clock.animationID = requestAnimationFrame(animate);
+            return;
+        }
+        const dt = Math.min(0.075, elapsed);
         clock.lastTime = now;
         if (!document.hidden) {
+            exhibition.tick(elapsed, exhibitionInteractionBlocked());
             if (!session.reducedMotion) clock.artTime += dt;
             if (hasTrace && session.playing) {
                 const duration = session.instructionStream ? sonataReplay.codeRewindDuration : 2.5;
@@ -137,8 +146,13 @@ function start(gl: WebGL2RenderingContext) {
                     cycles: next - session.cycle,
                     rate: dt > 0 ? (next - session.cycle) / (dt * session.speed) : 1
                 };
-                session.cycle =
-                    fileImport.advance(next, dt) ?? (next > replay.trace.lastCycle ? replay.trace.firstCycle : next);
+                if (exhibition.phase === "playing" && next > replay.trace.lastCycle) {
+                    session.cycle = replay.trace.lastCycle;
+                    exhibition.loop();
+                } else
+                    session.cycle =
+                        fileImport.advance(next, dt) ??
+                        (next > replay.trace.lastCycle ? replay.trace.firstCycle : next);
             }
             render(dt);
             updatePlaybackPosition();
@@ -271,6 +285,7 @@ function start(gl: WebGL2RenderingContext) {
             sampleStatus();
             render();
             updateUI();
+            if (exhibition.phase === "exploring") exhibition.interact(trace.key);
         } catch (error) {
             if (revision !== demoLoader.revision) return;
             demoLoader.forget(key);
@@ -281,10 +296,12 @@ function start(gl: WebGL2RenderingContext) {
         }
     }
     function chooseSample(key: string) {
+        if (exhibition.active) exhibition.interact();
         void loadTrace(key).catch(() => undefined); // 取得失敗は現在の表示を保ち、statusと再試行ボタンへ出す。
     }
     const fileImport = createTraceImport({
         reset: (reason) => {
+            if (reason === "open") stopExhibition();
             // 古いFileの障害は、それより後に選ばれたサンプルの取得を取り消さない。
             if (reason !== "error") cancelDemo();
             fileImport.close();
@@ -374,6 +391,238 @@ function start(gl: WebGL2RenderingContext) {
         render();
         updateUI();
     }
+
+    let exhibitionSettings: {
+        speed: number;
+        playing: boolean;
+        camera: CameraMode;
+        auto: boolean;
+        fullscreen: boolean;
+    } | null = null;
+    let exhibitionFullscreen = false;
+    let exhibitionWakeLock: WakeLockSentinel | null = null;
+    let wakeLockPending = false;
+    let exhibitionPhase: exhibitionModel.Phase = "off";
+    const exhibitionPointers = new Set<number>();
+    const exhibition = exhibitionModel.createExhibition({
+        keys: samples.map((sample) => sample.key),
+        async load(key) {
+            await loadTrace(key);
+            return hasTrace && replay.trace.key === key;
+        },
+        cancelLoad: cancelDemo,
+        present() {
+            session.selectedID = null;
+            session.speed = 4;
+            $("speed").value = "4";
+            document.querySelector(".speed-unit")!.textContent = "4 cycles / sec";
+            camera.setCamera("cinema");
+            camera.targetRadius *= 1.12;
+            camera.toggleAuto(!session.reducedMotion);
+            setCycle(replay.trace.firstCycle);
+            setPlaying(true);
+        },
+        changed: showExhibition
+    });
+    function syncExhibitionWakeLock() {
+        const wanted = exhibition.active && !document.hidden;
+        if (!wanted && exhibitionWakeLock) {
+            void exhibitionWakeLock.release().catch(() => undefined);
+            exhibitionWakeLock = null;
+        }
+        if (!wanted || exhibitionWakeLock || wakeLockPending || !navigator.wakeLock) return;
+        wakeLockPending = true;
+        void navigator.wakeLock
+            .request("screen")
+            .then((lock) => {
+                if (!exhibition.active || document.hidden) {
+                    void lock.release().catch(() => undefined);
+                    return;
+                }
+                exhibitionWakeLock = lock;
+                lock.addEventListener("release", () => {
+                    if (exhibitionWakeLock === lock) exhibitionWakeLock = null;
+                });
+            })
+            .catch(() => undefined)
+            .finally(() => {
+                wakeLockPending = false;
+            });
+    }
+    function exhibitionInteractionBlocked() {
+        return (
+            exhibitionPointers.size > 0 ||
+            Boolean(document.querySelector("dialog[open]")) ||
+            (document.activeElement instanceof HTMLElement &&
+                document.activeElement.matches(
+                    "input:not([type=range]):not([type=checkbox]):not([type=file]),textarea,[contenteditable=true]"
+                ))
+        );
+    }
+    function exhibitionLink(active: boolean, key?: string | null) {
+        const params = new URLSearchParams(location.hash.slice(1));
+        if (active) {
+            params.set("exhibit", "1");
+            params.delete("trace");
+            if (key) params.set("demo", key);
+        } else params.delete("exhibit");
+        const hash = params.toString();
+        history.replaceState(null, "", `${location.pathname}${location.search}${hash ? `#${hash}` : ""}`);
+    }
+    function showExhibition(state: exhibitionModel.Snapshot) {
+        const touring = state.active && state.phase !== "exploring";
+        document.body.dataset.exhibition = state.phase;
+        document.body.classList.toggle("exhibiting", touring);
+        $("exhibition-panel").hidden = !state.active;
+        $("exhibition-start").setAttribute("aria-pressed", String(state.active));
+        $("exhibition-explore").hidden = state.phase === "exploring";
+        $("exhibition-resume").hidden = state.phase !== "exploring";
+        const entry = samples.find((sample) => sample.key === state.key);
+        $("exhibition-count").textContent = entry ? `${samples.indexOf(entry) + 1} / ${samples.length}` : "";
+        $("exhibition-title").textContent = entry?.label ?? "sonata";
+        $("exhibition-description").textContent = entry?.description ?? "Follow instructions through the processor.";
+        $("exhibition-status").textContent =
+            state.phase === "exploring"
+                ? `Exploring · Tour resumes after ${Math.ceil(state.idleRemaining)}s without interaction`
+                : state.phase === "loading" || state.phase === "transition"
+                  ? "Loading the next demo…"
+                  : state.phase === "waiting"
+                    ? "Sample unavailable · Retrying the tour automatically…"
+                    : "Exhibition · Drag to explore · Esc to exit";
+        if (state.active && state.phase !== "exploring") exhibitionLink(true, state.key);
+        if (state.phase !== exhibitionPhase) {
+            if (state.phase === "exploring") {
+                camera.setCamera("orbit");
+                camera.toggleAuto(false);
+            } else if (touring && state.phase !== "playing") {
+                if (exhibitionPhase === "exploring") {
+                    (document.activeElement as HTMLElement | null)?.blur();
+                    canvas.focus({ preventScroll: true });
+                }
+                setPlaying(false);
+                camera.setCamera("cinema");
+            }
+            exhibitionPhase = state.phase;
+            gpu.resize();
+            syncExhibitionWakeLock();
+        }
+    }
+    function startExhibition(key = replay.trace.key) {
+        if (!demoLoader.online || gpu.contextLost) return;
+        exhibitionFullscreen = Boolean(document.fullscreenElement);
+        if (!exhibition.active) {
+            exhibitionSettings = {
+                speed: session.speed,
+                playing: session.playing,
+                camera: camera.cameraMode,
+                auto: camera.autoOrbit,
+                fullscreen: Boolean(document.fullscreenElement)
+            };
+        }
+        cancelDemo();
+        fileImport.cancelOpening();
+        for (const dialog of document.querySelectorAll<HTMLDialogElement>("dialog[open]")) dialog.close();
+        (document.activeElement as HTMLElement | null)?.blur();
+        exhibition.start(key);
+        canvas.focus({ preventScroll: true });
+    }
+    function stopExhibition() {
+        if (!exhibition.active) return;
+        exhibition.stop();
+        exhibitionLink(false);
+        exhibitionPointers.clear();
+        exhibitionFullscreen = false;
+        if (exhibitionSettings) {
+            const saved = exhibitionSettings;
+            exhibitionSettings = null;
+            session.speed = saved.speed;
+            $("speed").value = String(saved.speed);
+            document.querySelector(".speed-unit")!.textContent = `${saved.speed} cycles / sec`;
+            camera.setCamera(saved.camera);
+            camera.toggleAuto(saved.auto);
+            setPlaying(saved.playing);
+            if (!saved.fullscreen && document.fullscreenElement) void document.exitFullscreen().catch(() => undefined);
+        }
+        gpu.resize();
+    }
+    async function exhibitionFullScreen() {
+        if (document.fullscreenElement) return;
+        try {
+            await document.documentElement.requestFullscreen();
+            if (exhibition.active) exhibitionFullscreen = true;
+            else if (document.fullscreenElement) await document.exitFullscreen();
+        } catch {
+            $("exhibition-fullscreen").title = "Fullscreen is unavailable in this browser window";
+        }
+    }
+    ($("exhibition-start") as HTMLButtonElement).disabled = !demoLoader.online;
+    if (!demoLoader.online) $("exhibition-start").title = offlineMessage;
+    $("exhibition-start").addEventListener("click", () => {
+        startExhibition();
+        if (exhibition.active) void exhibitionFullScreen();
+    });
+    $("exhibition-exit").addEventListener("click", stopExhibition);
+    $("exhibition-explore").addEventListener("click", () => exhibition.interact(replay.trace.key));
+    $("exhibition-resume").addEventListener("click", () => {
+        for (const dialog of document.querySelectorAll<HTMLDialogElement>("dialog[open]")) dialog.close();
+        (document.activeElement as HTMLElement | null)?.blur();
+        exhibition.resume(replay.trace.key);
+        canvas.focus({ preventScroll: true });
+    });
+    $("exhibition-fullscreen").addEventListener("click", () => void exhibitionFullScreen());
+    // 画面操作はそのまま通し、自動巡回だけを中断する。ポインター保持中・ダイアログ内は復帰しない。
+    function interactWithExhibition(event: Event) {
+        if (!exhibition.active) return;
+        if (event.target instanceof Element && event.target.closest("[data-exhibition-control],#exhibition-start"))
+            return;
+        exhibition.interact(replay.trace.key);
+    }
+    document.addEventListener(
+        "pointerdown",
+        (event) => {
+            if (!exhibition.active) return;
+            if (exhibitionPointers.size < 10) exhibitionPointers.add(event.pointerId);
+            interactWithExhibition(event);
+        },
+        true
+    );
+    for (const type of ["pointerup", "pointercancel"] as const)
+        document.addEventListener(
+            type,
+            (event) => {
+                exhibitionPointers.delete(event.pointerId);
+                if (exhibition.phase === "exploring") exhibition.interact();
+            },
+            true
+        );
+    document.addEventListener(
+        "pointermove",
+        (event) => {
+            if (exhibitionPointers.has(event.pointerId)) interactWithExhibition(event);
+        },
+        true
+    );
+    for (const type of ["wheel", "input", "change", "click"])
+        document.addEventListener(type, interactWithExhibition, { capture: true, passive: true });
+    document.addEventListener(
+        "keydown",
+        (event) => {
+            if (!exhibition.active) return;
+            if (event.key === "Escape") {
+                event.preventDefault();
+                event.stopImmediatePropagation();
+                for (const dialog of document.querySelectorAll<HTMLDialogElement>("dialog[open]")) dialog.close();
+                stopExhibition();
+                $("exhibition-start").focus();
+            } else if (event.key !== "Tab") interactWithExhibition(event);
+            else if (exhibition.phase === "exploring") exhibition.interact();
+        },
+        true
+    );
+    window.addEventListener("blur", () => exhibitionPointers.clear());
+    window.addEventListener("pagehide", () => {
+        if (exhibitionWakeLock) void exhibitionWakeLock.release().catch(() => undefined);
+    });
 
     for (const id of ["trace-select", "welcome-demo-select"] as const) {
         $(id).disabled = !demoLoader.online;
@@ -467,6 +716,8 @@ function start(gl: WebGL2RenderingContext) {
     });
     document.addEventListener("fullscreenchange", () => {
         $("fullscreen").firstChild!.textContent = document.fullscreenElement ? "Exit fullscreen " : "Fullscreen ";
+        if (document.fullscreenElement && exhibition.active) exhibitionFullscreen = true;
+        else if (exhibitionFullscreen) stopExhibition();
     });
     document.addEventListener("keydown", (event) => {
         if (
@@ -552,6 +803,8 @@ function start(gl: WebGL2RenderingContext) {
     canvas.addEventListener("webglcontextrestored", () => globalThis.location.reload());
     document.addEventListener("visibilitychange", () => {
         clock.lastTime = performance.now();
+        exhibitionPointers.clear();
+        syncExhibitionWakeLock();
     });
     new ResizeObserver(() => {
         if (!gpu.contextLost) gpu.resize();
@@ -567,7 +820,13 @@ function start(gl: WebGL2RenderingContext) {
     globalThis.sonata = diagnostics;
     clock.animationID = requestAnimationFrame(animate);
     function readDemoLink() {
-        const key = new URLSearchParams(location.hash.slice(1)).get("demo");
+        const params = new URLSearchParams(location.hash.slice(1));
+        const key = params.get("demo");
+        if (params.get("exhibit") === "1" && demoLoader.online) {
+            startExhibition(key ?? replay.trace.key);
+            return;
+        }
+        stopExhibition();
         if (key) chooseSample(key);
         else cancelDemo();
     }
@@ -996,6 +1255,16 @@ function start(gl: WebGL2RenderingContext) {
         return {
             get hasTrace() {
                 return hasTrace;
+            },
+            get exhibition() {
+                return exhibition.snapshot();
+            },
+            get sampleCache() {
+                return demoLoader.cachedKeys;
+            },
+            // 実画面を使う回帰検査でも待機時間だけを進め、フレームや読込みは実経路を使う。
+            advanceExhibition(seconds: number) {
+                if (!document.hidden) exhibition.tick(seconds, exhibitionInteractionBlocked());
             },
             get visualStyle() {
                 return session.visualStyle;

@@ -6,6 +6,7 @@ import type files = require("./trace-file.cts");
 interface CatalogEntry {
     key: string;
     label: string;
+    description: string;
     url: string;
     name: string;
     size: number;
@@ -119,7 +120,8 @@ function createLoader(catalog: readonly CatalogEntry[], pageURL: string) {
         const trace = await prepare(entry);
         if (request !== revision || !trace) return null;
         cache.set(key, trace);
-        if (cache.size > 5) cache.delete(cache.keys().next().value!);
+        // 全6デモを一巡した後の展示では再解析せず、保持する窓数も固定上限内にする。
+        if (cache.size > 6) cache.delete(cache.keys().next().value!);
         return trace;
     }
     return {
@@ -127,6 +129,9 @@ function createLoader(catalog: readonly CatalogEntry[], pageURL: string) {
         cancel,
         forget: (key: string) => cache.delete(key),
         online,
+        get cachedKeys() {
+            return [...cache.keys()];
+        },
         get revision() {
             return revision;
         }
