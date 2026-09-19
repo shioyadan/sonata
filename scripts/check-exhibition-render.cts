@@ -23,6 +23,9 @@ async function reviewExhibition(window: BrowserWindow, entry: string, screenshot
             loaded: sonata.hasTrace,
             cache: sonata.sampleCache,
             style: sonata.visualStyle,
+            telemetryVisible:
+                document.getElementById("scene-telemetry")!.getBoundingClientRect().height > 0 &&
+                getComputedStyle(document.getElementById("scene-telemetry")!).visibility !== "hidden",
             hash: location.hash,
             status: document.getElementById("exhibition-status")!.textContent
         }));
@@ -36,6 +39,7 @@ async function reviewExhibition(window: BrowserWindow, entry: string, screenshot
     async function exit() {
         await evaluate(({ $ }) => $("exhibition-exit").click());
         assert.equal((await state()).active, false);
+        assert.equal((await state()).telemetryVisible, false, "Exhibition metrics remained after exit");
     }
     const keys = await evaluate(() => globalThis.sonataDemoCatalog.map((sample) => sample.key));
     async function nextDemo(random: number) {
@@ -58,12 +62,104 @@ async function reviewExhibition(window: BrowserWindow, entry: string, screenshot
             });
         }
     }
+    async function telemetry() {
+        const snapshots = await evaluate(({ sonata, $ }) => {
+            const trace = sonata.trace;
+            const original = trace.topDown;
+            const cycle = sonata.cycle;
+            const read = (at: number) => {
+                sonata.setCycle(at);
+                const topDown = sonata.topDown;
+                return {
+                    cycle: sonata.cycle,
+                    shownCycle: Number($("exhibition-cycle").textContent!.replaceAll(",", "")),
+                    ipc: $("exhibition-ipc").textContent,
+                    expectedIPC: sonata.stats.ipc.toFixed(2),
+                    occupancy: (["issue", "rob"] as const).map((name) => {
+                        const meter = $(`exhibition-${name}-meter`) as HTMLProgressElement;
+                        const count = sonata.stats[name];
+                        const capacity = name === "issue" ? trace.structure.queueCapacity : trace.structure.robCapacity;
+                        return {
+                            count,
+                            capacity,
+                            text: $(`exhibition-${name}-count`).textContent,
+                            value: meter.value,
+                            max: meter.max
+                        };
+                    }),
+                    classification: $("bound-scene").dataset.bound,
+                    expectedClassification: topDown.available ? topDown.dominant : "unavailable",
+                    window: $("bound-scene-window").textContent,
+                    barHidden: $("bound-scene-bar").hidden,
+                    shares: [...$("bound-scene-bar").children].map((el) => {
+                        const item = el as HTMLElement;
+                        const key = item.dataset.bound as keyof typeof sonata.topDownVisual.shares;
+                        return {
+                            actual: Number.parseFloat(item.style.width) / 100,
+                            expected: sonata.topDownVisual.shares[key]
+                        };
+                    }),
+                    unknownHidden: $("bound-scene-key").querySelector<HTMLElement>('[data-bound="unresolved"]')!.hidden
+                };
+            };
+            try {
+                const values = [read(trace.firstCycle), read(trace.demo.screenshotCycle), read(trace.firstCycle)];
+                // 実デモに不明値がない場合も、表示用に判定結果を補完しないことを確認する。
+                trace.topDown = null;
+                values.push(read(trace.firstCycle + 1));
+                trace.topDown = {
+                    firstCycle: trace.firstCycle,
+                    windowCycles: 1,
+                    slots: [[0, 0, 0, 0, 0, 1]],
+                    method: "test"
+                };
+                values.push(read(trace.firstCycle + 1));
+                return values;
+            } finally {
+                trace.topDown = original;
+                sonata.setCycle(cycle);
+            }
+        });
+        for (const value of snapshots) {
+            assert.ok(Math.abs(value.shownCycle - value.cycle) < 0.011, "Exhibition cycle lagged behind playback");
+            assert.equal(value.ipc, value.expectedIPC, "Exhibition throughput differed from the playback model");
+            for (const meter of value.occupancy) {
+                assert.equal(meter.text, `${meter.count} / ${meter.capacity}`);
+                assert.equal(meter.value, meter.count);
+                assert.equal(meter.max, meter.capacity);
+            }
+            assert.equal(value.classification, value.expectedClassification);
+            if (value.classification !== "unavailable") {
+                assert.match(value.window!, /ESTIMATE/);
+                assert.equal(value.barHidden, false);
+                for (const share of value.shares) {
+                    assert.ok(typeof share.expected === "number");
+                    assert.ok(Math.abs(share.actual - share.expected) < 1e-7);
+                }
+            } else {
+                assert.equal(value.window, "UNAVAILABLE");
+                assert.equal(value.barHidden, true);
+            }
+        }
+        assert.equal(snapshots[3].classification, "unavailable");
+        assert.equal(snapshots[4].classification, "unresolved");
+        assert.equal(snapshots[4].unknownHidden, false, "Unresolved slots disappeared from the exhibition legend");
+        assert.equal((await state()).phase, "playing", "Inspecting metrics interrupted the exhibition");
+    }
     async function layout() {
         await settle();
         const result = await evaluate(() => {
             const ids = ["exhibition-exit", "exhibition-status"];
             if (document.body.dataset.exhibition === "playing")
-                ids.push("exhibition-title", "exhibition-description", "exhibition-explore");
+                ids.push(
+                    "exhibition-title",
+                    "exhibition-description",
+                    "exhibition-explore",
+                    "scene-telemetry",
+                    "bound-scene",
+                    "exhibition-ipc",
+                    "exhibition-cycle-label"
+                );
             else ids.push("exhibition-resume");
             return {
                 width: document.documentElement.scrollWidth,
@@ -74,6 +170,30 @@ async function reviewExhibition(window: BrowserWindow, entry: string, screenshot
                 })(),
                 touring: document.body.dataset.exhibition === "playing",
                 height: innerHeight,
+                occupancyVisible: document.getElementById("exhibition-rob-meter")!.getBoundingClientRect().height > 0,
+                compact: matchMedia("(max-width: 760px), (max-width: 1000px) and (max-height: 600px)").matches,
+                collisions: (() => {
+                    if (document.body.dataset.exhibition !== "playing") return [];
+                    const r = document.getElementById("scene-telemetry")!.getBoundingClientRect();
+                    return [
+                        ".exhibition-actions",
+                        ".exhibition-caption",
+                        ".world-bottom",
+                        ".flush-alert.visible"
+                    ].filter((selector) => {
+                        const el = document.querySelector(selector);
+                        if (!el) return false;
+                        const b = el.getBoundingClientRect();
+                        return (
+                            b.width > 0 &&
+                            b.height > 0 &&
+                            r.left < b.right &&
+                            r.right > b.left &&
+                            r.top < b.bottom &&
+                            r.bottom > b.top
+                        );
+                    });
+                })(),
                 items: ids.map((id) => {
                     const el = document.getElementById(id)!;
                     const r = el.getBoundingClientRect();
@@ -95,6 +215,12 @@ async function reviewExhibition(window: BrowserWindow, entry: string, screenshot
         if (result.touring) {
             assert.equal(result.canvas.top, 0, "The exhibition retained the mobile HUD offset");
             assert.equal(result.canvas.height, result.height, "The exhibition canvas did not fill the viewport");
+            assert.equal(
+                result.occupancyVisible,
+                !result.compact,
+                "Exhibition occupancy did not adapt to the viewport"
+            );
+            assert.deepEqual(result.collisions, [], "Exhibition telemetry overlapped its caption or controls");
         }
         for (const item of result.items) {
             assert.ok(
@@ -123,13 +249,20 @@ async function reviewExhibition(window: BrowserWindow, entry: string, screenshot
     assert.equal((await state()).style, "paper", "Starting the tour discarded the selected style");
     assert.ok((await state()).hash.includes("exhibit=1"));
     await layout();
+    await telemetry();
     if (basic) {
         await nextDemo(0);
         await exit();
         assert.equal((await state()).playing, false);
         assert.equal((await state()).style, "paper", "Exiting kept an automatically chosen style");
         assert.equal(await evaluate(() => (document.getElementById("speed") as HTMLSelectElement).value), "8");
-        return { startsWithoutFullscreen: true, exits: true, preservesSettings: true, randomStyle: true };
+        return {
+            startsWithoutFullscreen: true,
+            exits: true,
+            preservesSettings: true,
+            randomStyle: true,
+            telemetry: true
+        };
     }
 
     const seen = [(await state()).trace];
@@ -200,7 +333,8 @@ async function reviewExhibition(window: BrowserWindow, entry: string, screenshot
         [1440, 1000, "neon"],
         [390, 844, "paper"],
         [320, 568, "aluminum"],
-        [932, 430, "neon"]
+        [932, 430, "neon"],
+        [667, 375, "neon"]
     ] as const) {
         await evaluate(({ $ }) => $("exhibition-explore").click());
         window.setSize(width, height);
@@ -244,6 +378,20 @@ async function reviewExhibition(window: BrowserWindow, entry: string, screenshot
             path.join(screenshots, `exhibition-${style}-${width}.png`),
             (await window.webContents.capturePage()).toPNG()
         );
+        assert.equal(
+            await evaluate(({ sonata, $ }) => {
+                sonata.setCycle(sonata.flushEvents[0] + 0.1);
+                return $("flush-alert").classList.contains("visible");
+            }),
+            true,
+            "The exhibition did not show its flush notification"
+        );
+        await layout();
+        if (width === 667)
+            fs.writeFileSync(
+                path.join(screenshots, "exhibition-flush-667.png"),
+                (await window.webContents.capturePage()).toPNG()
+            );
         await evaluate(({ $ }) => $("exhibition-explore").click());
         await layout();
         await evaluate(({ $ }) => $("exhibition-resume").click());
@@ -305,6 +453,7 @@ async function reviewExhibition(window: BrowserWindow, entry: string, screenshot
         location.hash = "exhibit=1";
     });
     await until((s) => s.phase === "loading", "The exhibition did not wait for its sample");
+    assert.equal((await state()).telemetryVisible, false, "Loading showed results from the previous demo");
     const cancelPoint = await evaluate(() => {
         const r = document.getElementById("trace-loading-cancel")!.getBoundingClientRect();
         return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) };
@@ -325,6 +474,7 @@ async function reviewExhibition(window: BrowserWindow, entry: string, screenshot
     });
     for (let attempt = 0; attempt < keys.length; attempt++) {
         await until((s) => s.phase === "waiting", "The failed sample did not become a recoverable wait");
+        assert.equal((await state()).telemetryVisible, false, "An unavailable sample kept stale metrics visible");
         if (attempt < keys.length - 1)
             await evaluate(({ sonata }) => {
                 sonata.advanceExhibition(2.1);
@@ -342,6 +492,7 @@ async function reviewExhibition(window: BrowserWindow, entry: string, screenshot
     await exit();
     return {
         allDemos: true,
+        telemetry: true,
         randomStyles: true,
         boundedCache: true,
         idleRecovery: true,

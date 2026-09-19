@@ -500,6 +500,7 @@ function start(gl: WebGL2RenderingContext) {
         $("exhibition-start").setAttribute("aria-pressed", String(state.active));
         $("exhibition-explore").hidden = state.phase === "exploring";
         $("exhibition-resume").hidden = state.phase !== "exploring";
+        $("exhibition-metrics").hidden = $("exhibition-cycle-label").hidden = state.phase !== "playing";
         const entry = samples.find((sample) => sample.key === state.key);
         $("exhibition-count").textContent = entry ? `${samples.indexOf(entry) + 1} / ${samples.length}` : "";
         $("exhibition-title").textContent = entry?.label ?? "sonata";
@@ -990,7 +991,9 @@ function start(gl: WebGL2RenderingContext) {
         if (camera.compactMedia.matches) {
             const bounds = gpu.canvas.getBoundingClientRect();
             const occupied = [
-                ...document.querySelectorAll(".view-controls,.mobile-run,.mobile-cycle,.touch-camera,.bound-scene")
+                ...document.querySelectorAll(
+                    ".view-controls,.mobile-run,.mobile-cycle,.touch-camera,.bound-scene,body.exhibiting #scene-telemetry"
+                )
             ].map((el) => el.getBoundingClientRect());
             const priority = (n: sceneModel.Node) =>
                 (({ issue: 0, "register-read": 1, rob: 2 }) as Record<string, number>)[n.id] ?? 3;
@@ -1065,9 +1068,14 @@ function start(gl: WebGL2RenderingContext) {
             document.createTextNode(integer.toLocaleString("en-US")),
             Object.assign(document.createElement("span"), { textContent: `.${String(fraction).padStart(2, "0")}` })
         );
-        $("mobile-cycle-value").textContent = `${integer.toLocaleString("en-US")}.${String(fraction).padStart(2, "0")}`;
+        const cycleText = `${integer.toLocaleString("en-US")}.${String(fraction).padStart(2, "0")}`;
+        $("mobile-cycle-value").textContent = cycleText;
         $("active-count").textContent = String(activity.frame.stats.active.length);
         $("ipc-value").textContent = activity.frame.stats.ipc.toFixed(2);
+        if (exhibition.phase === "playing") {
+            $("exhibition-cycle").textContent = cycleText;
+            $("exhibition-ipc").textContent = $("ipc-value").textContent;
+        }
         const traceEvents = (replay.trace.demo.events ?? []).filter(
             (e) => session.cycle >= e.cycle && session.cycle < e.endCycle!
         );
@@ -1135,6 +1143,13 @@ function start(gl: WebGL2RenderingContext) {
             ["rob", activity.frame.stats.rob.length, replay.trace.structure.robCapacity]
         ] as const) {
             $(`${name}-count`).textContent = `${count} / ${capacity}`;
+            if (exhibition.phase === "playing") {
+                $(`exhibition-${name}-count`).textContent = `${count} / ${capacity}`;
+                const meter = $(`exhibition-${name}-meter`) as HTMLProgressElement;
+                meter.max = capacity;
+                meter.value = count;
+                meter.setAttribute("aria-valuetext", `${count} used / ${capacity} displayed entries`);
+            }
             [...$(`${name}-meter`).children].forEach((el, i) =>
                 el.classList.toggle("on", i < Math.ceil((count / capacity) * 24))
             );
@@ -1249,6 +1264,8 @@ function start(gl: WebGL2RenderingContext) {
         $("queue-label").textContent = replay.trace.machineOrder === "in-order" ? "Schedule queue" : "Scheduler";
         $("fp-legend").hidden = !replay.memory.executionNodes.some((node) => node.kind === "fp");
         $("rob-label").textContent = replay.trace.machineOrder === "in-order" ? "Completion buffer" : "Reorder buffer";
+        $("exhibition-queue-label").textContent = $("queue-label").textContent;
+        $("exhibition-rob-label").textContent = $("rob-label").textContent;
         const flushEvents = windowFlushEvents();
         $("next-flush").disabled = flushEvents.length === 0;
         $("next-flush").title = flushEvents.length

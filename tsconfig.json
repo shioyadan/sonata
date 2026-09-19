@@ -19,6 +19,7 @@
     "scripts/check-file-playback.cts",
     "scripts/browser-test.cts",
     "scripts/check-demo-loading.cts",
+    "scripts/check-exhibition-render.cts",
     "scripts/check-launcher-render.cts"
   ]
 }

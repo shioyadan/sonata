@@ -1422,6 +1422,7 @@ body.exhibiting .world-bottom {
     }
     body.exhibiting .flush-alert {
         top: 238px;
+        left: max(16px, env(safe-area-inset-left));
     }
     body.exhibiting :is(.trace-event-notice, .memory-notice) {
         display: none;
@@ -1483,6 +1484,8 @@ body.exhibiting .world-bottom {
     }
     body.exhibiting .flush-alert {
         top: 72px;
+        max-width: calc(100% - 368px);
+        white-space: normal;
     }
     .exhibition-caption {
         max-width: 570px;
