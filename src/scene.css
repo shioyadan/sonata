@@ -5,6 +5,35 @@
     background: #080e14;
 }
 
+/* 入れ替えるトレースが読めるまで、前のシーンを新しい選択として見せない。 */
+body[data-trace-loading="true"] .world > :not(#trace-loading) {
+    visibility: hidden;
+}
+.trace-loading {
+    position: absolute;
+    inset: 0;
+    z-index: 6;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 16px;
+    padding: 24px;
+    background: var(--bg);
+    text-align: center;
+}
+.trace-loading p {
+    max-width: 480px;
+    margin: 0;
+    overflow-wrap: anywhere;
+    font-size: 14px;
+    color: var(--text);
+}
+.trace-loading button {
+    min-height: 44px;
+    min-width: 80px;
+}
+
 .topbar-actions {
     display: flex;
     align-items: center;

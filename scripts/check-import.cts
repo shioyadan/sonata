@@ -284,16 +284,19 @@ async function reviewImport(
             "Invalid trace did not report an error"
         );
         assert.equal(await evaluate(({ sonata }) => sonata.trace.key), "rename-rush");
+        assert.ok(await evaluate(() => document.getElementById("trace-loading")!.hidden));
         await evaluate(() => {
             const data = new DataTransfer();
             data.items.add(new File(["Kanata\t0004\n", "\n".repeat(1_000_000)], "cancel.kanata"));
             document.dispatchEvent(new DragEvent("drop", { dataTransfer: data, cancelable: true }));
-            document.getElementById("import-cancel")!.click();
+            if (document.getElementById("trace-loading")!.hidden) throw new Error("File opening was not indicated");
+            document.getElementById("trace-loading-cancel")!.click();
         });
         await waitFor(
             ({ sonata }) => !sonata.fileImport.busy && sonata.fileImport.source === null,
             "Cancel did not release the file"
         );
+        assert.ok(await evaluate(() => document.getElementById("trace-loading")!.hidden));
         await evaluate(({ sonata }) => sonata.loadTrace("rename-rush"));
         await importFile("one-cycle.kanata", "Kanata\t0004\nI\t0\t0\t0\nS\t0\t0\tF\n");
         assert.equal(await evaluate(() => document.getElementById("playhead")!.style.left), "0%");

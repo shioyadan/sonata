@@ -254,6 +254,24 @@ async function reviewExhibition(window: BrowserWindow, entry: string, screenshot
     const workerSource = await evaluate(() => globalThis.sonataTraceWorkerSource);
     await evaluate(() => {
         globalThis.sonataTraceWorkerSource =
+            "globalThis.fetch = () => new Promise(() => {});\n" + globalThis.sonataTraceWorkerSource;
+        location.hash = "exhibit=1";
+    });
+    await until((s) => s.phase === "loading", "The exhibition did not wait for its sample");
+    const cancelPoint = await evaluate(() => {
+        const r = document.getElementById("trace-loading-cancel")!.getBoundingClientRect();
+        return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) };
+    });
+    // pointerdownで探索へ切り替えてボタンを消さず、clickで展示と取得を終了する。
+    window.webContents.sendInputEvent({ type: "mouseDown", ...cancelPoint, button: "left", clickCount: 1 });
+    window.webContents.sendInputEvent({ type: "mouseUp", ...cancelPoint, button: "left", clickCount: 1 });
+    await until((s) => !s.active, "Canceling a loading sample left the exhibition active");
+    assert.ok(await evaluate(() => document.getElementById("trace-loading")!.hidden));
+    await evaluate((_page, source) => {
+        globalThis.sonataTraceWorkerSource = source;
+    }, workerSource);
+    await evaluate(() => {
+        globalThis.sonataTraceWorkerSource =
             "globalThis.fetch = async () => new Response('Not found', {status:404});\n" +
             globalThis.sonataTraceWorkerSource;
         location.hash = "exhibit=1";
@@ -284,6 +302,7 @@ async function reviewExhibition(window: BrowserWindow, entry: string, screenshot
         escape: true,
         deepLink: true,
         fileEndsTour: true,
+        cancelWhileLoading: true,
         failureRecovery: true
     };
 }

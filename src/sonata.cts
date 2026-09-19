@@ -135,7 +135,7 @@ function start(gl: WebGL2RenderingContext) {
         if (!document.hidden) {
             exhibition.tick(elapsed, exhibitionInteractionBlocked());
             if (!session.reducedMotion) clock.artTime += dt;
-            if (hasTrace && session.playing) {
+            if (hasTrace && session.playing && !sourceLoading.sample && !sourceLoading.file) {
                 const duration = session.instructionStream ? sonataReplay.codeRewindDuration : 2.5;
                 const next = sonataReplay.advancePlayback(session.cycle, dt, session.speed, replay.flushEvents, {
                     duration,
@@ -178,6 +178,7 @@ function start(gl: WebGL2RenderingContext) {
     let lastDemo: sonataReplay.Trace | null = null;
     let retryDemo = "";
     let hasTrace = false;
+    const sourceLoading = { sample: "", file: "" };
     const gpu = createGpu({ gl, canvas, onResize: drawTimeline });
     const replaySource = sonataReplay.createReplay({ samples: [] });
     const replay = replaySource.loadData(demos.emptyTrace());
@@ -226,7 +227,7 @@ function start(gl: WebGL2RenderingContext) {
     }
 
     function render(dt = 0) {
-        if (gpu.contextLost || !hasTrace) return;
+        if (gpu.contextLost || !hasTrace || sourceLoading.sample || sourceLoading.file) return;
         renderer.render(dt);
         updateLabels(dt);
     }
@@ -238,7 +239,16 @@ function start(gl: WebGL2RenderingContext) {
         if (scene.worldBuildCount() !== previous) renderer.buildMaterialShadow();
     }
     const offlineMessage = "Samples require the online site or a local HTTP server. You can open a trace file offline.";
+    function showSourceLoading(source: keyof typeof sourceLoading, text: string) {
+        sourceLoading[source] = text;
+        const message = sourceLoading.sample || sourceLoading.file;
+        $("trace-loading").hidden = !message;
+        $("trace-loading-message").textContent = message;
+        document.body.dataset.traceLoading = String(Boolean(message));
+        $("world").setAttribute("aria-busy", String(Boolean(message)));
+    }
     function sampleStatus(text = "", busy = false) {
+        showSourceLoading("sample", busy ? text : "");
         $("demo-status").textContent = text || (demoLoader.online ? "" : offlineMessage);
         $("demo-status").hidden = !$("demo-status").textContent;
         $("demo-cancel").hidden = !busy;
@@ -300,6 +310,7 @@ function start(gl: WebGL2RenderingContext) {
         void loadTrace(key).catch(() => undefined); // 取得失敗は現在の表示を保ち、statusと再試行ボタンへ出す。
     }
     const fileImport = createTraceImport({
+        initialStatus: (text) => showSourceLoading("file", text),
         reset: (reason) => {
             if (reason === "open") stopExhibition();
             // 古いFileの障害は、それより後に選ばれたサンプルの取得を取り消さない。
@@ -345,6 +356,11 @@ function start(gl: WebGL2RenderingContext) {
             updateUI();
             return replay.ops;
         }
+    });
+    $("trace-loading-cancel").addEventListener("click", () => {
+        if (exhibition.active) stopExhibition();
+        if (sourceLoading.sample) cancelDemo();
+        else if (sourceLoading.file) $("import-cancel").click();
     });
     function placeSourceStatus() {
         if (hasTrace || $("mobile-panel").open) $("file-tools").before($("source-status"));

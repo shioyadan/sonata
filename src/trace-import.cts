@@ -13,7 +13,8 @@ function createTraceImport({
     reset,
     apply,
     read,
-    pause
+    pause,
+    initialStatus
 }: {
     reset: (reason: "open" | "close" | "error" | "restore") => void;
     apply: (
@@ -22,6 +23,7 @@ function createTraceImport({
     ) => readonly Pick<replay.Operation, "id" | "stages">[];
     read: () => { cycle: number; selectedID: number | null };
     pause: () => void;
+    initialStatus: (text: string) => void;
 }) {
     const element = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
     const input = element<HTMLInputElement>("trace-file");
@@ -103,6 +105,8 @@ function createTraceImport({
         message(text);
         element("file-window-status").textContent = text;
         element("file-window-status").hidden = !text;
+        // 最初の表示窓だけを待つ。背景解析や区間移動では既存の表示を覆わない。
+        initialStatus(!displayed && !error && (loading || pending || opening) ? reading || text : "");
     }
     function cancelOpening() {
         opening?.abort();

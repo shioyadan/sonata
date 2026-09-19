@@ -38,7 +38,9 @@ async function reviewDemoLoading(
             status: document.getElementById("demo-status")!.textContent,
             file: sonata.fileImport.source?.name,
             complete: sonata.fileImport.source?.complete,
-            busy: sonata.fileImport.busy
+            busy: sonata.fileImport.busy,
+            loading: !document.getElementById("trace-loading")!.hidden,
+            sceneVisible: getComputedStyle(document.getElementById("scene")!).visibility !== "hidden"
         }));
     const until = (check: (value: Awaited<ReturnType<typeof state>>) => boolean, message: string) =>
         waitFor(async () => check(await state()), message, { diagnostics: state });
@@ -149,6 +151,9 @@ async function reviewDemoLoading(
             () => evaluate(() => Boolean(globalThis.demoReview?.started)),
             "The delayed sample request did not start"
         );
+        const waiting = await state();
+        assert.ok(waiting.loading && !waiting.sceneVisible, "A pending sample kept the previous scene visible");
+        assert.match(await evaluate(() => document.getElementById("trace-loading-message")!.textContent!), /Loading/);
     }
 
     try {
@@ -160,6 +165,7 @@ async function reviewDemoLoading(
         assert.ok(await evaluate(() => (document.getElementById("welcome-demo-select") as HTMLSelectElement).disabled));
         for (const [width, height] of [
             [1440, 1000],
+            [320, 568],
             [390, 844],
             [932, 430]
         ]) {
@@ -184,6 +190,22 @@ async function reviewDemoLoading(
             assert.ok(layout.fits, "The empty page hid the File button outside the viewport");
             assert.equal(layout.hit, "welcome-open", "The File button was covered");
             assert.ok(layout.width <= width, "The empty page overflowed horizontally");
+            const actions = await evaluate(() =>
+                ["exhibition-start", "fullscreen"].map((id) => {
+                    const el = document.getElementById(id)!;
+                    const r = el.getBoundingClientRect();
+                    return {
+                        top: r.top,
+                        height: r.height,
+                        width: r.width,
+                        hit: el.contains(document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2)),
+                        named: Boolean(el.getAttribute("aria-label"))
+                    };
+                })
+            );
+            assert.equal(actions[0].top, actions[1].top, "Header actions were not aligned");
+            assert.equal(actions[0].height, actions[1].height, "Header actions had different heights");
+            assert.ok(actions.every((a) => a.width >= 44 && a.height >= 44 && a.hit && a.named));
             fs.writeFileSync(
                 path.join(screenshots, `welcome-${width}.png`),
                 (await window.webContents.capturePage()).toPNG()
@@ -256,6 +278,7 @@ async function reviewDemoLoading(
             assert.equal((await state()).key, "rename-rush", `${mode}: a failed load replaced the current trace`);
             assert.ok((await state()).status);
             assert.equal((await state()).playing, false);
+            assert.ok(!(await state()).loading && (await state()).sceneVisible, "Sample failure hid the old trace");
             await restore();
         }
         await evaluate(() => document.getElementById("demo-retry")!.click());
@@ -265,6 +288,7 @@ async function reviewDemoLoading(
         await openFile();
         await restore();
         assert.equal((await state()).key, "local-file", "An old demo response replaced the user's File");
+        assert.equal((await state()).loading, false, "The new File remained covered by sample loading");
         await inject("x86-recovery", "missing");
         await evaluate(async ({ sonata }) => {
             try {
@@ -281,10 +305,44 @@ async function reviewDemoLoading(
         await select("memory-tide");
         await restore();
         assert.equal((await state()).key, "memory-tide", "An older sample response won a newer selection");
+        assert.equal((await state()).loading, false, "The latest sample remained covered");
+        await evaluate(({ sonata }) => sonata.setPlaying(true));
         await delayed("x86-recovery");
-        await evaluate(() => document.getElementById("demo-cancel")!.click());
+        const heldCycle = await evaluate(({ sonata }) => sonata.cycle);
+        for (const [width, height, style] of [
+            [1440, 1000, "neon"],
+            [390, 844, "paper"],
+            [320, 568, "aluminum"]
+        ] as const) {
+            window.setSize(width, height);
+            await evaluate((_page, style) => document.getElementById(`style-${style}`)!.click(), style);
+            await waitFor(() => evaluate((_page, width) => innerWidth === width, width), "Loading did not resize");
+            const layout = await evaluate(() => {
+                const cancel = document.getElementById("trace-loading-cancel")!;
+                const r = cancel.getBoundingClientRect();
+                return {
+                    fits: r.left >= 0 && r.right <= innerWidth && r.top >= 0 && r.bottom <= innerHeight,
+                    hit: cancel.contains(document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2)),
+                    overflow: document.documentElement.scrollWidth > innerWidth
+                };
+            });
+            assert.ok(layout.fits && layout.hit && !layout.overflow, "Loading cancellation was not accessible");
+            fs.writeFileSync(
+                path.join(screenshots, `trace-loading-${width}.png`),
+                (await window.webContents.capturePage()).toPNG()
+            );
+        }
+        assert.equal(await evaluate(({ sonata }) => sonata.cycle), heldCycle, "The hidden trace kept advancing");
+        await evaluate(() => document.getElementById("trace-loading-cancel")!.click());
         await restore();
         assert.equal((await state()).key, "memory-tide", "A canceled sample request replaced the current trace");
+        assert.ok(!(await state()).loading && (await state()).sceneVisible, "Cancel did not reveal the old scene");
+        assert.ok((await state()).playing, "Cancel discarded the playback intent");
+        await waitFor(
+            () => evaluate(({ sonata }, cycle) => sonata.cycle !== cycle, heldCycle),
+            "Cancel left playback frozen"
+        );
+        window.setSize(1440, 1000);
 
         // 大きい構造を初回から収め、自動回転中の切替でも追従する。手動zoomは保持する。
         await window.loadURL(`${baseURL}sonata.html#demo=namd-flow`);
@@ -322,6 +380,7 @@ async function reviewDemoLoading(
             latestSelection: true,
             fileRace: true,
             cancel: true,
+            loadingTransition: true,
             largeSampleFit: true
         };
     } finally {

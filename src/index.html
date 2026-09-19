@@ -58,6 +58,11 @@
 
         <main>
             <section class="world" id="world" aria-label="Interactive 3D processor pipeline">
+                <section id="trace-loading" class="trace-loading" aria-label="Loading trace" hidden>
+                    <span class="eyebrow">OPENING TRACE</span>
+                    <p id="trace-loading-message" role="status"></p>
+                    <button id="trace-loading-cancel" class="quiet-button" data-exhibition-control>Cancel</button>
+                </section>
                 <section id="trace-welcome" class="trace-welcome" aria-labelledby="welcome-title">
                     <div class="welcome-content">
                         <span class="eyebrow">PROCESSOR TRACE VISUALIZER</span>

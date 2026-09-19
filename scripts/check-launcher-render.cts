@@ -129,6 +129,10 @@ async function reviewLauncher(window: BrowserWindow, screenshots: string, allowU
             control.pending = globalThis.sonata!.openLauncherTrace();
         });
         await waitFor(() => evaluate(() => globalThis.launcherReview?.started), "Metadata request did not start");
+        assert.ok(
+            await evaluate(() => !document.getElementById("trace-loading")!.hidden),
+            "Opening launcher metadata did not show the loading screen"
+        );
     }
     async function releaseMetadata() {
         return evaluate(async () => {
@@ -212,6 +216,7 @@ async function reviewLauncher(window: BrowserWindow, screenshots: string, allowU
         await evaluate(() => document.getElementById("import-cancel")!.click());
         assert.equal(await releaseMetadata(), true, "Cancel did not abort metadata retrieval");
         assert.equal((await state()).loaded, false, "Canceled metadata restored its trace");
+        assert.ok(await evaluate(() => document.getElementById("trace-loading")!.hidden));
         assert.match((await state()).status!, /canceled/);
         await delayedMetadata();
         await evaluate((_page, text) => {
@@ -239,6 +244,7 @@ async function reviewLauncher(window: BrowserWindow, screenshots: string, allowU
             }, response);
             const failed = await state();
             assert.equal(failed.busy, false, "Failed metadata left the importer busy");
+            assert.ok(await evaluate(() => document.getElementById("trace-loading")!.hidden));
             assert.match(failed.status!, response === "missing" ? /HTTP 404/ : /invalid trace metadata/);
         }
         return {

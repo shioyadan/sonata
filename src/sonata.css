@@ -1243,7 +1243,7 @@ body[data-trace-loaded="false"]
     > :is(.trace-meta, .demo-reel, .cycle-block, .metric-pair, .occupancy, .stream-heading, .spotlight) {
     display: none;
 }
-body[data-trace-loaded="false"] .world > :not(#trace-welcome, .scene-controls, #fallback) {
+body[data-trace-loaded="false"] .world > :not(#trace-welcome, #trace-loading, .scene-controls, #fallback) {
     visibility: hidden;
 }
 .trace-welcome {

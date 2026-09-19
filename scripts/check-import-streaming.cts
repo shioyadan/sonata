@@ -128,6 +128,10 @@ async function reviewStreaming(
         }));
         assert.ok(partial.count > 0 && partial.count < 6001);
         assert.ok(partial.loading && !partial.message && !partial.cancel);
+        assert.ok(
+            await evaluate(() => document.getElementById("trace-loading")!.hidden),
+            "Background parsing covered the first usable trace window"
+        );
         await evaluate(async ({ sonata }) => {
             sonata.captureAt(10);
             sonata.setPlaying(true);
@@ -141,6 +145,7 @@ async function reviewStreaming(
         await evaluate(() => {
             (document.getElementById("file-cycle") as HTMLInputElement).value = "600";
             document.getElementById("file-go")!.click();
+            if (!document.getElementById("trace-loading")!.hidden) throw new Error("Seeking covered a usable trace");
         });
         await waitFor(
             ({ sonata }) => sonata.trace.firstCycle === 600 && !sonata.fileImport.selecting,
