@@ -1327,6 +1327,8 @@ body.cinema .cinema-caption {
 
 body.exhibiting main {
     display: block;
+    height: 100dvh;
+    min-height: 0;
 }
 body.exhibiting .world {
     height: 100%;
