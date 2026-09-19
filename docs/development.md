@@ -71,6 +71,7 @@ git worktree list
 ファイル数は固定せず、責務と変更のまとまりに応じて見直します。各ファイルの責務と状態の所有者は [ソースの構造](architecture.md) を参照してください。
 
 - `src/sonata.cts`: 起動、再生時計、共通操作、DOM と診断 API。
+- `src/exhibition.cts`: 展示の巡回・探索・無操作復帰。読込み・描画・DOMは既存の入口へ依頼する。
 - `src/trace-import.cts` / `src/trace-navigation.cts` / `src/trace-file.cts` / `src/trace-worker.cts` / `src/trace-window.cts`: ファイル操作・探索UI、解析と圧縮store、Workerの要求受付、有界な表示区間への変換。
 - `src/camera.cts`: カメラの状態・投影とマウス / タッチ操作。GPU 資源から独立。
 - `src/replay-model.cts` / `src/geometry.cts`: トレース準備と再生状態、経路・接地。DOM / GPU から独立して検査可能。
@@ -154,6 +155,7 @@ npm run typecheck
 | ヘルパーからの逐次読込み・取消 | `npm run test:render -- --sections=launcher` |
 | 起動・代表画面・基本File形式 | `npm run test:smoke` |
 | キー・カメラ・WebGL障害 | `npm run test:browser` |
+| 展示の巡回・中断・復帰 | `npm test -- exhibition` / `npm run test:render -- --sections=exhibition` |
 | 材質・接地・影・スタイル切替 | `npm run test:styles` |
 | 全デモのステージ間移動・接地経路 | `npm run test:render -- --sections=transfers` |
 | 通知・レジスタ・Top-downの描画 | `npm run test:render -- --sections=evidence` |
@@ -164,6 +166,8 @@ npm run typecheck
 | 全描画検査 | `npm run test:render` |
 
 未知の名前・重複した描画範囲は実行前に拒否し、誤記を全検査として扱いません。`test:browser`、`test:mobile`、`test:styles` は対象だけを実行します。サンプル取得の競合は `demos`、File読込みの全範囲は `test:import` で個別に確認できます。`import` と、その一部である `import-*` は重複指定できません。描画の選択範囲・結果・各経過時間・失敗診断は `artifacts/render-results.json` に保存します。次の実行で上書きされるので、比較時は別名へ保存してください。コンソールには開始・終了・経過時間と失敗を表示します。
+
+展示のCPU検査では巡回・読込み取消し・無操作復帰・失敗時の再試行を時計と読込みの制御下で確認します。描画の `exhibition` は通常UIとの切替、モバイルと明るい外観、実入力と終了経路を検査します。通常CIは短い開始・終了の確認に留め、全巡回の検査はローカルの全描画検査に含めます。自動検査の成功を長時間の常設運転の実績とは扱わず、設置端末では `#exhibit=1` で複数周回させ、操作後の復帰・読込み失敗・継続中のメモリを別途確認してください。
 
 `scripts/check-scene.cjs` は旧5デモのCPU回帰fixtureの配置と命令経路を DOM / GPU なしで準備し、別のインスタンスへの状態混入と元データの変更を検出します。未読込み・空の一覧・読込み失敗時の状態保持と、再読込み後も配置が同じ参照を使えることも確認します。`scripts/check-bundle.cjs` は独立した JavaScript 環境で相対パス、変数スコープ、一度だけの実行、循環参照、不正な参照の拒否を確認します。`scripts/check-browser-test.cjs` はページ内関数の引数・Promise・例外の受け渡しと、フレーム待機・期限超過時の診断を別のJavaScript実行環境で確認します。条件・診断・描画の無応答、期限後の結果と例外、期限タイマーの回収も検査します。いずれも `npm test` に含まれます。
 

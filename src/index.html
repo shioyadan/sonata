@@ -9,7 +9,7 @@
         <link rel="stylesheet" href="scene.css" />
         <link rel="stylesheet" href="appearance.css" />
     </head>
-    <body data-trace-loaded="false">
+    <body data-trace-loaded="false" data-exhibition="off">
         <header class="topbar">
             <a class="brand" href="#" title="Sonata"
                 >sonata<span class="brand-divider"></span><span class="brand-section">pipeline visualizer</span></a
@@ -18,8 +18,34 @@
             <button id="mobile-details" class="mobile-details" aria-haspopup="dialog" aria-controls="mobile-panel">
                 <strong id="mobile-demo"></strong><span>Demo &amp; settings <b>⌄</b></span>
             </button>
-            <button id="fullscreen" class="quiet-button" title="Toggle fullscreen">Fullscreen <span>↗</span></button>
+            <div class="topbar-actions">
+                <button id="exhibition-start" class="quiet-button" title="Cycle through the demos">Exhibit</button>
+                <button id="fullscreen" class="quiet-button" title="Toggle fullscreen">
+                    Fullscreen <span>↗</span>
+                </button>
+            </div>
         </header>
+
+        <section
+            id="exhibition-panel"
+            class="exhibition-panel"
+            aria-label="Exhibition tour"
+            data-exhibition-control
+            hidden
+        >
+            <div class="exhibition-caption">
+                <span id="exhibition-count" class="eyebrow"></span>
+                <h2 id="exhibition-title"></h2>
+                <p id="exhibition-description"></p>
+                <p id="exhibition-status" role="status"></p>
+            </div>
+            <div class="exhibition-actions" aria-label="Exhibition controls" data-exhibition-control>
+                <button id="exhibition-explore">Explore</button>
+                <button id="exhibition-resume" hidden>Resume tour</button>
+                <button id="exhibition-fullscreen">Fullscreen</button>
+                <button id="exhibition-exit" title="Exit exhibition mode (Esc)">Exit exhibit</button>
+            </div>
+        </section>
 
         <main>
             <section class="world" id="world" aria-label="Interactive 3D processor pipeline">

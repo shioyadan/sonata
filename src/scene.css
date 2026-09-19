@@ -5,6 +5,200 @@
     background: #080e14;
 }
 
+.topbar-actions {
+    display: flex;
+    align-items: center;
+    gap: 18px;
+}
+
+#exhibition-start {
+    min-height: 44px;
+    padding: 0 4px;
+}
+
+/* 展示中の説明と操作は、シーンや切替フェードから独立して表示する。 */
+.exhibition-panel {
+    --exhibition-surface: #101820ed;
+    --exhibition-muted: #a5b8c2;
+    position: fixed;
+    inset: 0;
+    z-index: 10;
+    pointer-events: none;
+}
+
+.exhibition-panel[hidden] {
+    display: none;
+}
+
+.exhibition-caption {
+    position: absolute;
+    left: max(34px, env(safe-area-inset-left));
+    bottom: max(28px, env(safe-area-inset-bottom));
+    width: min(640px, calc(100% - 68px));
+    padding: 17px 20px;
+    border-left: 2px solid var(--cyan);
+    border-radius: 0 6px 6px 0;
+    background: var(--exhibition-surface);
+    color: var(--text);
+}
+
+#exhibition-count {
+    color: var(--exhibition-muted);
+}
+
+#exhibition-title {
+    margin: 8px 0;
+    font-size: clamp(22px, 2.5vw, 34px);
+    font-weight: 500;
+    line-height: 1.1;
+    letter-spacing: -0.5px;
+}
+
+#exhibition-description {
+    margin: 0;
+    font-size: 13px;
+    line-height: 1.6;
+}
+
+#exhibition-status {
+    margin: 9px 0 0;
+    color: var(--exhibition-muted);
+    font-size: 11px;
+    line-height: 1.5;
+}
+
+.exhibition-actions {
+    position: absolute;
+    top: max(20px, env(safe-area-inset-top));
+    right: max(28px, env(safe-area-inset-right));
+    display: flex;
+    gap: 6px;
+    pointer-events: auto;
+}
+
+.exhibition-actions button {
+    min-height: 44px;
+    padding: 0 13px;
+    border: 1px solid var(--border);
+    border-radius: 5px;
+    background: var(--exhibition-surface);
+    color: var(--text);
+    font-size: 11px;
+    white-space: nowrap;
+}
+
+.exhibition-actions button:hover {
+    border-color: var(--muted);
+}
+
+body.exhibiting {
+    display: block;
+    min-height: 0;
+    height: 100dvh;
+}
+
+body.exhibiting main,
+body.exhibiting .world {
+    height: 100dvh;
+    min-height: 0;
+}
+
+body.exhibiting
+    :is(
+        .topbar,
+        .telemetry,
+        .transport,
+        .statusbar,
+        .scene-controls,
+        .world-heading,
+        .mobile-run,
+        .mobile-cycle,
+        .touch-camera,
+        .touch-hint,
+        .gesture-hint,
+        .cinema-caption,
+        .bound-scene,
+        .trace-welcome,
+        .legend .link-key
+    ) {
+    display: none;
+}
+
+body.exhibiting .world-bottom {
+    top: 32px;
+    right: 360px;
+    bottom: auto;
+    left: 34px;
+    pointer-events: none;
+}
+
+body.exhibiting .memory-notice {
+    bottom: 205px;
+}
+
+body.exhibiting :is(#scene, #labels, #register-readouts, #instruction-stream-label) {
+    transition: opacity 240ms ease;
+}
+
+body:is([data-exhibition="transition"], [data-exhibition="loading"])
+    :is(#scene, #labels, #register-readouts, #instruction-stream-label) {
+    opacity: 0.3;
+}
+
+/* 探索中は通常の操作を覆わず、ヘッダの直下に復帰用の一行を確保する。 */
+body[data-exhibition="exploring"] .exhibition-panel {
+    position: relative;
+    inset: auto;
+    height: 52px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 0 30px;
+    border-bottom: 1px solid var(--border);
+    background: var(--panel);
+    pointer-events: auto;
+}
+
+body[data-exhibition="exploring"] :is(.exhibition-caption, .exhibition-actions) {
+    position: static;
+    width: auto;
+    padding: 0;
+    border: 0;
+    background: none;
+}
+
+body[data-exhibition="exploring"] .exhibition-caption {
+    min-width: 0;
+}
+
+body[data-exhibition="exploring"]
+    :is(#exhibition-count, #exhibition-title, #exhibition-description, #exhibition-explore, #exhibition-fullscreen) {
+    display: none;
+}
+
+body[data-exhibition="exploring"] #exhibition-status {
+    margin: 0;
+}
+
+body[data-exhibition="exploring"] main {
+    height: calc(100dvh - 288px);
+}
+
+body[data-exhibition="exploring"][data-trace-loaded="false"] {
+    grid-template-rows: 70px 52px minmax(0, 1fr) 30px;
+}
+
+body[data-exhibition="exploring"][data-trace-loaded="false"] main {
+    height: auto;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    body.exhibiting :is(#scene, #labels, #register-readouts, #instruction-stream-label) {
+        transition: none;
+    }
+}
+
 #scene {
     width: 100%;
     height: 100%;
